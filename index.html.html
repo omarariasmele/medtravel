@@ -1,0 +1,1178 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MedTravel — Tu historia médica, donde la necesites</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root{
+    --ink: #10243E;          /* pasaporte / noche profunda */
+    --ink-2: #1B3A5C;
+    --paper: #F6F3EC;        /* papel de documento oficial */
+    --paper-2: #EFEAE0;
+    --line: #D8D2C2;
+    --coral: #E8754A;        /* alerta médica cálida, no clínica */
+    --coral-deep: #C75A33;
+    --teal: #1F7A6C;         /* confirmación / salud */
+    --teal-soft: #E3F0EC;
+    --coral-soft: #FBE7DC;
+    --gold: #C9A24B;         /* sello / validación */
+    --white: #FFFFFF;
+    --muted: #5B6B7D;
+
+    --display: 'Fraunces', serif;
+    --body: 'Inter', sans-serif;
+    --mono: 'JetBrains Mono', monospace;
+  }
+
+  *{ box-sizing: border-box; }
+  html,body{ margin:0; padding:0; }
+  body{
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--body);
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection{ background: var(--coral-soft); }
+
+  a{ color: inherit; text-decoration: none; }
+  button{ font-family: var(--body); cursor: pointer; }
+
+  /* ---------- Top nav (demo switcher) ---------- */
+  .demo-nav{
+    position: sticky; top:0; z-index: 100;
+    background: var(--ink);
+    display:flex; align-items:center;
+    padding: 0 24px;
+    height: 64px;
+    gap: 8px;
+    overflow-x:auto;
+  }
+  .demo-nav .brand{
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 19px;
+    color: var(--white);
+    margin-right: 28px;
+    white-space: nowrap;
+    display:flex; align-items:center; gap:8px;
+  }
+  .demo-nav .brand .dot{
+    width:8px; height:8px; border-radius:50%;
+    background: var(--coral);
+    display:inline-block;
+  }
+  .navtab{
+    background: transparent;
+    border: none;
+    color: rgba(255,255,255,0.55);
+    font-size: 14px;
+    font-weight: 600;
+    padding: 10px 16px;
+    border-radius: 8px;
+    white-space: nowrap;
+    transition: all .15s ease;
+    letter-spacing: 0.01em;
+  }
+  .navtab:hover{ color: rgba(255,255,255,0.85); background: rgba(255,255,255,0.06); }
+  .navtab.active{ color: var(--ink); background: var(--paper); }
+
+  /* ---------- Views ---------- */
+  .view{ display:none; }
+  .view.active{ display:block; }
+
+  /* ============ SHARED ============ */
+  .section-label{
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--coral-deep);
+    font-weight: 500;
+  }
+
+  /* ============ PITCH VIEW ============ */
+  .pitch-wrap{ max-width: 1180px; margin: 0 auto; padding: 0 32px; }
+
+  /* --- Hero --- */
+  .hero{
+    background: var(--ink);
+    color: var(--white);
+    padding: 100px 0 0;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero-grid{
+    display:grid;
+    grid-template-columns: 1.1fr 0.9fr;
+    gap: 56px;
+    align-items: center;
+    padding-bottom: 70px;
+  }
+  .hero .section-label{ color: var(--gold); }
+  .hero h1{
+    font-family: var(--display);
+    font-size: 52px;
+    line-height: 1.08;
+    font-weight: 600;
+    margin: 18px 0 22px;
+    letter-spacing: -0.01em;
+  }
+  .hero h1 em{
+    font-style: italic;
+    color: var(--coral);
+    font-weight: 500;
+  }
+  .hero p.lead{
+    font-size: 17px;
+    line-height: 1.6;
+    color: rgba(255,255,255,0.7);
+    max-width: 480px;
+    margin-bottom: 32px;
+  }
+  .hero-ctas{ display:flex; gap:12px; }
+  .btn{
+    display:inline-flex; align-items:center; gap:8px;
+    padding: 13px 22px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 14px;
+    border: none;
+    transition: transform .15s ease, box-shadow .15s ease;
+  }
+  .btn-primary{ background: var(--coral); color: var(--white); }
+  .btn-primary:hover{ transform: translateY(-1px); box-shadow: 0 8px 20px rgba(232,117,74,0.35); }
+  .btn-ghost{ background: rgba(255,255,255,0.08); color: var(--white); border: 1px solid rgba(255,255,255,0.18); }
+  .btn-ghost:hover{ background: rgba(255,255,255,0.14); }
+
+  /* hero visual: passport-card stack */
+  .hero-visual{ position: relative; height: 420px; }
+  .id-card{
+    position: absolute;
+    width: 320px;
+    border-radius: 18px;
+    padding: 22px 24px;
+    box-shadow: 0 30px 60px rgba(0,0,0,0.4);
+  }
+  .id-card.back{
+    top: 18px; left: 60px;
+    background: var(--ink-2);
+    border: 1px solid rgba(255,255,255,0.1);
+    transform: rotate(-6deg);
+    height: 200px;
+  }
+  .id-card.front{
+    top: 70px; left: 10px;
+    background: var(--paper);
+    color: var(--ink);
+    transform: rotate(3deg);
+    z-index: 2;
+  }
+  .id-card.front .card-top{
+    display:flex; justify-content:space-between; align-items:flex-start;
+    border-bottom: 1px dashed var(--line);
+    padding-bottom: 12px;
+    margin-bottom: 14px;
+  }
+  .id-card.front .card-label{
+    font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .id-card.front .card-name{
+    font-family: var(--display); font-size: 20px; font-weight: 600; margin-top:4px;
+  }
+  .seal{
+    width: 44px; height: 44px; border-radius: 50%;
+    border: 2px solid var(--gold);
+    display:flex; align-items:center; justify-content:center;
+    font-family: var(--mono); font-size: 9px; color: var(--gold); font-weight: 600;
+    text-align:center; line-height:1.1;
+  }
+  .card-row{ display:flex; justify-content:space-between; font-size: 12px; padding: 6px 0; border-bottom: 1px solid var(--paper-2); }
+  .card-row .k{ color: var(--muted); }
+  .card-row .v{ font-weight: 600; }
+  .tag-alert{
+    display:inline-block; margin-top: 12px;
+    background: var(--coral-soft); color: var(--coral-deep);
+    font-size: 11px; font-weight: 700; padding: 5px 10px; border-radius: 6px;
+  }
+  .qr-float{
+    position:absolute; bottom:-10px; right: -6px;
+    width: 92px; height: 92px; background: var(--white); border-radius: 12px;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.35);
+    display:flex; align-items:center; justify-content:center;
+    z-index:3;
+    padding: 10px;
+  }
+  .qr-float .qr-pattern{
+    width: 100%; height: 100%;
+    background-image:
+      repeating-linear-gradient(0deg, var(--ink) 0 4px, transparent 4px 8px),
+      repeating-linear-gradient(90deg, var(--ink) 0 4px, transparent 4px 8px);
+    background-blend-mode: multiply;
+    opacity: 0.88;
+    border-radius: 4px;
+  }
+
+  /* --- Logo strip / trust --- */
+  .trust-strip{
+    background: var(--paper-2);
+    padding: 26px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .trust-strip .pitch-wrap{ display:flex; align-items:center; gap: 28px; justify-content:center; flex-wrap:wrap; }
+  .trust-strip span{ font-family: var(--mono); font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
+  .trust-strip strong{ color: var(--ink); font-weight: 700; }
+
+  /* --- Problem section --- */
+  .problem{ padding: 90px 0; background: var(--paper); }
+  .problem-head{ max-width: 640px; margin-bottom: 50px; }
+  .problem-head h2{
+    font-family: var(--display); font-size: 36px; font-weight: 600; line-height:1.2; margin: 14px 0 0;
+  }
+  .problem-cols{ display:grid; grid-template-columns: repeat(3,1fr); gap: 22px; }
+  .problem-card{
+    background: var(--white);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 26px 24px;
+  }
+  .problem-card .num{
+    font-family: var(--display); font-size: 30px; color: var(--line); font-weight: 600; margin-bottom: 14px;
+  }
+  .problem-card h3{ font-size: 17px; font-weight: 700; margin: 0 0 10px; }
+  .problem-card p{ font-size: 14px; line-height: 1.6; color: var(--muted); margin:0; }
+
+  /* --- Solution flow --- */
+  .solution{ padding: 90px 0; background: var(--ink); color: var(--white); }
+  .solution .section-label{ color: var(--gold); }
+  .solution-head{ max-width: 640px; margin-bottom: 56px; }
+  .solution-head h2{ font-family: var(--display); font-size: 36px; font-weight: 600; margin: 14px 0 0; }
+  .solution-head p{ color: rgba(255,255,255,0.65); font-size: 16px; margin-top: 14px; line-height: 1.6; }
+
+  .flow{ display:grid; grid-template-columns: repeat(4, 1fr); gap: 0; position:relative; }
+  .flow-step{ padding: 0 18px; position: relative; }
+  .flow-step:not(:last-child)::after{
+    content: '';
+    position: absolute;
+    top: 26px; right: -2px;
+    width: 24px; height: 1px;
+    background: rgba(255,255,255,0.25);
+  }
+  .flow-icon{
+    width: 52px; height: 52px; border-radius: 50%;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.15);
+    display:flex; align-items:center; justify-content:center;
+    margin-bottom: 18px;
+    font-size: 22px;
+  }
+  .flow-step h4{ font-size: 15px; font-weight: 700; margin: 0 0 8px; }
+  .flow-step p{ font-size: 13px; color: rgba(255,255,255,0.6); line-height: 1.55; margin:0; }
+
+  /* --- Stakeholders --- */
+  .stake{ padding: 90px 0; background: var(--paper); }
+  .stake-grid{ display:grid; grid-template-columns: repeat(3,1fr); gap: 22px; margin-top: 50px; }
+  .stake-card{
+    background: var(--white);
+    border-radius: 16px;
+    padding: 30px 26px;
+    border: 1px solid var(--line);
+    position: relative;
+  }
+  .stake-card.feat{ background: var(--ink); color: var(--white); border:none; }
+  .stake-card .role-tag{
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--coral-deep); font-weight: 600;
+  }
+  .stake-card.feat .role-tag{ color: var(--coral); }
+  .stake-card h3{ font-family: var(--display); font-size: 21px; font-weight: 600; margin: 10px 0 12px; }
+  .stake-card ul{ list-style:none; padding:0; margin:0; }
+  .stake-card li{
+    font-size: 13.5px; line-height: 1.5; padding: 7px 0 7px 20px; position: relative;
+    color: var(--muted); border-top: 1px solid var(--paper-2);
+  }
+  .stake-card.feat li{ color: rgba(255,255,255,0.7); border-top: 1px solid rgba(255,255,255,0.1); }
+  .stake-card li:first-child{ border-top:none; }
+  .stake-card li::before{
+    content: '→'; position:absolute; left:0; color: var(--coral);
+    font-size: 12px; top: 8px;
+  }
+
+  /* --- Model --- */
+  .model{ padding: 90px 0; background: var(--paper-2); }
+  .model-grid{ display:grid; grid-template-columns: 1fr 1fr; gap: 60px; align-items:start; margin-top: 50px;}
+  .model-col h3{ font-size: 13px; text-transform:uppercase; letter-spacing:0.08em; color: var(--muted); font-weight:700; margin-bottom:18px; }
+  .rev-row{ display:flex; justify-content:space-between; align-items:baseline; padding: 16px 0; border-bottom: 1px solid var(--line); }
+  .rev-row .label{ font-size: 15px; font-weight: 600; }
+  .rev-row .sub{ font-size: 12.5px; color: var(--muted); margin-top:3px; }
+  .rev-row .amt{ font-family: var(--display); font-size: 20px; font-weight:600; color: var(--coral-deep); white-space:nowrap; }
+
+  .cta-foot{
+    background: var(--coral);
+    color: var(--white);
+    padding: 70px 0;
+    text-align:center;
+  }
+  .cta-foot h2{ font-family: var(--display); font-size: 32px; font-weight:600; margin:0 0 14px; }
+  .cta-foot p{ font-size: 15px; opacity:0.92; margin: 0 0 28px; }
+  .cta-foot .btn-primary{ background: var(--ink); }
+  .cta-foot .btn-primary:hover{ box-shadow: 0 8px 20px rgba(0,0,0,0.3); }
+
+  /* ============ APP VIEW (phone mockup) ============ */
+  .app-shell{
+    background: var(--paper-2);
+    min-height: 100vh;
+    padding: 50px 24px 70px;
+  }
+  .app-shell-head{
+    max-width: 1100px; margin: 0 auto 36px;
+    display:flex; justify-content:space-between; align-items:flex-end;
+  }
+  .app-shell-head h2{ font-family: var(--display); font-size: 28px; font-weight:600; margin:0; }
+  .app-shell-head p{ color: var(--muted); font-size: 14px; margin: 6px 0 0; max-width: 420px; }
+  .phone-row{
+    max-width: 1100px; margin: 0 auto;
+    display:grid; grid-template-columns: repeat(3, 300px);
+    gap: 36px; justify-content: center;
+  }
+  .phone{
+    width: 300px; height: 620px;
+    background: var(--ink);
+    border-radius: 38px;
+    padding: 12px;
+    box-shadow: 0 30px 60px rgba(16,36,62,0.25);
+    position: relative;
+  }
+  .phone-screen{
+    width: 100%; height: 100%;
+    background: var(--paper);
+    border-radius: 28px;
+    overflow: hidden;
+    position: relative;
+    display:flex; flex-direction:column;
+  }
+  .phone-notch{
+    position:absolute; top:0; left:50%; transform:translateX(-50%);
+    width: 90px; height: 18px; background: var(--ink); border-radius: 0 0 12px 12px;
+    z-index:5;
+  }
+  .phone-caption{ text-align:center; margin-top: 16px; font-size: 13px; color: var(--muted); font-weight:600; }
+
+  /* phone status bar */
+  .pstat{
+    height: 38px; display:flex; align-items:center; justify-content:space-between;
+    padding: 0 20px; font-size: 11px; font-weight:600; color: var(--ink); flex-shrink:0;
+  }
+  .pscreen-top{ padding: 6px 18px 12px; flex-shrink:0; }
+  .pscreen-top .greet{ font-size: 12px; color: var(--muted); }
+  .pscreen-top .name{ font-family: var(--display); font-size: 19px; font-weight:600; margin-top:2px; }
+  .pscreen-body{ flex:1; overflow-y:auto; padding: 4px 16px 14px; }
+
+  .p-card{
+    background: var(--white); border-radius: 14px; padding: 11px 14px; margin-bottom: 9px;
+    border: 1px solid var(--line);
+  }
+  .p-card.warn{ background: var(--coral-soft); border:none; }
+  .p-card.warn .p-card-title{ color: var(--coral-deep); }
+  .p-card-title{ font-size: 10.5px; text-transform:uppercase; letter-spacing:0.06em; color: var(--muted); font-weight:700; margin-bottom:7px; }
+  .p-chip-row{ display:flex; flex-wrap:wrap; gap: 6px; }
+  .p-chip{ background: var(--paper-2); font-size: 11px; font-weight:600; padding: 4px 9px; border-radius: 20px; }
+  .p-chip.alert{ background: var(--coral); color:var(--white); }
+  .p-list-item{ display:flex; justify-content:space-between; align-items:center; padding: 7px 0; border-bottom: 1px solid var(--paper-2); font-size: 12.5px; }
+  .p-list-item:last-child{ border-bottom:none; }
+  .p-list-item .meta{ color: var(--muted); font-size: 11px; }
+  .p-doc-icon{ width:26px; height:26px; border-radius:7px; background:var(--teal-soft); color:var(--teal); display:flex; align-items:center; justify-content:center; font-size:12px; margin-right:9px; flex-shrink:0; }
+  .p-row-flex{ display:flex; align-items:center; }
+
+  .p-bignum-card{
+    background: var(--ink); color: var(--white); border-radius:14px; padding: 16px; margin-bottom:14px;
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  .p-bignum-card .lbl{ font-size: 11px; color: rgba(255,255,255,0.6); text-transform:uppercase; letter-spacing:0.05em; }
+  .p-bignum-card .val{ font-family: var(--display); font-size: 22px; font-weight:600; margin-top:2px; }
+  .p-bignum-card .icon{ font-size: 22px; }
+
+  .p-tabbar{
+    height: 60px; flex-shrink:0; background: var(--white); border-top:1px solid var(--line);
+    display:flex; align-items:center; justify-content:space-around; padding-bottom:6px;
+  }
+  .p-tab{ display:flex; flex-direction:column; align-items:center; gap:3px; font-size:10px; color: var(--muted); font-weight:600; }
+  .p-tab.active{ color: var(--coral-deep); }
+  .p-tab .ic{ font-size: 16px; }
+
+  .p-fab{
+    position:absolute; bottom: 76px; right: 18px; z-index:6;
+    background: var(--coral); color:var(--white); border-radius:50px;
+    padding: 11px 18px; font-size:12.5px; font-weight:700;
+    box-shadow: 0 10px 24px rgba(232,117,74,0.45);
+    display:flex; align-items:center; gap:6px;
+  }
+
+  .p-section-title{ font-size:14px; font-weight:700; margin: 14px 0 8px; }
+  .p-progress-track{ height:6px; background:var(--paper-2); border-radius:4px; overflow:hidden; margin-top:6px; }
+  .p-progress-fill{ height:100%; background: var(--teal); border-radius:4px; }
+
+  /* ============ EMERGENCY ACCESS VIEW (public link page) ============ */
+  .em-shell{
+    background: var(--paper-2);
+    min-height: 100vh;
+    padding: 40px 24px 70px;
+    display:flex; justify-content:center;
+  }
+  .em-browser{
+    width: 100%; max-width: 760px;
+    background: var(--white);
+    border-radius: 16px;
+    box-shadow: 0 20px 50px rgba(16,36,62,0.12);
+    overflow:hidden;
+    border: 1px solid var(--line);
+  }
+  .em-browser-bar{
+    background: var(--paper-2); padding: 12px 16px; display:flex; align-items:center; gap:10px;
+    border-bottom: 1px solid var(--line);
+  }
+  .em-browser-bar .dots{ display:flex; gap:6px; }
+  .em-browser-bar .dots span{ width:9px; height:9px; border-radius:50%; background: var(--line); display:inline-block; }
+  .em-browser-bar .url{
+    flex:1; background: var(--white); border-radius: 8px; padding: 6px 12px;
+    font-family: var(--mono); font-size: 11.5px; color: var(--muted); display:flex; align-items:center; gap:6px;
+  }
+
+  .em-banner{
+    background: var(--ink); color: var(--white); padding: 22px 32px;
+    display:flex; justify-content:space-between; align-items:center;
+  }
+  .em-banner .left .tag{ font-family: var(--mono); font-size:10.5px; letter-spacing:0.08em; color: var(--gold); text-transform:uppercase; }
+  .em-banner .left h2{ font-family: var(--display); font-size: 24px; font-weight:600; margin: 6px 0 0; }
+  .em-banner .timer{ text-align:right; }
+  .em-banner .timer .lbl{ font-size:10.5px; color: rgba(255,255,255,0.55); text-transform:uppercase; letter-spacing:0.05em; }
+  .em-banner .timer .val{ font-family: var(--mono); font-size: 17px; font-weight:600; color: var(--coral); margin-top:2px; }
+
+  .em-body{ padding: 28px 32px 8px; }
+  .em-patient-row{ display:flex; justify-content:space-between; align-items:flex-start; margin-bottom: 22px; padding-bottom:20px; border-bottom:1px solid var(--paper-2); }
+  .em-patient-row h3{ font-family:var(--display); font-size:22px; font-weight:600; margin:0 0 6px; }
+  .em-patient-row .sub{ font-size:13px; color: var(--muted); }
+  .em-patient-row .lang-switch{ font-family:var(--mono); font-size:11px; color:var(--muted); border:1px solid var(--line); padding:5px 10px; border-radius:6px; }
+
+  .em-alert-block{
+    background: var(--coral-soft); border-radius: 12px; padding: 16px 18px; margin-bottom: 20px;
+  }
+  .em-alert-block .em-card-title{ color: var(--coral-deep); }
+  .em-alert-grid{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  .em-pill{ background: var(--coral); color:var(--white); font-size:12.5px; font-weight:700; padding:6px 12px; border-radius:20px; }
+
+  .em-grid-2{ display:grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 20px; }
+  .em-card-title{ font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); font-weight:700; margin-bottom:10px; }
+  .em-card{ background: var(--paper); border-radius:12px; padding:16px 18px; border:1px solid var(--line); }
+  .em-line{ display:flex; justify-content:space-between; font-size:13.5px; padding:7px 0; border-bottom:1px solid var(--line); }
+  .em-line:last-child{ border-bottom:none; }
+  .em-line .k{ color:var(--muted); }
+  .em-line .v{ font-weight:600; }
+
+  .em-doc-row{ display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--paper-2); font-size:13.5px; }
+  .em-doc-row:last-child{ border-bottom:none; }
+  .em-doc-row .ic{ width:30px; height:30px; border-radius:8px; background:var(--teal-soft); color:var(--teal); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .em-doc-row .dl{ margin-left:auto; font-size:11.5px; color:var(--teal); font-weight:700; }
+
+  .em-footer-actions{
+    padding: 20px 32px 28px; display:flex; gap:12px; border-top: 1px solid var(--paper-2); margin-top:10px;
+  }
+  .em-footer-actions .note{ font-size: 11.5px; color: var(--muted); margin-top:10px; line-height:1.5; }
+
+  /* ============ DOCTOR / ASSISTANCE DASHBOARD ============ */
+  .doc-shell{ background: var(--paper); min-height:100vh; }
+  .doc-topbar{
+    background: var(--ink); color:var(--white); padding: 18px 36px;
+    display:flex; justify-content:space-between; align-items:center;
+  }
+  .doc-topbar .org{ display:flex; align-items:center; gap:12px; }
+  .doc-topbar .org .logo-sq{ width:34px; height:34px; border-radius:8px; background: var(--coral); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px; }
+  .doc-topbar .org .org-name{ font-weight:700; font-size:14.5px; }
+  .doc-topbar .org .org-sub{ font-size:11px; color: rgba(255,255,255,0.55); }
+  .doc-topbar .search{ background: rgba(255,255,255,0.08); border-radius:8px; padding:8px 14px; font-size:12.5px; color: rgba(255,255,255,0.6); width:280px; }
+
+  .doc-main{ max-width: 1180px; margin:0 auto; padding: 32px 36px 70px; }
+  .doc-stats{ display:grid; grid-template-columns: repeat(4,1fr); gap:18px; margin-bottom:28px; }
+  .doc-stat{ background: var(--white); border:1px solid var(--line); border-radius:14px; padding:18px 20px; }
+  .doc-stat .lbl{ font-size:11px; text-transform:uppercase; letter-spacing:0.05em; color:var(--muted); font-weight:700; }
+  .doc-stat .val{ font-family: var(--display); font-size:28px; font-weight:600; margin-top:6px; }
+  .doc-stat .delta{ font-size:11.5px; color: var(--teal); font-weight:600; margin-top:4px; }
+  .doc-stat.alert .val{ color: var(--coral-deep); }
+
+  .doc-panel{ background: var(--white); border:1px solid var(--line); border-radius:16px; overflow:hidden; }
+  .doc-panel-head{ padding: 18px 24px; border-bottom:1px solid var(--paper-2); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; }
+  .doc-panel-head h3{ font-family:var(--display); font-size:18px; font-weight:600; margin:0; }
+  .doc-filter-row{ display:flex; gap:8px; }
+  .doc-filter{ font-size:11.5px; font-weight:600; padding:6px 12px; border-radius:20px; background: var(--paper-2); color: var(--muted); }
+  .doc-filter.active{ background: var(--ink); color:var(--white); }
+
+  table.doc-table{ width:100%; border-collapse: collapse; }
+  table.doc-table th{ text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:0.05em; color:var(--muted); font-weight:700; padding: 12px 24px; border-bottom:1px solid var(--paper-2); background: var(--paper); }
+  table.doc-table td{ padding: 14px 24px; font-size:13.5px; border-bottom:1px solid var(--paper-2); vertical-align:middle; }
+  table.doc-table tr:last-child td{ border-bottom:none; }
+  .pat-name{ font-weight:700; }
+  .pat-meta{ font-size:11.5px; color:var(--muted); margin-top:2px; }
+  .status-dot{ display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600; }
+  .status-dot::before{ content:''; width:7px; height:7px; border-radius:50%; }
+  .status-dot.active::before{ background: var(--coral); }
+  .status-dot.viewed::before{ background: var(--gold); }
+  .status-dot.closed::before{ background: var(--muted); }
+  .row-action{ font-size:12px; font-weight:700; color: var(--teal); }
+  .risk-chip{ font-size:11px; font-weight:700; padding:4px 9px; border-radius:6px; }
+  .risk-chip.high{ background: var(--coral-soft); color: var(--coral-deep); }
+  .risk-chip.med{ background: #FCF1D8; color: var(--gold); }
+  .risk-chip.low{ background: var(--teal-soft); color: var(--teal); }
+
+  /* ============ RESPONSIVE — MOBILE ============ */
+  @media (max-width: 768px) {
+
+    /* --- Nav --- */
+    .demo-nav{ padding: 0 12px; height: 56px; gap: 4px; }
+    .demo-nav .brand{ font-size: 16px; margin-right: 8px; }
+    .navtab{ font-size: 12px; padding: 8px 10px; }
+
+    /* --- Pitch: wrap general --- */
+    .pitch-wrap{ padding: 0 18px; }
+
+    /* --- Hero --- */
+    .hero{ padding: 48px 0 0; }
+    .hero-grid{ grid-template-columns: 1fr; gap: 0; padding-bottom: 40px; }
+    .hero h1{ font-size: 34px; margin: 14px 0 16px; }
+    .hero p.lead{ font-size: 15px; }
+    .hero-visual{ display: none; } /* en mobile mostramos solo el texto */
+    .hero-ctas{ flex-direction: column; gap: 10px; }
+    .hero-ctas .btn{ justify-content: center; width: 100%; }
+
+    /* --- Trust strip --- */
+    .trust-strip .pitch-wrap{ flex-direction: column; gap: 8px; text-align: center; }
+    .trust-strip span{ font-size: 13px; }
+    .trust-strip span:nth-child(even){ display: none; } /* ocultar separadores · */
+
+    /* --- Problem --- */
+    .problem{ padding: 50px 0; }
+    .problem-head h2{ font-size: 26px; }
+    .problem-cols{ grid-template-columns: 1fr; gap: 14px; }
+
+    /* --- Solution flow --- */
+    .solution{ padding: 50px 0; }
+    .solution-head h2{ font-size: 26px; }
+    .flow{ grid-template-columns: 1fr 1fr; gap: 24px; }
+    .flow-step:not(:last-child)::after{ display: none; }
+    .flow-step{ padding: 0; }
+
+    /* --- Stakeholders --- */
+    .stake{ padding: 50px 0; }
+    .stake-grid{ grid-template-columns: 1fr; gap: 16px; }
+    .stake-card h3{ font-size: 18px; }
+
+    /* --- Model --- */
+    .model{ padding: 50px 0; }
+    .model-grid{ grid-template-columns: 1fr; gap: 28px; }
+
+    /* --- CTA footer --- */
+    .cta-foot{ padding: 48px 0; }
+    .cta-foot h2{ font-size: 24px; }
+
+    /* --- App view: phones en columna --- */
+    .app-shell{ padding: 28px 16px 50px; }
+    .app-shell-head{ flex-direction: column; align-items: flex-start; gap: 8px; margin-bottom: 24px; }
+    .app-shell-head h2{ font-size: 22px; }
+    .phone-row{ grid-template-columns: 1fr; gap: 40px; justify-items: center; }
+    .phone{ width: 280px; height: 580px; }
+
+    /* --- Emergency view --- */
+    .em-shell{ padding: 20px 12px 50px; }
+    .em-browser{ border-radius: 12px; }
+    .em-banner{ flex-direction: column; gap: 10px; padding: 18px 20px; }
+    .em-banner .timer{ text-align: left; }
+    .em-body{ padding: 20px 18px 8px; }
+    .em-patient-row{ flex-direction: column; gap: 10px; }
+    .em-grid-2{ grid-template-columns: 1fr; gap: 12px; }
+    .em-footer-actions{ padding: 16px 18px 22px; }
+
+    /* --- Doctor view: ocultar columnas menos útiles en tabla --- */
+    .doc-topbar{ padding: 14px 18px; }
+    .doc-topbar .search{ display: none; }
+    .doc-main{ padding: 20px 16px 50px; }
+    .doc-stats{ grid-template-columns: 1fr 1fr; gap: 12px; }
+    .doc-stat .val{ font-size: 22px; }
+    table.doc-table th:nth-child(2),
+    table.doc-table td:nth-child(2),
+    table.doc-table th:nth-child(5),
+    table.doc-table td:nth-child(5){ display: none; }
+    table.doc-table th,
+    table.doc-table td{ padding: 12px 14px; font-size: 12px; }
+  }
+
+  @media (max-width: 480px) {
+    /* extra-small phones */
+    .hero h1{ font-size: 28px; }
+    .navtab{ font-size: 11px; padding: 7px 8px; }
+    .demo-nav .brand{ font-size: 14px; }
+    .phone{ width: 260px; height: 540px; }
+    .doc-stats{ grid-template-columns: 1fr; }
+    /* en tabla muy chica, mostrar solo nombre y estado */
+    table.doc-table th:nth-child(3),
+    table.doc-table td:nth-child(3){ display: none; }
+  }
+
+</style>
+</head>
+<body>
+
+<nav class="demo-nav">
+  <div class="brand"><span class="dot"></span>MedTravel</div>
+  <button class="navtab active" data-view="pitch">Visión</button>
+  <button class="navtab" data-view="app">App Viajero</button>
+  <button class="navtab" data-view="emergency">Acceso de Emergencia</button>
+  <button class="navtab" data-view="doctor">Panel Médico</button>
+</nav>
+
+<div id="pitch" class="view active">
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="pitch-wrap">
+      <div class="hero-grid">
+        <div>
+          <span class="section-label">Historia clínica portátil para viajeros</span>
+          <h1>Tu cuerpo viaja<br>con su <em>historia</em>,<br>aunque tu médico<br>no esté.</h1>
+          <p class="lead">MedTravel reúne los antecedentes médicos del viajero en un solo lugar y los pone a disposición de cualquier médico, en cualquier país, en segundos — por mail, link o acceso web. No reemplaza la asistencia al viajero: le da la información clínica que hoy no tiene.</p>
+          <div class="hero-ctas">
+            <button class="btn btn-primary" onclick="document.querySelector('[data-view=app]').click()">Ver la app del viajero</button>
+            <button class="btn btn-ghost" onclick="document.querySelector('[data-view=doctor]').click()">Ver panel médico</button>
+          </div>
+        </div>
+        <div class="hero-visual">
+          <div class="id-card back"></div>
+          <div class="id-card front">
+            <div class="card-top">
+              <div>
+                <div class="card-label">Ficha de emergencia</div>
+                <div class="card-name">Marina Sosa</div>
+              </div>
+              <div class="seal">MT<br>ID</div>
+            </div>
+            <div class="card-row"><span class="k">Grupo sanguíneo</span><span class="v">O+</span></div>
+            <div class="card-row"><span class="k">Alergias</span><span class="v">Penicilina</span></div>
+            <div class="card-row"><span class="k">Medicación</span><span class="v">Losartán 50mg</span></div>
+            <span class="tag-alert">⚠ Diabetes tipo 1</span>
+          </div>
+          <div class="qr-float"><div class="qr-pattern"></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="trust-strip">
+    <div class="pitch-wrap">
+      <span>Pensado para integrarse con <strong>asistencias al viajero</strong></span>
+      <span>·</span>
+      <span><strong>seguros de salud</strong> internacionales</span>
+      <span>·</span>
+      <span>agencias y <strong>operadores turísticos</strong></span>
+      <span>·</span>
+      <span><strong>clínicas y guardias</strong> en destino</span>
+    </div>
+  </div>
+
+  <!-- PROBLEM -->
+  <section class="problem">
+    <div class="pitch-wrap">
+      <div class="problem-head">
+        <span class="section-label">El problema</span>
+        <h2>La cobertura existe. El historial, no.</h2>
+      </div>
+      <div class="problem-cols">
+        <div class="problem-card">
+          <div class="num">01</div>
+          <h3>La asistencia cubre el costo, no el contexto</h3>
+          <p>Empresas como Assiscard garantizan que la atención se pague. Pero al médico que atiende en destino le falta lo esencial: qué tiene el paciente, qué toma, a qué es alérgico.</p>
+        </div>
+        <div class="problem-card">
+          <div class="num">02</div>
+          <h3>El paciente no puede explicarse</h3>
+          <p>En una urgencia, con dolor, en otro idioma, bajo estrés — recordar con precisión antecedentes, dosis y diagnósticos previos es prácticamente imposible.</p>
+        </div>
+        <div class="problem-card">
+          <div class="num">03</div>
+          <h3>La información está fragmentada</h3>
+          <p>Historia clínica en un PDF, estudios en otro mail, receta en una foto del celular. Nada centralizado, nada pensado para compartirse rápido con un tercero.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SOLUTION FLOW -->
+  <section class="solution">
+    <div class="pitch-wrap">
+      <div class="solution-head">
+        <span class="section-label">Cómo funciona</span>
+        <h2>De la valija al consultorio, en cuatro pasos</h2>
+        <p>Una sola plataforma — app para el viajero, web para quien lo atiende — diseñada para el momento en que más importa.</p>
+      </div>
+      <div class="flow">
+        <div class="flow-step">
+          <div class="flow-icon">📋</div>
+          <h4>1. Carga su historial</h4>
+          <p>El viajero completa antecedentes, alergias, medicación crónica y sube estudios o epicrisis antes de viajar.</p>
+        </div>
+        <div class="flow-step">
+          <div class="flow-icon">🧳</div>
+          <h4>2. Viaja con su ficha</h4>
+          <p>Todo queda disponible offline en el celular y respaldado en la nube, listo para cualquier eventualidad.</p>
+        </div>
+        <div class="flow-step">
+          <div class="flow-icon">🔗</div>
+          <h4>3. Genera acceso de emergencia</h4>
+          <p>Ante una urgencia, comparte un link, QR o envío por mail con acceso temporal y controlado a su ficha.</p>
+        </div>
+        <div class="flow-step">
+          <div class="flow-icon">🩺</div>
+          <h4>4. El médico accede al instante</h4>
+          <p>Sin instalar nada: abre el link desde cualquier dispositivo y ve la información clínica relevante, en su idioma.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STAKEHOLDERS -->
+  <section class="stake">
+    <div class="pitch-wrap">
+      <span class="section-label">A quién sirve</span>
+      <h2 style="font-family:var(--display); font-size:36px; font-weight:600; margin:14px 0 0;">Tres lados, un mismo expediente</h2>
+      <div class="stake-grid">
+        <div class="stake-card feat">
+          <span class="role-tag">Viajero / Turista</span>
+          <h3>Lleva su historia con él</h3>
+          <ul>
+            <li>Carga antecedentes una vez, los actualiza cuando quiere</li>
+            <li>Comparte solo lo necesario, solo por el tiempo necesario</li>
+            <li>Funciona aunque no tenga señal en el momento</li>
+          </ul>
+        </div>
+        <div class="stake-card">
+          <span class="role-tag">Asistencias y seguros</span>
+          <h3>Atienden con contexto real</h3>
+          <ul>
+            <li>Sus afiliados llegan con antecedentes, no en blanco</li>
+            <li>Menos errores de diagnóstico, derivaciones más rápidas</li>
+            <li>Integrable a su operación vía API o portal propio</li>
+          </ul>
+        </div>
+        <div class="stake-card">
+          <span class="role-tag">Médico / Guardia</span>
+          <h3>Decide con información, no a ciegas</h3>
+          <ul>
+            <li>Accede desde el link, sin crear cuenta ni instalar app</li>
+            <li>Ve alergias y medicación crítica en los primeros segundos</li>
+            <li>Puede dejar constancia de la atención en la misma ficha</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- BUSINESS MODEL -->
+  <section class="model">
+    <div class="pitch-wrap">
+      <span class="section-label">Modelo de negocio</span>
+      <h2 style="font-family:var(--display); font-size:36px; font-weight:600; margin:14px 0 0;">B2B2C: la asistencia paga la plataforma, el viajero la usa</h2>
+      <div class="model-grid">
+        <div class="model-col">
+          <h3>Ingresos B2B</h3>
+          <div class="rev-row">
+            <div><div class="label">Licencia por afiliado</div><div class="sub">Asistencias y seguros de viaje integran MedTravel a su cobertura</div></div>
+            <div class="amt">recurrente</div>
+          </div>
+          <div class="rev-row">
+            <div><div class="label">White-label para operadores</div><div class="sub">Agencias y turoperadores ofrecen la ficha como valor agregado</div></div>
+            <div class="amt">por contrato</div>
+          </div>
+          <div class="rev-row">
+            <div><div class="label">API de acceso clínico</div><div class="sub">Clínicas y redes de guardia consultan fichas de forma integrada</div></div>
+            <div class="amt">por consulta</div>
+          </div>
+        </div>
+        <div class="model-col">
+          <h3>Ingresos B2C</h3>
+          <div class="rev-row">
+            <div><div class="label">Plan gratuito</div><div class="sub">Ficha básica, un acceso de emergencia activo</div></div>
+            <div class="amt">$0</div>
+          </div>
+          <div class="rev-row">
+            <div><div class="label">Plan viajero</div><div class="sub">Almacenamiento de estudios, multi-idioma, accesos ilimitados</div></div>
+            <div class="amt">suscripción</div>
+          </div>
+          <div class="rev-row">
+            <div><div class="label">Plan familiar</div><div class="sub">Fichas vinculadas para grupos y familias que viajan juntas</div></div>
+            <div class="amt">suscripción</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="cta-foot">
+    <div class="pitch-wrap">
+      <h2>La cobertura ya existe. Falta el historial.</h2>
+      <p>MedTravel es la pieza que faltaba entre el viajero, la asistencia y el médico que lo atiende.</p>
+      <button class="btn btn-primary" onclick="document.querySelector('[data-view=app]').click()">Recorrer la demo</button>
+    </div>
+  </div>
+
+</div>
+<div id="app" class="view">
+  <div class="app-shell">
+    <div class="app-shell-head">
+      <div>
+        <span class="section-label">App del viajero</span>
+        <h2>Su ficha, siempre en el bolsillo</h2>
+      </div>
+      <p>Tres momentos de la misma app: el resumen al abrir, el historial completo, y la generación de un acceso de emergencia.</p>
+    </div>
+
+    <div class="phone-row">
+
+      <!-- PHONE 1: HOME -->
+      <div>
+        <div class="phone">
+          <div class="phone-notch"></div>
+          <div class="phone-screen">
+            <div class="pstat"><span>9:41</span><span>●●● ▮</span></div>
+            <div class="pscreen-top">
+              <div class="greet">Hola,</div>
+              <div class="name">Marina Sosa</div>
+            </div>
+            <div class="pscreen-body">
+              <div class="p-bignum-card">
+                <div>
+                  <div class="lbl">Tu ficha está</div>
+                  <div class="val">92% completa</div>
+                </div>
+                <div class="icon">🛡️</div>
+              </div>
+              <div class="p-progress-track"><div class="p-progress-fill" style="width:92%"></div></div>
+
+              <div class="p-section-title" style="margin-top:18px;">Datos críticos</div>
+              <div class="p-card warn">
+                <div class="p-card-title">⚠ Alertas médicas</div>
+                <div class="p-chip-row">
+                  <span class="p-chip alert">Alergia a penicilina</span>
+                  <span class="p-chip alert">Diabetes tipo 1</span>
+                </div>
+              </div>
+
+              <div class="p-card">
+                <div class="p-card-title">Medicación actual</div>
+                <div class="p-list-item"><span>Losartán 50mg</span><span class="meta">1x día</span></div>
+                <div class="p-list-item"><span>Insulina Glargina</span><span class="meta">1x noche</span></div>
+              </div>
+
+              <div class="p-card">
+                <div class="p-card-title">Próximo viaje</div>
+                <div class="p-list-item"><span>🇧🇷 Florianópolis</span><span class="meta">22 jun – 30 jun</span></div>
+              </div>
+            </div>
+            <div class="p-tabbar">
+              <div class="p-tab active"><span class="ic">🏠</span>Inicio</div>
+              <div class="p-tab"><span class="ic">📁</span>Historial</div>
+              <div class="p-tab"><span class="ic">🔗</span>Compartir</div>
+              <div class="p-tab"><span class="ic">⚙️</span>Ajustes</div>
+            </div>
+          </div>
+        </div>
+        <div class="phone-caption">1. Resumen al abrir la app</div>
+      </div>
+
+      <!-- PHONE 2: HISTORIAL -->
+      <div>
+        <div class="phone">
+          <div class="phone-notch"></div>
+          <div class="phone-screen">
+            <div class="pstat"><span>9:42</span><span>●●● ▮</span></div>
+            <div class="pscreen-top">
+              <div class="greet">←  Volver</div>
+              <div class="name" style="font-size:17px;">Historial médico</div>
+            </div>
+            <div class="pscreen-body">
+              <div class="p-card">
+                <div class="p-card-title">Antecedentes</div>
+                <div class="p-list-item"><span>Diabetes tipo 1</span><span class="meta">desde 2014</span></div>
+                <div class="p-list-item"><span>Hipertensión</span><span class="meta">desde 2019</span></div>
+                <div class="p-list-item"><span>Cirugía de vesícula</span><span class="meta">2021</span></div>
+              </div>
+
+              <div class="p-card">
+                <div class="p-card-title">Estudios y documentos</div>
+                <div class="p-list-item p-row-flex">
+                  <div class="p-doc-icon">📄</div>
+                  <div style="flex:1;">Epicrisis cirugía 2021<div class="meta">PDF · 4 pág.</div></div>
+                </div>
+                <div class="p-list-item p-row-flex">
+                  <div class="p-doc-icon">🧪</div>
+                  <div style="flex:1;">Análisis de sangre<div class="meta">Mayo 2026</div></div>
+                </div>
+                <div class="p-list-item p-row-flex">
+                  <div class="p-doc-icon">🫀</div>
+                  <div style="flex:1;">Electrocardiograma<div class="meta">Marzo 2026</div></div>
+                </div>
+              </div>
+
+              <div class="p-card">
+                <div class="p-card-title">Contactos de emergencia</div>
+                <div class="p-list-item"><span>Carlos Sosa (esposo)</span><span class="meta">+54 9 11...</span></div>
+                <div class="p-list-item"><span>Dr. Iglesias (cardiólogo)</span><span class="meta">Bs. As.</span></div>
+              </div>
+            </div>
+            <div class="p-tabbar">
+              <div class="p-tab"><span class="ic">🏠</span>Inicio</div>
+              <div class="p-tab active"><span class="ic">📁</span>Historial</div>
+              <div class="p-tab"><span class="ic">🔗</span>Compartir</div>
+              <div class="p-tab"><span class="ic">⚙️</span>Ajustes</div>
+            </div>
+          </div>
+        </div>
+        <div class="phone-caption">2. Historial médico completo</div>
+      </div>
+
+      <!-- PHONE 3: SHARE / EMERGENCY ACCESS -->
+      <div>
+        <div class="phone">
+          <div class="phone-notch"></div>
+          <div class="phone-screen">
+            <div class="pstat"><span>9:43</span><span>●●● ▮</span></div>
+            <div class="pscreen-top">
+              <div class="greet">←  Volver</div>
+              <div class="name" style="font-size:17px;">Compartir ficha</div>
+            </div>
+            <div class="pscreen-body">
+              <div class="p-card" style="text-align:center; padding:16px 14px;">
+                <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">Acceso de emergencia activo</div>
+                <div style="width:100px; height:100px; background:repeating-linear-gradient(45deg, var(--ink) 0 6px, var(--white) 6px 12px); margin:0 auto 10px; border-radius:10px; border:5px solid var(--white); outline:1px solid var(--line);"></div>
+                <div style="font-family:var(--mono); font-size:10.5px; color:var(--muted);">medtravel.app/e/8X29-QR1</div>
+              </div>
+
+              <div class="p-card">
+                <div class="p-card-title">Vence en</div>
+                <div class="p-list-item"><span style="font-family:var(--display); font-size:18px; font-weight:600;">23h 41min</span><span class="meta">se puede extender</span></div>
+              </div>
+
+              <div class="p-card">
+                <div class="p-card-title">Enviar por</div>
+                <div class="p-list-item p-row-flex"><div class="p-doc-icon">✉️</div><div style="flex:1;">Email al médico tratante</div></div>
+                <div class="p-list-item p-row-flex"><div class="p-doc-icon">💬</div><div style="flex:1;">WhatsApp / mensaje</div></div>
+                <div class="p-list-item p-row-flex"><div class="p-doc-icon">🔗</div><div style="flex:1;">Copiar link directo</div></div>
+              </div>
+
+              <div class="p-card">
+                <div class="p-card-title">Qué puede ver quien acceda</div>
+                <div class="p-chip-row">
+                  <span class="p-chip">Alergias</span>
+                  <span class="p-chip">Medicación</span>
+                  <span class="p-chip">Antecedentes</span>
+                </div>
+              </div>
+            </div>
+            <div class="p-tabbar">
+              <div class="p-tab"><span class="ic">🏠</span>Inicio</div>
+              <div class="p-tab"><span class="ic">📁</span>Historial</div>
+              <div class="p-tab active"><span class="ic">🔗</span>Compartir</div>
+              <div class="p-tab"><span class="ic">⚙️</span>Ajustes</div>
+            </div>
+          </div>
+        </div>
+        <div class="phone-caption">3. Generar acceso de emergencia</div>
+      </div>
+
+    </div>
+  </div>
+</div>
+<div id="emergency" class="view">
+  <div class="em-shell">
+    <div class="em-browser">
+      <div class="em-browser-bar">
+        <div class="dots"><span></span><span></span><span></span></div>
+        <div class="url">🔒 medtravel.app/e/8X29-QR1</div>
+      </div>
+
+      <div class="em-banner">
+        <div class="left">
+          <div class="tag">Acceso de emergencia · sin login</div>
+          <h2>Ficha clínica de Marina Sosa</h2>
+        </div>
+        <div class="timer">
+          <div class="lbl">Expira en</div>
+          <div class="val">23:41:09</div>
+        </div>
+      </div>
+
+      <div class="em-body">
+        <div class="em-patient-row">
+          <div>
+            <h3>Marina Sosa</h3>
+            <div class="sub">42 años · O+ · Argentina, DNI termina en 482</div>
+          </div>
+          <div class="lang-switch">ES ⇄ PT ⇄ EN</div>
+        </div>
+
+        <div class="em-alert-block">
+          <div class="em-card-title">⚠ Atención inmediata</div>
+          <div class="em-alert-grid">
+            <span class="em-pill">Alergia a penicilina</span>
+            <span class="em-pill">Diabetes tipo 1 — insulinodependiente</span>
+            <span class="em-pill">Hipertensión</span>
+          </div>
+        </div>
+
+        <div class="em-grid-2">
+          <div class="em-card">
+            <div class="em-card-title">Medicación actual</div>
+            <div class="em-line"><span class="k">Losartán</span><span class="v">50mg / día</span></div>
+            <div class="em-line"><span class="k">Insulina Glargina</span><span class="v">1 dosis nocturna</span></div>
+          </div>
+          <div class="em-card">
+            <div class="em-card-title">Antecedentes quirúrgicos</div>
+            <div class="em-line"><span class="k">Colecistectomía</span><span class="v">2021</span></div>
+            <div class="em-line"><span class="k">Apendicectomía</span><span class="v">2003</span></div>
+          </div>
+        </div>
+
+        <div class="em-card" style="margin-bottom:20px;">
+          <div class="em-card-title">Documentos compartidos</div>
+          <div class="em-doc-row"><div class="ic">📄</div><span>Epicrisis cirugía 2021</span><span class="dl">Ver PDF</span></div>
+          <div class="em-doc-row"><div class="ic">🧪</div><span>Análisis de sangre — Mayo 2026</span><span class="dl">Ver PDF</span></div>
+          <div class="em-doc-row"><div class="ic">🫀</div><span>Electrocardiograma — Marzo 2026</span><span class="dl">Ver imagen</span></div>
+        </div>
+
+        <div class="em-card">
+          <div class="em-card-title">Contacto de emergencia</div>
+          <div class="em-line"><span class="k">Carlos Sosa (esposo)</span><span class="v">+54 9 11 4XXX-XXXX</span></div>
+          <div class="em-line"><span class="k">Dr. Iglesias (cardiólogo de cabecera)</span><span class="v">Buenos Aires, Arg.</span></div>
+        </div>
+      </div>
+
+      <div class="em-footer-actions">
+        <div style="flex:1;">
+          <button class="btn btn-primary" style="width:100%; justify-content:center;">Dejar constancia de la atención</button>
+          <div class="note">Este acceso fue generado por la propia paciente y es de un solo uso temporal. Toda visualización queda registrada y es visible para ella en su app. MedTravel no reemplaza el juicio clínico del profesional tratante.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="doctor" class="view">
+  <div class="doc-shell">
+    <div class="doc-topbar">
+      <div class="org">
+        <div class="logo-sq">AC</div>
+        <div>
+          <div class="org-name">Asistencia Continental</div>
+          <div class="org-sub">Panel de casos · integración MedTravel</div>
+        </div>
+      </div>
+      <div class="search">🔍 Buscar afiliado, destino o caso...</div>
+    </div>
+
+    <div class="doc-main">
+      <div class="doc-stats">
+        <div class="doc-stat">
+          <div class="lbl">Afiliados con ficha activa</div>
+          <div class="val">4.812</div>
+          <div class="delta">↑ 312 este mes</div>
+        </div>
+        <div class="doc-stat alert">
+          <div class="lbl">Casos abiertos hoy</div>
+          <div class="val">23</div>
+          <div class="delta" style="color:var(--coral-deep);">7 con alerta crítica</div>
+        </div>
+        <div class="doc-stat">
+          <div class="lbl">Tiempo medio de acceso</div>
+          <div class="val">38s</div>
+          <div class="delta">desde solicitud a ficha abierta</div>
+        </div>
+        <div class="doc-stat">
+          <div class="lbl">Fichas compartidas (mes)</div>
+          <div class="val">1.204</div>
+          <div class="delta">↑ 18% vs. mes anterior</div>
+        </div>
+      </div>
+
+      <div class="doc-panel">
+        <div class="doc-panel-head">
+          <h3>Casos en curso</h3>
+          <div class="doc-filter-row">
+            <span class="doc-filter active">Todos</span>
+            <span class="doc-filter">Activos</span>
+            <span class="doc-filter">Cerrados</span>
+          </div>
+        </div>
+        <table class="doc-table">
+          <thead>
+            <tr><th>Afiliado</th><th>Destino</th><th>Riesgo</th><th>Estado del acceso</th><th>Última actividad</th><th></th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><div class="pat-name">Marina Sosa</div><div class="pat-meta">Póliza #88213 · O+</div></td>
+              <td>Florianópolis, BR</td>
+              <td><span class="risk-chip high">Diabetes · alergia</span></td>
+              <td><span class="status-dot active">Ficha abierta ahora</span></td>
+              <td>hace 2 min</td>
+              <td><span class="row-action">Ver ficha →</span></td>
+            </tr>
+            <tr>
+              <td><div class="pat-name">Joaquín Etcheverry</div><div class="pat-meta">Póliza #75590 · A-</div></td>
+              <td>Punta Cana, DO</td>
+              <td><span class="risk-chip med">Hipertensión</span></td>
+              <td><span class="status-dot viewed">Vista por médico local</span></td>
+              <td>hace 41 min</td>
+              <td><span class="row-action">Ver ficha →</span></td>
+            </tr>
+            <tr>
+              <td><div class="pat-name">Lucía Bermúdez</div><div class="pat-meta">Póliza #91044 · B+</div></td>
+              <td>Madrid, ES</td>
+              <td><span class="risk-chip low">Sin antecedentes</span></td>
+              <td><span class="status-dot closed">Caso cerrado</span></td>
+              <td>ayer, 19:12</td>
+              <td><span class="row-action">Ver ficha →</span></td>
+            </tr>
+            <tr>
+              <td><div class="pat-name">Rodrigo Ferreyra</div><div class="pat-meta">Póliza #66218 · O-</div></td>
+              <td>Ciudad del Este, PY</td>
+              <td><span class="risk-chip high">Cardiopatía</span></td>
+              <td><span class="status-dot active">Ficha abierta ahora</span></td>
+              <td>hace 6 min</td>
+              <td><span class="row-action">Ver ficha →</span></td>
+            </tr>
+            <tr>
+              <td><div class="pat-name">Carla Ibañez</div><div class="pat-meta">Póliza #80127 · AB+</div></td>
+              <td>Lisboa, PT</td>
+              <td><span class="risk-chip med">Asma</span></td>
+              <td><span class="status-dot viewed">Vista por médico local</span></td>
+              <td>hace 3 h</td>
+              <td><span class="row-action">Ver ficha →</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  document.querySelectorAll('.navtab').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      document.querySelectorAll('.navtab').forEach(b=>b.classList.remove('active'));
+      document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById(btn.dataset.view).classList.add('active');
+      window.scrollTo(0,0);
+    });
+  });
+</script>
+
+</body>
+</html>
