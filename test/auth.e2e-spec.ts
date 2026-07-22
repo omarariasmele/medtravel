@@ -74,4 +74,26 @@ describe('Auth (e2e)', () => {
       .send({ refreshToken: 'no-es-un-jwt' });
     expect(res.status).toBe(401);
   });
+
+  it('logout revoca la sesión — el refresh token deja de servir', async () => {
+    const login = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ email: fixture.email, password: fixture.password });
+
+    const logoutRes = await request(app.getHttpServer())
+      .post('/auth/logout')
+      .set('Authorization', `Bearer ${login.body.accessToken}`);
+    expect(logoutRes.status).toBe(201);
+    expect(logoutRes.body.ok).toBe(true);
+
+    const refreshRes = await request(app.getHttpServer())
+      .post('/auth/refresh')
+      .send({ refreshToken: login.body.refreshToken });
+    expect(refreshRes.status).toBe(401);
+  });
+
+  it('logout sin token da 401', async () => {
+    const res = await request(app.getHttpServer()).post('/auth/logout');
+    expect(res.status).toBe(401);
+  });
 });

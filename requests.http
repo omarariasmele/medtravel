@@ -21,6 +21,10 @@ Content-Type: application/json
   "password": "ClaveSegura123!"
 }
 
+### Logout — revoca la sesión actual (requiere el accessToken del login de arriba)
+POST {{baseUrl}}/auth/logout
+Authorization: Bearer {{login.response.body.$.accessToken}}
+
 ### Refresh — reutiliza el refreshToken de la respuesta del login de arriba
 POST {{baseUrl}}/auth/refresh
 Content-Type: application/json

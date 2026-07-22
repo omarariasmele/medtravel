@@ -1,8 +1,17 @@
-import { Body, Controller, Post } from '@nestjs/common';
-import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiOkResponse,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 
+import { CurrentContext } from '@common/request-context/current-context.decorator';
+import { RequestContextData } from '@common/request-context/request-context.types';
+
 import { AuthService } from './auth.service';
+import { JwtAuthGuard } from './jwt-auth.guard';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { TokenPairDto } from './dto/token-pair.dto';
@@ -33,5 +42,15 @@ export class AuthController {
   @ApiOkResponse({ type: TokenPairDto })
   refresh(@Body() dto: RefreshDto): Promise<TokenPairDto> {
     return this.authService.refresh(dto.refreshToken);
+  }
+
+  @Post('logout')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Revoca la sesión actual (core.security_sessions)' })
+  logout(
+    @CurrentContext() context: RequestContextData,
+  ): Promise<{ ok: boolean }> {
+    return this.authService.logout(context.userId!, context.sessionId!);
   }
 }

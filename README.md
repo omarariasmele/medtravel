@@ -135,10 +135,9 @@ actualización.
   propósito (ver arriba), pendientes de un flujo de negocio dedicado.
 - Propuestas aplicadas a mano contra el servidor de desarrollo, pendientes
   de revisión para sumarse a la próxima versión del schema aprobado
-  (v1.2.4) — no están en el baseline v1.2.3 original:
-  - `core.get_login_credentials` (`src/database/sql/proposed-core-login-credentials-function.sql`)
-  - fix de GRANTs de `params` (`src/database/sql/fix-002-missing-params-grants.sql`)
-  - fix de GRANTs + `audit.anonymize_field()` (`src/database/sql/proposed-anonymization-support.sql`)
+  (v1.2.4) — no están en el baseline v1.2.3 original. Ver
+  [`SCHEMA_GAPS.md`](SCHEMA_GAPS.md) para el detalle completo de los 5
+  gaps encontrados (por qué, cómo se parchó, y qué falta decidir).
 
 ## Levantar el entorno
 
@@ -172,7 +171,7 @@ migración automática porque no son parte del baseline aprobado.
 ```bash
 npm run start:dev
 # GET  http://localhost:3000/health
-# POST http://localhost:3000/auth/login
+# POST http://localhost:3000/auth/login | /refresh | /logout
 # GET  http://localhost:3000/params/catalogs/:domainCode
 # GET/POST/PATCH/DELETE http://localhost:3000/<modulo>/:resource[/:id]
 # Swagger: http://localhost:3000/docs

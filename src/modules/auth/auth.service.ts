@@ -135,6 +135,26 @@ export class AuthService {
     );
   }
 
+  /**
+   * Revoca la sesión actual — no borra la fila (queda como historial de
+   * auditoría de sesiones), solo la marca inactiva. Idempotente: llamar
+   * logout dos veces con la misma sesión no falla, solo no vuelve a
+   * afectar ninguna fila la segunda vez.
+   */
+  async logout(userId: string, sessionId: string): Promise<{ ok: boolean }> {
+    await this.txManager.runInTransaction(
+      (queryRunner) =>
+        queryRunner.query(
+          `UPDATE core.security_sessions
+           SET is_active = FALSE, revoked_at = NOW()
+           WHERE id = $1 AND user_id = $2 AND is_active = TRUE`,
+          [sessionId, userId],
+        ),
+      { userId },
+    );
+    return { ok: true };
+  }
+
   private async registerFailedAttempt(
     userId: string,
     currentFailedAttempts: number,
