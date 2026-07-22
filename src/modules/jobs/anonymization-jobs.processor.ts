@@ -4,12 +4,23 @@ import { Job } from 'bullmq';
 
 import { QUEUE_NAMES } from '@config/bullmq.config';
 
-/** Ejecuta audit.data_anonymization_jobs pendientes — lógica real de anonymización pendiente. */
+import { AnonymizationService } from './anonymization.service';
+
+interface AnonymizationJobData {
+  jobId: string;
+}
+
+/** Wrapper delgado sobre AnonymizationService — la lógica real vive ahí para poder testearla sin Redis. */
 @Processor(QUEUE_NAMES.ANONYMIZATION_JOBS)
 export class AnonymizationJobsProcessor extends WorkerHost {
   private readonly logger = new Logger(AnonymizationJobsProcessor.name);
 
-  async process(job: Job): Promise<void> {
-    this.logger.debug(`TODO: ejecutar job de anonimización — job ${job.id}`);
+  constructor(private readonly anonymizationService: AnonymizationService) {
+    super();
+  }
+
+  async process(job: Job<AnonymizationJobData>): Promise<void> {
+    this.logger.debug(`Procesando job de anonimización ${job.data.jobId}`);
+    await this.anonymizationService.processJob(job.data.jobId);
   }
 }

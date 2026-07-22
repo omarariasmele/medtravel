@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { EventsModule } from '@modules/events/events.module';
+
 import { TripEntity } from './entities/trip.entity';
 import { TripDestinationEntity } from './entities/trip-destination.entity';
 import { EmergencyCaseEntity } from './entities/emergency-case.entity';
@@ -22,9 +24,11 @@ import { OperatorAuditLogEntity } from './entities/operator-audit-log.entity';
 import { TenantAnalyticsCacheEntity } from './entities/tenant-analytics-cache.entity';
 import { TenantAccessRequestEntity } from './entities/tenant-access-request.entity';
 import { OperationsResourceController } from './operations-resource.controller';
+import { EmergencyCasesController } from './emergency-cases.controller';
 
 @Module({
   imports: [
+    EventsModule,
     TypeOrmModule.forFeature([
       TripEntity,
       TripDestinationEntity,
@@ -48,7 +52,10 @@ import { OperationsResourceController } from './operations-resource.controller';
       TenantAccessRequestEntity,
     ]),
   ],
-  controllers: [OperationsResourceController],
+  // EmergencyCasesController va ANTES: Nest/Express matchea rutas en el
+  // orden de registro, y sin esto operations/:resource (genérico)
+  // interceptaría operations/emergency-cases antes de llegar acá.
+  controllers: [EmergencyCasesController, OperationsResourceController],
   exports: [TypeOrmModule],
 })
 export class OperationsModule {}

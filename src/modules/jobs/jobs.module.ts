@@ -6,6 +6,7 @@ import { buildBullRootOptions, QUEUE_NAMES } from '@config/bullmq.config';
 
 import { DocumentAiProcessingProcessor } from './document-ai-processing.processor';
 import { AnonymizationJobsProcessor } from './anonymization-jobs.processor';
+import { AnonymizationService } from './anonymization.service';
 import { AccessNotificationsProcessor } from './access-notifications.processor';
 import { CoverageSyncProcessor } from './coverage-sync.processor';
 
@@ -26,9 +27,10 @@ import { CoverageSyncProcessor } from './coverage-sync.processor';
   providers: [
     DocumentAiProcessingProcessor,
     AnonymizationJobsProcessor,
+    AnonymizationService,
     AccessNotificationsProcessor,
     CoverageSyncProcessor,
   ],
-  exports: [BullModule],
+  exports: [BullModule, AnonymizationService],
 })
 export class JobsModule {}

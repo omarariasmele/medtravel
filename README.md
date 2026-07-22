@@ -89,24 +89,56 @@ permite crear/aprobar/revocar vía las funciones SQL controladas
 (`request_break_glass`, etc.); un CRUD genérico ahí reabriría el agujero
 de seguridad que el schema (C3) cerró a propósito.
 
+## Chat en tiempo real (Socket.io)
+
+`src/modules/events/events.gateway.ts` — namespace `/cases`, una sala por
+`case_id`. El handshake se autentica con el mismo JWT que el resto de la
+API (`client.handshake.auth.token`); `join_case` y `send_message`
+verifican membresía real y activa en `operations.case_participants`
+(esa tabla no tiene RLS propia, el chequeo lo hace la app). Los mensajes
+se insertan de verdad en `operations.chat_messages` y se hace broadcast
+a la sala. Además, `PATCH /operations/emergency-cases/:id` (controller
+dedicado, separado del CRUD genérico de `operations` para poder
+enganchar esto) emite `case_update` a la sala del caso después de cada
+actualización.
+
+## Jobs de BullMQ
+
+- **`anonymization-jobs`**: implementado de verdad —
+  `AnonymizationService.processJob()` (`src/modules/jobs/anonymization.service.ts`)
+  toma un `audit.data_anonymization_jobs` PENDING, aplica el método
+  (`PSEUDONYMIZATION`, `HASH_IRREVERSIBLE`, o degrada a `NULL` para
+  `REDACT`/`GENERALIZATION`/`SUPPRESSION` — generalización real por tipo
+  de columna queda como límite conocido) a cada campo listado, y marca
+  `COMPLETED`/`FAILED`. Usa `audit.anonymize_field()` (`SECURITY DEFINER`,
+  ver más abajo) porque un job de background no tiene el
+  `app.current_person_id` de nadie y necesita tocar tablas con RLS
+  forzada (ej. `core.persons`) para un `row_id` arbitrario.
+- **`document-ai-processing`**, **`access-notifications`**,
+  **`coverage-sync`**: siguen sin lógica real — necesitan integraciones
+  externas (API de IA, proveedor de push/email/SMS, API del partner)
+  que no están definidas todavía.
+- Nada de esto se pudo probar pasando realmente por BullMQ/Redis en este
+  entorno (Redis no está instalado, ver sección de Jobs más arriba en la
+  conversación de desarrollo) — `AnonymizationService` está separado del
+  `@Processor` de BullMQ justamente para poder testearlo llamándolo
+  directo (ver `test/anonymization.e2e-spec.ts`), sin depender de la cola.
+
 ## Qué NO está implementado todavía
 
-- Lógica de negocio de los 4 processors de BullMQ (`src/modules/jobs/`).
-- Lógica del gateway Socket.io más allá de unirse/salir de una sala
-  (`src/modules/events/events.gateway.ts`) — falta autenticar el handshake
-  y verificar membresía real en `case_participants`.
+- Lógica real de `document-ai-processing`, `access-notifications` y
+  `coverage-sync` (ver arriba — necesitan integraciones externas).
 - `case-medical-events`, `operator-sessions`/`operator-audit-log`,
   `tenant-analytics-cache` y varias tablas de pipeline (dedup de
   organizaciones, matching de identidad, verificación de profesionales)
   no tienen endpoint todavía — quedaron fuera del CRUD genérico a
   propósito (ver arriba), pendientes de un flujo de negocio dedicado.
-- `core.get_login_credentials` (ver
-  `src/database/sql/proposed-core-login-credentials-function.sql`) y el
-  fix de GRANTs de `params` (ver
-  `src/database/sql/fix-002-missing-params-grants.sql`) son
-  **propuestas** aplicadas a mano contra el servidor de desarrollo — hay
-  que llevarlas a revisión para que se sumen a la próxima versión del
-  schema aprobado (v1.2.4), no están en el baseline v1.2.3 original.
+- Propuestas aplicadas a mano contra el servidor de desarrollo, pendientes
+  de revisión para sumarse a la próxima versión del schema aprobado
+  (v1.2.4) — no están en el baseline v1.2.3 original:
+  - `core.get_login_credentials` (`src/database/sql/proposed-core-login-credentials-function.sql`)
+  - fix de GRANTs de `params` (`src/database/sql/fix-002-missing-params-grants.sql`)
+  - fix de GRANTs + `audit.anonymize_field()` (`src/database/sql/proposed-anonymization-support.sql`)
 
 ## Levantar el entorno
 

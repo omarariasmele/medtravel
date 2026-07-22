@@ -104,6 +104,54 @@ export async function deleteTestUser(fixture: TestUserFixture): Promise<void> {
   }
 }
 
+export async function insertAnonymizationJob(
+  personId: string,
+  field: string,
+  method: string,
+): Promise<string> {
+  const client = superuserClient();
+  await client.connect();
+  try {
+    const result = await client.query(
+      `INSERT INTO audit.data_anonymization_jobs
+         (table_schema, table_name, row_id, fields_anonymized, method, trigger_reason, scheduled_at)
+       VALUES ('core', 'persons', $1, $2::jsonb, $3, 'e2e-test', NOW())
+       RETURNING id`,
+      [personId, JSON.stringify([{ field, method }]), method],
+    );
+    return result.rows[0].id;
+  } finally {
+    await client.end();
+  }
+}
+
+export async function deleteAnonymizationJob(jobId: string): Promise<void> {
+  const client = superuserClient();
+  await client.connect();
+  try {
+    await client.query(
+      `DELETE FROM audit.data_anonymization_jobs WHERE id = $1`,
+      [jobId],
+    );
+  } finally {
+    await client.end();
+  }
+}
+
+export async function getPersonFirstName(personId: string): Promise<string> {
+  const client = superuserClient();
+  await client.connect();
+  try {
+    const result = await client.query(
+      `SELECT first_name FROM core.persons WHERE id = $1`,
+      [personId],
+    );
+    return result.rows[0]?.first_name;
+  } finally {
+    await client.end();
+  }
+}
+
 /** Cualquier catalog_value real — para satisfacer FKs NOT NULL en tests que no evalúan reglas de negocio. */
 export async function getAnyCatalogValueId(): Promise<string> {
   const client = superuserClient();
