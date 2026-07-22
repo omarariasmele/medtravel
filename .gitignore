@@ -1,0 +1,10 @@
+node_modules
+dist
+.env
+*.log
+coverage
+.DS_Store
+
+# Puede contener credenciales reales (ej. SQLTools guarda la password en
+# texto plano en settings.json) — nunca subir esto a git.
+.vscode/
