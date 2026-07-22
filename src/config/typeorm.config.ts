@@ -131,6 +131,14 @@ export const buildTypeOrmOptions = (
   synchronize: false,
   migrationsRun: false,
   logging: config.get<string>('NODE_ENV') === 'development',
+  // app.encryption_key la necesita core.encrypt_pii/decrypt_pii — a nivel
+  // de conexión (no por-request como el resto de las GUCs en
+  // TenantTransactionManager), vía startup options de Postgres
+  // (equivalente a PGOPTIONS). Sin esto, cualquier INSERT/SELECT que
+  // pase por esas funciones falla con "app.encryption_key no configurada".
+  extra: {
+    options: `-c app.encryption_key=${config.get<string>('DB_ENCRYPTION_KEY')}`,
+  },
   entities: [
     // params
     DomainCatalogEntity,

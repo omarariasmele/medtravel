@@ -136,7 +136,7 @@ actualización.
 - Propuestas aplicadas a mano contra el servidor de desarrollo, pendientes
   de revisión para sumarse a la próxima versión del schema aprobado
   (v1.2.4) — no están en el baseline v1.2.3 original. Ver
-  [`SCHEMA_GAPS.md`](SCHEMA_GAPS.md) para el detalle completo de los 5
+  [`SCHEMA_GAPS.md`](SCHEMA_GAPS.md) para el detalle completo de los 6
   gaps encontrados (por qué, cómo se parchó, y qué falta decidir).
 
 ## Levantar el entorno
@@ -172,6 +172,7 @@ migración automática porque no son parte del baseline aprobado.
 npm run start:dev
 # GET  http://localhost:3000/health
 # POST http://localhost:3000/auth/login | /refresh | /logout
+# POST http://localhost:3000/auth/mfa/enroll | /verify | /disable
 # GET  http://localhost:3000/params/catalogs/:domainCode
 # GET/POST/PATCH/DELETE http://localhost:3000/<modulo>/:resource[/:id]
 # Swagger: http://localhost:3000/docs
@@ -194,6 +195,17 @@ desde VS Code (extensión "REST Client").
   [`operational-limits.helper.ts`](src/common/database/operational-limits.helper.ts).
   Esas dos claves tampoco están en `008_seeds.sql`; se agregaron a mano
   contra el servidor de desarrollo, igual que los otros gaps documentados.
+- **MFA (TOTP)**: `POST /auth/mfa/enroll` genera un secreto (con
+  `otplib`) y lo guarda cifrado (`core.encrypt_pii`) en
+  `core.mfa_methods`, sin verificar todavía. `POST /auth/mfa/verify`
+  confirma la inscripción con el primer código válido generado por la
+  app autenticadora. Una vez verificado, `login()` exige `mfaCode` en el
+  body — si falta, responde `{ mfaRequired: true }` (200, no es un
+  error) en vez de tokens; si el código es inválido, cuenta como intento
+  fallido para el mismo bloqueo de cuenta de arriba. `POST
+  /auth/mfa/disable` lo desactiva. Requirió agregar RLS y sembrar el
+  catalog_value `TOTP` que faltaban en el schema aprobado — ver gap #6
+  en [`SCHEMA_GAPS.md`](SCHEMA_GAPS.md).
 
 ## Tests
 

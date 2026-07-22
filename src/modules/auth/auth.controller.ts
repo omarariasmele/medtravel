@@ -15,6 +15,9 @@ import { JwtAuthGuard } from './jwt-auth.guard';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { TokenPairDto } from './dto/token-pair.dto';
+import { MfaRequiredResponseDto } from './dto/mfa-required-response.dto';
+import { MfaEnrollResponseDto } from './dto/mfa-enroll-response.dto';
+import { MfaVerifyDto } from './dto/mfa-verify.dto';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -31,7 +34,7 @@ export class AuthController {
   @Post('login')
   @ApiOperation({ summary: 'Autentica un core.users por email + password' })
   @ApiOkResponse({ type: TokenPairDto })
-  login(@Body() dto: LoginDto): Promise<TokenPairDto> {
+  login(@Body() dto: LoginDto): Promise<TokenPairDto | MfaRequiredResponseDto> {
     return this.authService.login(dto);
   }
 
@@ -52,5 +55,42 @@ export class AuthController {
     @CurrentContext() context: RequestContextData,
   ): Promise<{ ok: boolean }> {
     return this.authService.logout(context.userId!, context.sessionId!);
+  }
+
+  @Post('mfa/enroll')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Genera un secreto TOTP nuevo para el usuario autenticado (sin verificar todavía)',
+  })
+  @ApiOkResponse({ type: MfaEnrollResponseDto })
+  enrollMfa(
+    @CurrentContext() context: RequestContextData,
+  ): Promise<MfaEnrollResponseDto> {
+    return this.authService.enrollMfa(context.userId!);
+  }
+
+  @Post('mfa/verify')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Confirma la inscripción MFA pendiente con un código TOTP',
+  })
+  verifyMfa(
+    @CurrentContext() context: RequestContextData,
+    @Body() dto: MfaVerifyDto,
+  ): Promise<{ ok: boolean }> {
+    return this.authService.verifyMfaEnrollment(context.userId!, dto.code);
+  }
+
+  @Post('mfa/disable')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Desactiva el MFA del usuario autenticado' })
+  disableMfa(
+    @CurrentContext() context: RequestContextData,
+  ): Promise<{ ok: boolean }> {
+    return this.authService.disableMfa(context.userId!);
   }
 }

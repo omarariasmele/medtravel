@@ -95,6 +95,31 @@ ejecutar).
 
 **Encontrado:** al implementar la lógica real del job de anonimización.
 
+## 6. `core.mfa_methods` quedó sin RLS habilitada, y el domain `MFA_METHOD` no tiene ningún `catalog_value`
+
+**Archivo:** [`proposed-mfa-methods-hardening.sql`](src/database/sql/proposed-mfa-methods-hardening.sql)
+
+`003_core_identity.sql` habilita RLS en `core.persons`, `core.users`,
+`core.members`, `core.member_contacts`, `core.member_data_consents` y
+`core.security_sessions` (con su política `sessions_self`), pero
+**`core.mfa_methods` no está en esa lista** — a diferencia de
+`security_sessions`, que es su análogo directo y sí tiene
+`user_id = app.current_uuid('app.current_user_id')`. Sin esto, cualquier rol con el `GRANT` de
+`app_runtime` podía leer o pisar el `mfa_methods` de **cualquier**
+usuario, no solo el propio. Se agregó `mfa_methods_self` con el mismo
+patrón que `sessions_self`.
+
+Además, `008_seeds.sql` línea 15 define el *domain* `MFA_METHOD` pero
+nunca sus `catalog_values` (a diferencia de `MEMBER_STATUS`,
+`DOCUMENT_TYPE`, etc., que sí tienen valores sembrados) — sin un valor
+`TOTP`, `params.catalog_id('MFA_METHOD','TOTP')` devuelve `NULL` y el
+`INSERT` en `mfa_methods` falla por `NOT NULL` en `method_type_id`. Se
+sembró el valor `TOTP` (único método implementado hoy; `SMS`/`EMAIL`
+quedan para cuando se implementen esos flujos).
+
+**Encontrado:** al implementar MFA (TOTP) real (`POST /auth/mfa/enroll`
++ `verify` + `disable`, integrado a `login()`).
+
 ---
 
 ## Qué hacer con esto

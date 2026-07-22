@@ -43,6 +43,50 @@ Content-Type: application/json
 }
 
 ###############################################################
+### MFA (TOTP) — enroll/verify/disable, requieren el accessToken del
+### login de arriba. El "code" del verify hay que generarlo a mano con
+### el "secret" de la respuesta del enroll (ej. con una app autenticadora
+### o con otplib: `await generate({ secret })`).
+###############################################################
+
+### Enroll — genera un secreto nuevo (no verificado todavía)
+# @name mfaEnroll
+POST {{baseUrl}}/auth/mfa/enroll
+Authorization: Bearer {{login.response.body.$.accessToken}}
+
+### Verify — confirma la inscripción con un código TOTP real
+POST {{baseUrl}}/auth/mfa/verify
+Authorization: Bearer {{login.response.body.$.accessToken}}
+Content-Type: application/json
+
+{
+  "code": "000000"
+}
+
+### Login después de verificar MFA — sin mfaCode responde { mfaRequired: true }
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "ana.prueba@medtravelapp.test",
+  "password": "ClaveSegura123!"
+}
+
+### Login con mfaCode — reemplazar por un código TOTP real generado con el secret vigente
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "ana.prueba@medtravelapp.test",
+  "password": "ClaveSegura123!",
+  "mfaCode": "000000"
+}
+
+### Disable — desactiva el MFA del usuario autenticado
+POST {{baseUrl}}/auth/mfa/disable
+Authorization: Bearer {{login.response.body.$.accessToken}}
+
+###############################################################
 ### CRUD genérico — requiere el accessToken del login de arriba
 ### Patrón: GET/POST /<modulo>/:resource, GET/PATCH/DELETE /<modulo>/:resource/:id
 ### Módulos disponibles: identity, coverage, clinical, emergency,

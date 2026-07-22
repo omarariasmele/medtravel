@@ -1,14 +1,22 @@
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { createHash, createHmac, randomUUID } from 'crypto';
+import { generateSecret, generateURI, verify } from 'otplib';
 
 import { TenantTransactionManager } from '@common/database/tenant-transaction.manager';
 import { getOperationalLimit } from '@common/database/operational-limits.helper';
 
 import { LoginDto } from './dto/login.dto';
 import { TokenPairDto } from './dto/token-pair.dto';
+import { MfaRequiredResponseDto } from './dto/mfa-required-response.dto';
+import { MfaEnrollResponseDto } from './dto/mfa-enroll-response.dto';
 import { JwtPayload } from './jwt-payload.interface';
 
 interface LoginCredentialsRow {
@@ -28,6 +36,9 @@ interface LoginCredentialsRow {
  */
 const DEFAULT_MAX_FAILED_ATTEMPTS = 5;
 const DEFAULT_LOCKOUT_MINUTES = 15;
+
+/** issuer que ven las apps autenticadoras (Google Authenticator, etc.) */
+const MFA_ISSUER = 'MedTravelApp';
 
 @Injectable()
 export class AuthService {
@@ -50,7 +61,7 @@ export class AuthService {
     return createHash('sha256').update(token).digest('hex');
   }
 
-  async login(dto: LoginDto): Promise<TokenPairDto> {
+  async login(dto: LoginDto): Promise<TokenPairDto | MfaRequiredResponseDto> {
     const emailBlindIndex = this.computeBlindIndex(dto.email);
 
     const credentials = await this.txManager.runInTransaction<
@@ -94,12 +105,129 @@ export class AuthService {
       throw invalidCredentialsError;
     }
 
+    const mfaRow = await this.txManager.runInTransaction<
+      { secret: string } | undefined
+    >(
+      async (queryRunner) => {
+        const rows = await queryRunner.query(
+          `SELECT core.decrypt_pii(method_value) AS secret
+           FROM core.mfa_methods
+           WHERE user_id = $1 AND is_active = TRUE AND verified_at IS NOT NULL
+             AND method_type_id = params.catalog_id('MFA_METHOD', 'TOTP')
+           LIMIT 1`,
+          [credentials.user_id],
+        );
+        return rows[0];
+      },
+      { userId: credentials.user_id },
+    );
+
+    if (mfaRow) {
+      if (!dto.mfaCode) {
+        return { mfaRequired: true };
+      }
+      const { valid } = await verify({
+        secret: mfaRow.secret,
+        token: dto.mfaCode,
+      });
+      if (!valid) {
+        await this.registerFailedAttempt(
+          credentials.user_id,
+          credentials.failed_attempts,
+        );
+        throw invalidCredentialsError;
+      }
+    }
+
     await this.resetFailedAttempts(credentials.user_id);
 
     return this.issueTokenPair({
       userId: credentials.user_id,
       personId: credentials.person_id,
     });
+  }
+
+  /**
+   * Genera un secreto TOTP nuevo y lo guarda sin verificar (verified_at
+   * NULL) — recién cuenta para el login después de verifyMfaEnrollment.
+   * Desactiva cualquier método TOTP previo del usuario para no dejar más
+   * de un secreto activo compitiendo en la consulta de login().
+   */
+  async enrollMfa(userId: string): Promise<MfaEnrollResponseDto> {
+    const secret = generateSecret();
+    const otpauthUrl = generateURI({
+      issuer: MFA_ISSUER,
+      label: userId,
+      secret,
+    });
+
+    await this.txManager.runInTransaction(async (queryRunner) => {
+      await queryRunner.query(
+        `UPDATE core.mfa_methods SET is_active = FALSE
+         WHERE user_id = $1 AND method_type_id = params.catalog_id('MFA_METHOD', 'TOTP')
+           AND is_active = TRUE`,
+        [userId],
+      );
+      await queryRunner.query(
+        `INSERT INTO core.mfa_methods (user_id, method_type_id, method_value, is_active, is_primary)
+         VALUES ($1, params.catalog_id('MFA_METHOD', 'TOTP'), core.encrypt_pii($2), TRUE, TRUE)`,
+        [userId, secret],
+      );
+    });
+
+    return { secret, otpauthUrl };
+  }
+
+  /** Confirma la inscripción pendiente más reciente con un código TOTP válido. */
+  async verifyMfaEnrollment(
+    userId: string,
+    code: string,
+  ): Promise<{ ok: boolean }> {
+    const pending = await this.txManager.runInTransaction<
+      { id: string; secret: string } | undefined
+    >(async (queryRunner) => {
+      const rows = await queryRunner.query(
+        `SELECT id, core.decrypt_pii(method_value) AS secret
+         FROM core.mfa_methods
+         WHERE user_id = $1 AND is_active = TRUE AND verified_at IS NULL
+           AND method_type_id = params.catalog_id('MFA_METHOD', 'TOTP')
+         ORDER BY created_at DESC LIMIT 1`,
+        [userId],
+      );
+      return rows[0];
+    });
+
+    if (!pending) {
+      throw new BadRequestException(
+        'No hay una inscripción MFA pendiente de verificación',
+      );
+    }
+
+    const { valid } = await verify({ secret: pending.secret, token: code });
+    if (!valid) {
+      throw new UnauthorizedException('Código MFA inválido');
+    }
+
+    await this.txManager.runInTransaction((queryRunner) =>
+      queryRunner.query(
+        `UPDATE core.mfa_methods SET verified_at = NOW() WHERE id = $1`,
+        [pending.id],
+      ),
+    );
+
+    return { ok: true };
+  }
+
+  /** Desactiva todos los métodos MFA activos del usuario. */
+  async disableMfa(userId: string): Promise<{ ok: boolean }> {
+    await this.txManager.runInTransaction((queryRunner) =>
+      queryRunner.query(
+        `UPDATE core.mfa_methods SET is_active = FALSE
+         WHERE user_id = $1 AND is_active = TRUE`,
+        [userId],
+      ),
+    );
+    return { ok: true };
   }
 
   async refresh(refreshToken: string): Promise<TokenPairDto> {
