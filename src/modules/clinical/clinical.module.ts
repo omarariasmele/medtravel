@@ -22,6 +22,7 @@ import { EncounterLocationEntity } from './entities/encounter-location.entity';
 import { EncounterSubmissionEntity } from './entities/encounter-submission.entity';
 import { RecordReviewTaskEntity } from './entities/record-review-task.entity';
 import { SubmissionVisibilityPolicyEntity } from './entities/submission-visibility-policy.entity';
+import { ClinicalResourceController } from './clinical-resource.controller';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { SubmissionVisibilityPolicyEntity } from './entities/submission-visibili
       SubmissionVisibilityPolicyEntity,
     ]),
   ],
+  controllers: [ClinicalResourceController],
   exports: [TypeOrmModule],
 })
 export class ClinicalModule {}

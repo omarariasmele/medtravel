@@ -1,9 +1,5 @@
-import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
+import { EntityTarget, ObjectLiteral } from 'typeorm';
 
-import { DomainCatalogEntity } from './entities/domain-catalog.entity';
-import { CatalogValueEntity } from './entities/catalog-value.entity';
-import { CatalogTranslationEntity } from './entities/catalog-translation.entity';
 import { WorkflowDefinitionEntity } from './entities/workflow-definition.entity';
 import { StateTransitionEntity } from './entities/state-transition.entity';
 import { WorkflowActionEntity } from './entities/workflow-action.entity';
@@ -25,40 +21,32 @@ import { RetentionPolicyEntity } from './entities/retention-policy.entity';
 import { ConsentPurposeEntity } from './entities/consent-purpose.entity';
 import { JurisdictionRuleEntity } from './entities/jurisdiction-rule.entity';
 
-import { CatalogsService } from './catalogs.service';
-import { CatalogsController } from './catalogs.controller';
-import { ParamsAdminResourceController } from './params-admin-resource.controller';
-
-@Module({
-  imports: [
-    TypeOrmModule.forFeature([
-      DomainCatalogEntity,
-      CatalogValueEntity,
-      CatalogTranslationEntity,
-      WorkflowDefinitionEntity,
-      StateTransitionEntity,
-      WorkflowActionEntity,
-      PolicyRuleEntity,
-      RuleConditionEntity,
-      RuleActionEntity,
-      FormSchemaEntity,
-      FieldDefinitionEntity,
-      ValidationRuleEntity,
-      DesignTokenSetEntity,
-      TenantThemeEntity,
-      PartnerApiProfileEntity,
-      FieldMappingEntity,
-      IntegrationContractEntity,
-      FeatureFlagEntity,
-      FlagOverrideEntity,
-      OperationalLimitEntity,
-      RetentionPolicyEntity,
-      ConsentPurposeEntity,
-      JurisdictionRuleEntity,
-    ]),
-  ],
-  controllers: [CatalogsController, ParamsAdminResourceController],
-  providers: [CatalogsService],
-  exports: [TypeOrmModule],
-})
-export class ParamsModule {}
+/**
+ * Resto de tablas de params (config/admin), separadas de
+ * domain-catalogs/catalog-values/catalog-translations que ya tienen su
+ * propio controller dedicado en catalogs.controller.ts
+ * (GET /params/catalogs/:domainCode) — este registro monta en
+ * /params/admin/:resource para no pisar esa ruta.
+ */
+export const PARAMS_REGISTRY: Record<string, EntityTarget<ObjectLiteral>> = {
+  'workflow-definitions': WorkflowDefinitionEntity,
+  'state-transitions': StateTransitionEntity,
+  'workflow-actions': WorkflowActionEntity,
+  'policy-rules': PolicyRuleEntity,
+  'rule-conditions': RuleConditionEntity,
+  'rule-actions': RuleActionEntity,
+  'form-schemas': FormSchemaEntity,
+  'field-definitions': FieldDefinitionEntity,
+  'validation-rules': ValidationRuleEntity,
+  'design-token-sets': DesignTokenSetEntity,
+  'tenant-themes': TenantThemeEntity,
+  'partner-api-profiles': PartnerApiProfileEntity,
+  'field-mappings': FieldMappingEntity,
+  'integration-contracts': IntegrationContractEntity,
+  'feature-flags': FeatureFlagEntity,
+  'flag-overrides': FlagOverrideEntity,
+  'operational-limits': OperationalLimitEntity,
+  'retention-policies': RetentionPolicyEntity,
+  'consent-purposes': ConsentPurposeEntity,
+  'jurisdiction-rules': JurisdictionRuleEntity,
+};

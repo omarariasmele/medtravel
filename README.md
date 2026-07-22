@@ -52,35 +52,68 @@ src/
 ```
 
 Cada módulo de dominio mapea 1:1 a un schema Postgres. Las entidades
-TypeORM están transcritas a mano del SQL aprobado (no generadas por
-introspección — no había Docker/Postgres disponible al armar este
-scaffold). Las relaciones `@ManyToOne` solo están modeladas en las cadenas
-de propiedad centrales para RLS (tenant → person → member → user, member →
-case, case → chat); el resto de FKs quedan como columna UUID simple con un
-comentario de a qué tabla referencian.
+TypeORM están transcritas a mano del SQL aprobado. Las relaciones
+`@ManyToOne` solo están modeladas en las cadenas de propiedad centrales
+para RLS (tenant → person → member → user, member → case, case → chat);
+el resto de FKs quedan como columna UUID simple con un comentario de a
+qué tabla referencian.
+
+## CRUD genérico
+
+Además de `params/catalogs` (lectura de catálogos) y `auth` (login/refresh
+reales), el resto de los módulos exponen un **CRUD genérico** montado en
+`/<módulo>/:resource` (`GET`/`POST` en la colección,
+`GET`/`PATCH`/`DELETE` en `/:resource/:id`). La pieza central es
+[`RlsCrudService`](src/common/database/rls-crud.service.ts) +
+[`createResourceController`](src/common/database/create-resource-controller.ts):
+cada módulo solo declara un registro chico (`<modulo>.registry.ts`) de
+`nombre-de-recurso -> EntityClass` y listo — todo pasa igual por
+`TenantTransactionManager`, con las mismas GUCs/RLS que el resto de la app.
+
+Sin DTO de `class-validator` por entidad a propósito: las políticas RLS y
+los `CHECK`/`NOT NULL`/`UNIQUE`/FK de Postgres son la única fuente de
+verdad; [`pg-error.mapper.ts`](src/common/database/pg-error.mapper.ts)
+traduce sus violaciones a HTTP limpio (400/403/409) en vez de un 500
+genérico. Quedaron **afuera a propósito** de estos registros: tablas de
+solo-log/auditoría que se llenan solas por trigger (`data-audit-events`,
+`case-status-history`, `access-log`, etc.), pipelines batch
+(`identity-match-*`, `organization-candidates`, etc.) y tablas con campos
+cifrados/blind-index que maneja `AuthService` (`users`,
+`authentication-credentials`, `mfa-methods`). El detalle completo de qué
+entra en cada módulo está en los comentarios de cada `*.registry.ts`.
+
+`break-glass-grants` (audit) queda deliberadamente fuera del CRUD
+genérico — tiene su propio
+[`BreakGlassService`](src/modules/audit/break-glass.service.ts) que solo
+permite crear/aprobar/revocar vía las funciones SQL controladas
+(`request_break_glass`, etc.); un CRUD genérico ahí reabriría el agujero
+de seguridad que el schema (C3) cerró a propósito.
 
 ## Qué NO está implementado todavía
 
-- **Login/refresh** (`src/modules/auth/auth.controller.ts`): `core.users`
-  tiene RLS forzada pero sin política `SELECT` — buscar un usuario por
-  `email_blind_index` requiere una función `SECURITY DEFINER` (mismo patrón
-  que `clinical.has_clinical_access`) que todavía no existe en el schema
-  v1.2.3. Hay que agregarla al SQL aprobado antes de poder cerrar esto.
 - Lógica de negocio de los 4 processors de BullMQ (`src/modules/jobs/`).
 - Lógica del gateway Socket.io más allá de unirse/salir de una sala
   (`src/modules/events/events.gateway.ts`) — falta autenticar el handshake
   y verificar membresía real en `case_participants`.
-- Endpoints CRUD para el resto de los ~104 tablas — solo el catálogo de
-  `params` tiene un endpoint real de punta a punta, como prueba del patrón
-  de contexto RLS.
+- `case-medical-events`, `operator-sessions`/`operator-audit-log`,
+  `tenant-analytics-cache` y varias tablas de pipeline (dedup de
+  organizaciones, matching de identidad, verificación de profesionales)
+  no tienen endpoint todavía — quedaron fuera del CRUD genérico a
+  propósito (ver arriba), pendientes de un flujo de negocio dedicado.
+- `core.get_login_credentials` (ver
+  `src/database/sql/proposed-core-login-credentials-function.sql`) y el
+  fix de GRANTs de `params` (ver
+  `src/database/sql/fix-002-missing-params-grants.sql`) son
+  **propuestas** aplicadas a mano contra el servidor de desarrollo — hay
+  que llevarlas a revisión para que se sumen a la próxima versión del
+  schema aprobado (v1.2.4), no están en el baseline v1.2.3 original.
 
-## Levantar el entorno local
+## Levantar el entorno
 
-Requiere Docker Desktop (no estaba disponible en el entorno donde se armó
-este scaffold, así que **no se pudo probar contra una base real**).
+### Contra un Postgres 16 propio (Docker)
 
 ```bash
-cp .env.example .env      # completar JWT_SECRET, DB_ENCRYPTION_KEY, etc.
+cp .env.example .env      # completar JWT_SECRET, DB_ENCRYPTION_KEY, DB_BLIND_INDEX_KEY, etc.
 docker compose up -d      # Postgres 16 + Redis 7
 npm install
 npm run migration:run     # corre 000_extensions.sql … 007_operations.sql tal cual
@@ -94,15 +127,27 @@ docker compose exec postgres psql -U migration_owner -d medtravel \
   -f /dev/stdin < src/database/sql/local-dev-login-role.sql
 ```
 
-(En SRV-2/staging/prod ese rol y su contraseña los gestiona
-infraestructura — este script es solo para desarrollo local.)
+### Contra un servidor remoto ya existente
+
+Mismo flujo, pero `.env` apunta a `DB_HOST`/`DB_PORT` reales y
+`DB_MIGRATION_USERNAME` es el superuser real de ese servidor (no
+necesariamente `migration_owner`, ver comentarios en `.env.example`).
+Después de migrar, aplicá también los dos scripts "propuesta" mencionados
+arriba (`fix-002-missing-params-grants.sql` y
+`proposed-core-login-credentials-function.sql`) — no forman parte de la
+migración automática porque no son parte del baseline aprobado.
 
 ```bash
 npm run start:dev
 # GET  http://localhost:3000/health
+# POST http://localhost:3000/auth/login
 # GET  http://localhost:3000/params/catalogs/:domainCode
+# GET/POST/PATCH/DELETE http://localhost:3000/<modulo>/:resource[/:id]
 # Swagger: http://localhost:3000/docs
 ```
+
+Ver [`requests.http`](requests.http) para ejemplos listos para correr
+desde VS Code (extensión "REST Client").
 
 ## Scripts
 

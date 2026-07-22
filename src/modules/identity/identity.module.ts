@@ -17,6 +17,7 @@ import { IdentityMatchCandidateEntity } from './entities/identity-match-candidat
 import { IdentityMatchDecisionEntity } from './entities/identity-match-decision.entity';
 import { MemberDataConsentEntity } from './entities/member-data-consent.entity';
 import { MemberContactEntity } from './entities/member-contact.entity';
+import { IdentityResourceController } from './identity-resource.controller';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { MemberContactEntity } from './entities/member-contact.entity';
       MemberContactEntity,
     ]),
   ],
+  controllers: [IdentityResourceController],
   exports: [TypeOrmModule],
 })
 export class IdentityModule {}

@@ -6,6 +6,7 @@ import { EmergencyTokenEntity } from './entities/emergency-token.entity';
 import { SignedOfflineAccessEntity } from './entities/signed-offline-access.entity';
 import { EmergencyAccessLogEntity } from './entities/emergency-access-log.entity';
 import { TokenUsageLogEntity } from './entities/token-usage-log.entity';
+import { EmergencyResourceController } from './emergency-resource.controller';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { TokenUsageLogEntity } from './entities/token-usage-log.entity';
       TokenUsageLogEntity,
     ]),
   ],
+  controllers: [EmergencyResourceController],
   exports: [TypeOrmModule],
 })
 export class EmergencyModule {}

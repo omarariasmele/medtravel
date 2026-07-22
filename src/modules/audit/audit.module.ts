@@ -9,6 +9,7 @@ import { DataSuppressionRequestEntity } from './entities/data-suppression-reques
 import { AccessNotificationEntity } from './entities/access-notification.entity';
 
 import { BreakGlassService } from './break-glass.service';
+import { AuditResourceController } from './audit-resource.controller';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { BreakGlassService } from './break-glass.service';
       AccessNotificationEntity,
     ]),
   ],
+  controllers: [AuditResourceController],
   providers: [BreakGlassService],
   exports: [TypeOrmModule, BreakGlassService],
 })

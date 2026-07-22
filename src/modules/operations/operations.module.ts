@@ -21,6 +21,7 @@ import { OperatorPresenceEntity } from './entities/operator-presence.entity';
 import { OperatorAuditLogEntity } from './entities/operator-audit-log.entity';
 import { TenantAnalyticsCacheEntity } from './entities/tenant-analytics-cache.entity';
 import { TenantAccessRequestEntity } from './entities/tenant-access-request.entity';
+import { OperationsResourceController } from './operations-resource.controller';
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { TenantAccessRequestEntity } from './entities/tenant-access-request.enti
       TenantAccessRequestEntity,
     ]),
   ],
+  controllers: [OperationsResourceController],
   exports: [TypeOrmModule],
 })
 export class OperationsModule {}

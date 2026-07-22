@@ -1,0 +1,79 @@
+### MedTravelApp API — pruebas manuales
+### Requiere la extensión "REST Client" (humao.rest-client) en VS Code.
+### Con el dev server corriendo (npm run start:dev), hacé click en
+### "Send Request" arriba de cada bloque, en orden.
+
+@baseUrl = http://localhost:3000
+
+### Health check
+GET {{baseUrl}}/health
+
+### Catálogo de estados de caso (dato real sembrado en 008_seeds.sql)
+GET {{baseUrl}}/params/catalogs/CASE_STATUS
+
+### Login (usuario de prueba creado a mano — ver conversación)
+# @name login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "ana.prueba@medtravelapp.test",
+  "password": "ClaveSegura123!"
+}
+
+### Refresh — reutiliza el refreshToken de la respuesta del login de arriba
+POST {{baseUrl}}/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{login.response.body.$.refreshToken}}"
+}
+
+### Login con password incorrecta (debe dar 401)
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "ana.prueba@medtravelapp.test",
+  "password": "incorrecta"
+}
+
+###############################################################
+### CRUD genérico — requiere el accessToken del login de arriba
+### Patrón: GET/POST /<modulo>/:resource, GET/PATCH/DELETE /<modulo>/:resource/:id
+### Módulos disponibles: identity, coverage, clinical, emergency,
+### operations, audit, y params/admin (config, separado de params/catalogs).
+###############################################################
+
+### Listar feature flags (params/admin — tabla de configuración)
+GET {{baseUrl}}/params/admin/feature-flags
+Authorization: Bearer {{login.response.body.$.accessToken}}
+
+### Crear una alergia para MI PROPIA persona (personId del JWT logueado)
+# Reemplazá personId por el que devuelve tu propio login, y los *Id por
+# UUIDs reales de params.catalog_values si querés datos consistentes.
+# @name createAllergy
+POST {{baseUrl}}/clinical/allergies
+Content-Type: application/json
+Authorization: Bearer {{login.response.body.$.accessToken}}
+
+{
+  "personId": "REEMPLAZAR-CON-EL-personId-DEL-LOGIN",
+  "allergenName": "Penicilina",
+  "allergenTypeId": "REEMPLAZAR-UUID-CATALOGO",
+  "severityId": "REEMPLAZAR-UUID-CATALOGO",
+  "canonicalStatusId": "REEMPLAZAR-UUID-CATALOGO",
+  "provenanceId": "REEMPLAZAR-UUID-CATALOGO"
+}
+
+### Leer la alergia recién creada
+GET {{baseUrl}}/clinical/allergies/{{createAllergy.response.body.$.id}}
+Authorization: Bearer {{login.response.body.$.accessToken}}
+
+### Intentar borrarla — debe dar 403 (clinical.allergies no tiene GRANT DELETE)
+DELETE {{baseUrl}}/clinical/allergies/{{createAllergy.response.body.$.id}}
+Authorization: Bearer {{login.response.body.$.accessToken}}
+
+### Recurso no registrado en el módulo — debe dar 404
+GET {{baseUrl}}/identity/no-existe
+Authorization: Bearer {{login.response.body.$.accessToken}}
