@@ -5,6 +5,7 @@ import * as bcrypt from 'bcryptjs';
 import { createHash, createHmac, randomUUID } from 'crypto';
 
 import { TenantTransactionManager } from '@common/database/tenant-transaction.manager';
+import { getOperationalLimit } from '@common/database/operational-limits.helper';
 
 import { LoginDto } from './dto/login.dto';
 import { TokenPairDto } from './dto/token-pair.dto';
@@ -21,12 +22,12 @@ interface LoginCredentialsRow {
 }
 
 /**
- * TODO: MAX_FAILED_ATTEMPTS/LOCKOUT_MINUTES deberían leerse de
- * params.operational_limits (mismo patrón que TOKEN_xxx, CASE_SLA_xxx), no
- * hardcodeados — no hay todavía una clave sembrada para esto en 008_seeds.sql.
+ * Fallbacks si AUTH_MAX_FAILED_ATTEMPTS/AUTH_LOCKOUT_MINUTES no están en
+ * params.operational_limits — 008_seeds.sql no las incluye todavía (se
+ * agregaron como fixture de test, ver conversación/README).
  */
-const MAX_FAILED_ATTEMPTS = 5;
-const LOCKOUT_MINUTES = 15;
+const DEFAULT_MAX_FAILED_ATTEMPTS = 5;
+const DEFAULT_LOCKOUT_MINUTES = 15;
 
 @Injectable()
 export class AuthService {
@@ -138,8 +139,21 @@ export class AuthService {
     userId: string,
     currentFailedAttempts: number,
   ): Promise<void> {
+    const [maxFailedAttempts, lockoutMinutes] = await Promise.all([
+      getOperationalLimit(
+        this.txManager,
+        'AUTH_MAX_FAILED_ATTEMPTS',
+        DEFAULT_MAX_FAILED_ATTEMPTS,
+      ),
+      getOperationalLimit(
+        this.txManager,
+        'AUTH_LOCKOUT_MINUTES',
+        DEFAULT_LOCKOUT_MINUTES,
+      ),
+    ]);
+
     const nextAttempts = currentFailedAttempts + 1;
-    const shouldLock = nextAttempts >= MAX_FAILED_ATTEMPTS;
+    const shouldLock = nextAttempts >= maxFailedAttempts;
 
     await this.txManager.runInTransaction(async (queryRunner) => {
       await queryRunner.query(
@@ -147,13 +161,13 @@ export class AuthService {
          SET failed_attempts = $2,
              locked_until = CASE WHEN $3 THEN NOW() + ($4 || ' minutes')::INTERVAL ELSE locked_until END
          WHERE user_id = $1`,
-        [userId, nextAttempts, shouldLock, LOCKOUT_MINUTES],
+        [userId, nextAttempts, shouldLock, lockoutMinutes],
       );
     });
 
     if (shouldLock) {
       this.logger.warn(
-        `Cuenta ${userId} bloqueada por ${LOCKOUT_MINUTES} minutos tras ${nextAttempts} intentos fallidos`,
+        `Cuenta ${userId} bloqueada por ${lockoutMinutes} minutos tras ${nextAttempts} intentos fallidos`,
       );
     }
   }

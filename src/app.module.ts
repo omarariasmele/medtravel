@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 
 import { validateEnv } from '@config/env.validation';
 
@@ -24,6 +25,10 @@ import { AppController } from './app.controller';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
+    // Límite global; /auth/login usa un @Throttle() más estricto (ver
+    // auth.controller.ts) para no depender solo del lockout por intentos
+    // fallidos de AuthService.
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
     RequestContextModule,
     DatabaseModule,
     AuthModule,
@@ -40,6 +45,7 @@ import { AppController } from './app.controller';
   controllers: [AppController],
   providers: [
     { provide: APP_INTERCEPTOR, useClass: PgSessionContextInterceptor },
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
 export class AppModule {}

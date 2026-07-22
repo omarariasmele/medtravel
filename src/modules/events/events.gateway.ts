@@ -47,7 +47,10 @@ interface ActiveParticipant {
  * chequeo de membresía lo hace la app explícitamente, no Postgres.
  */
 @WebSocketGateway({
-  cors: { origin: true, credentials: true },
+  // process.env directo (no ConfigService): este decorador se evalúa al
+  // importar la clase, antes de que Nest arranque el DI container — ver
+  // el import 'dotenv/config' en main.ts que lo deja disponible a tiempo.
+  cors: { origin: process.env.CORS_ORIGIN, credentials: true },
   namespace: 'cases',
 })
 export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {

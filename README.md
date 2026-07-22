@@ -149,7 +149,35 @@ npm run start:dev
 Ver [`requests.http`](requests.http) para ejemplos listos para correr
 desde VS Code (extensión "REST Client").
 
+## Seguridad
+
+- **Helmet** (headers de seguridad HTTP) y **CORS** restringido a
+  `CORS_ORIGIN` (HTTP y Socket.io, ver `main.ts` / `events.gateway.ts`).
+- **Rate limiting** (`@nestjs/throttler`): 100 req/min global, 10/min
+  específico en `POST /auth/login` — frena fuerza bruta por IP,
+  independiente del bloqueo de cuenta.
+- **Bloqueo de cuenta** tras intentos fallidos: umbrales
+  (`AUTH_MAX_FAILED_ATTEMPTS`, `AUTH_LOCKOUT_MINUTES`) leídos de
+  `params.operational_limits` (mismo patrón B9 que el resto del schema),
+  no hardcodeados — ver
+  [`operational-limits.helper.ts`](src/common/database/operational-limits.helper.ts).
+  Esas dos claves tampoco están en `008_seeds.sql`; se agregaron a mano
+  contra el servidor de desarrollo, igual que los otros gaps documentados.
+
+## Tests
+
+`npm run test:e2e` corre contra **la base configurada en `.env`** (hoy,
+el servidor real de desarrollo) — no hay una base de test aislada
+todavía. Cada test crea su propio `core.persons`/`core.users` con datos
+únicos y los borra en el teardown (ver
+[`test/support/test-user.ts`](test/support/test-user.ts)), así que no
+depende de datos fijos ni ensucia la base entre corridas. Cubre login
+(éxito/fallo/refresh) y que la RLS clínica realmente se aplica de punta
+a punta (titular puede crear su propio registro, no el de otra persona,
+404 en recurso desconocido).
+
 ## Scripts
 
 - `npm run build` / `npm run start:dev` / `npm run lint`
 - `npm run migration:run` / `migration:revert` / `migration:show`
+- `npm run test:e2e`
