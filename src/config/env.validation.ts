@@ -42,6 +42,11 @@ class EnvironmentVariables {
   @IsNotEmpty()
   DB_ENCRYPTION_KEY: string;
 
+  /** Clave HMAC para core.blind_index() — usada para email_blind_index en login. */
+  @IsString()
+  @IsNotEmpty()
+  DB_BLIND_INDEX_KEY: string;
+
   @IsString()
   @IsNotEmpty()
   REDIS_HOST: string;
