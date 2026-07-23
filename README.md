@@ -218,7 +218,11 @@ desde VS Code (extensión "REST Client").
 
 `npm run test:e2e` corre contra **la base configurada en `.env`** (hoy,
 el servidor real de desarrollo) — no hay una base de test aislada
-todavía. Cada test crea su propio `core.persons`/`core.users` con datos
+todavía. Corre con `--runInBand` (serial, no en paralelo) a propósito:
+sin una base aislada, varias suites abriendo conexiones simultáneas
+contra el mismo servidor compartido generaban fallas intermitentes por
+contención, no errores reales — un mismo test podía fallar corriendo en
+paralelo con el resto y pasar perfecto en aislamiento. Cada test crea su propio `core.persons`/`core.users` con datos
 únicos y los borra en el teardown (ver
 [`test/support/test-user.ts`](test/support/test-user.ts)), así que no
 depende de datos fijos ni ensucia la base entre corridas. Cubre login

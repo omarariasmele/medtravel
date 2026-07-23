@@ -25,6 +25,7 @@ import { TenantAnalyticsCacheEntity } from './entities/tenant-analytics-cache.en
 import { TenantAccessRequestEntity } from './entities/tenant-access-request.entity';
 import { OperationsResourceController } from './operations-resource.controller';
 import { EmergencyCasesController } from './emergency-cases.controller';
+import { CaseParticipantsController } from './case-participants.controller';
 
 @Module({
   imports: [
@@ -55,7 +56,11 @@ import { EmergencyCasesController } from './emergency-cases.controller';
   // EmergencyCasesController va ANTES: Nest/Express matchea rutas en el
   // orden de registro, y sin esto operations/:resource (genérico)
   // interceptaría operations/emergency-cases antes de llegar acá.
-  controllers: [EmergencyCasesController, OperationsResourceController],
+  controllers: [
+    EmergencyCasesController,
+    CaseParticipantsController,
+    OperationsResourceController,
+  ],
   exports: [TypeOrmModule],
 })
 export class OperationsModule {}

@@ -130,12 +130,12 @@ WHERE NOT EXISTS (
 
 -- ── Gap #4: claves de operational_limits para el lockout de cuenta ──
 
-INSERT INTO params.operational_limits (limit_key, limit_value, tenant_id, lifecycle_status)
-SELECT key, value, NULL, 'ACTIVE'
+INSERT INTO params.operational_limits (tenant_id, limit_key, limit_value, unit, description_es, requires_approval, lifecycle_status)
+SELECT NULL, key, value, unit, description_es, FALSE, 'ACTIVE'
 FROM (VALUES
-  ('AUTH_MAX_FAILED_ATTEMPTS', 5),
-  ('AUTH_LOCKOUT_MINUTES', 15)
-) AS l(key, value)
+  ('AUTH_MAX_FAILED_ATTEMPTS', 5, 'count', 'Intentos fallidos antes de bloquear la cuenta'),
+  ('AUTH_LOCKOUT_MINUTES', 15, 'minutes', 'Duracion del bloqueo de cuenta tras exceder intentos fallidos')
+) AS l(key, value, unit, description_es)
 WHERE NOT EXISTS (
   SELECT 1 FROM params.operational_limits
   WHERE limit_key = l.key AND tenant_id IS NULL

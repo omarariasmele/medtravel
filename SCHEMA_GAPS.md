@@ -157,16 +157,51 @@ autenticado podía leer o alterar la lista de participantes de
 `operator-presence` tienen el mismo problema con el directorio de
 operadores entre tenants (`GRANT` incluye `UPDATE`).
 
-**Estado:** por ahora, `operations.registry.ts` **excluye** estos
-recursos del CRUD genérico (ver comentario en el archivo) en vez de
-proponer una política de una — el modelo de acceso correcto de
-`chat_channels`/`message_attachments`/etc. depende del mismo esquema de
-membresía por `case_id` que ya usa `chat_messages`
-(`msg_select`/`msg_insert`), y el de `operator_*` depende de si hay un
-rol "superadmin cross-tenant" real o no (decisión de producto, no solo
-técnica). `chat_messages` sí quedó en el registro: su RLS
-(`msg_select`/`msg_insert`) ya valida membresía real vía
-`case_participants` dentro de la propia política, igual que el gateway.
+**Estado: RESUELTO** (2026-07-23), tras la decisión de producto sobre
+el modelo de acceso — ver
+[`proposed-tenant-access-model.sql`](src/database/sql/proposed-tenant-access-model.sql):
+
+- Un operador normal siempre queda acotado a su propio tenant
+  (`tenant_id = app.current_tenant_id`) en `operators`, `operator_roles`,
+  `operator_presence`, `case_participants`, `chat_channels`,
+  `message_attachments`, `message_reads`, `chat_translations`,
+  `tenant_access_requests`.
+- El Superadmin de OYSGROUP accede cross-tenant únicamente vía un
+  mecanismo nuevo, mellizo de `audit.break_glass_grants` pero
+  tenant-scoped: `audit.tenant_break_glass_grants` (solicitud + segundo
+  aprobador distinto del solicitante + vigencia acotada por
+  `TENANT_BREAK_GLASS_MAX_HOURS` + auditoría inmutable en
+  `audit.data_audit_events`). El gate `core.has_tenant_access(tenant_id)`
+  es lo que usan todas las políticas nuevas.
+- `case_participants`/`chat_channels`/etc. vuelven a estar en el CRUD:
+  `case_participants` y `chat_channels` tienen ahora un `SELECT`
+  adicional para el participante activo de su propio caso (vía
+  `operations.is_active_case_participant()`, una función
+  `SECURITY DEFINER` — necesaria porque la política de
+  `case_participants` consulta la misma tabla que protege; sin
+  `SECURITY DEFINER` esa auto-referencia causaba una reevaluación
+  recursiva de la política en cada fila, ~4x más lento en los tests
+  e2e). El resto (`message_attachments`/`message_reads`/
+  `chat_translations`) reutiliza esa misma función.
+- `case_participants` salió del CRUD genérico plano y pasó a un
+  controller dedicado (`case-participants.controller.ts`, ruta anidada
+  `operations/cases/:caseId/participants`), igual que
+  `emergency-cases.controller.ts` — emite `case_update` por Socket.io
+  después de cada alta/baja de participante. También se agregó
+  `GRANT UPDATE` (faltaba, necesario para poder "quitar" un participante
+  vía `is_active = FALSE` en vez de un DELETE que nunca existió).
+- `TenantBreakGlassService` (`tenant-break-glass.service.ts`) expone
+  `request`/`approve`/`revoke`, pero **todavía no tiene controller ni
+  guard** — falta decidir qué usuarios pueden siquiera solicitar acceso
+  a un tenant ajeno antes de exponerlo por HTTP.
+- `operators`/`operator_roles`/`operator_presence` tienen `tenant_id`
+  nullable en el schema aprobado — una fila con `tenant_id NULL`
+  representaría algo a nivel plataforma, pero queda invisible con estas
+  políticas (fail-secure: un NULL nunca amplía el alcance). Si hace
+  falta un concepto real de "rol/operador de plataforma", es una
+  decisión de producto aparte, no resuelta acá.
+- **NOTA LEGAL:** `BG_LEGAL_BASIS.CONTRACTUAL_SUPPORT` es un placeholder
+  — confirmar la redacción real con el equipo legal antes de v1.2.4.
 
 **Encontrado:** al escribir tests e2e de RLS para el módulo operations.
 
