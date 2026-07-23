@@ -152,6 +152,70 @@ export async function getPersonFirstName(personId: string): Promise<string> {
   }
 }
 
+export interface TestMemberFixture {
+  memberId: string;
+  tenantId: string;
+}
+
+/**
+ * Crea un tenant + member propios para el test (no reutiliza ninguno
+ * existente) — necesarios para ejercitar RLS que depende de
+ * core.members (coverage.health_coverages, operations.trips, etc.).
+ */
+export async function createTestMember(
+  personId: string,
+): Promise<TestMemberFixture> {
+  const client = superuserClient();
+  await client.connect();
+  try {
+    const tenant = await client.query(
+      `INSERT INTO core.tenants (code, name)
+       VALUES ($1, 'E2E Test Tenant') RETURNING id`,
+      [`E2E${randomUUID().slice(0, 8).toUpperCase()}`],
+    );
+    const tenantId = tenant.rows[0].id;
+
+    const member = await client.query(
+      `INSERT INTO core.members (person_id, tenant_id, status_id)
+       VALUES ($1, $2, params.catalog_id('MEMBER_STATUS', 'ACTIVE'))
+       RETURNING id`,
+      [personId, tenantId],
+    );
+
+    return { memberId: member.rows[0].id, tenantId };
+  } finally {
+    await client.end();
+  }
+}
+
+export async function deleteTestMember(
+  fixture: TestMemberFixture,
+): Promise<void> {
+  const client = superuserClient();
+  await client.connect();
+  try {
+    await client.query(
+      `DELETE FROM operations.trip_destinations WHERE member_id = $1`,
+      [fixture.memberId],
+    );
+    await client.query(`DELETE FROM operations.trips WHERE member_id = $1`, [
+      fixture.memberId,
+    ]);
+    await client.query(
+      `DELETE FROM coverage.health_coverages WHERE member_id = $1`,
+      [fixture.memberId],
+    );
+    await client.query(`DELETE FROM core.members WHERE id = $1`, [
+      fixture.memberId,
+    ]);
+    await client.query(`DELETE FROM core.tenants WHERE id = $1`, [
+      fixture.tenantId,
+    ]);
+  } finally {
+    await client.end();
+  }
+}
+
 /** Cualquier catalog_value real — para satisfacer FKs NOT NULL en tests que no evalúan reglas de negocio. */
 export async function getAnyCatalogValueId(): Promise<string> {
   const client = superuserClient();

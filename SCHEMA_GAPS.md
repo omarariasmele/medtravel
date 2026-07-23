@@ -120,6 +120,78 @@ quedan para cuando se implementen esos flujos).
 **Encontrado:** al implementar MFA (TOTP) real (`POST /auth/mfa/enroll`
 + `verify` + `disable`, integrado a `login()`).
 
+## 7. `operations.trips` y `operations.trip_destinations` no tienen RLS
+
+**Archivo:** [`proposed-trips-rls.sql`](src/database/sql/proposed-trips-rls.sql)
+
+`007_operations.sql` habilita RLS en `emergency.tokens`,
+`operations.emergency_cases`, `operations.chat_messages` y
+`operations.tenant_analytics_cache`, pero **no en `operations.trips` ni
+`operations.trip_destinations`** — a pesar de compartir el mismo modelo
+de dueño (`member_id → core.members`) que `coverage.travel_assistance_enrollments`
+(`enrollments_access`) y `coverage.health_coverages`
+(`health_coverages_access`), que sí están protegidas. Sin esto,
+`GET/POST/PATCH/DELETE /operations/trips` (CRUD genérico) exponía los
+viajes de **cualquier** member a cualquier usuario autenticado — fechas,
+destinos, todo. Se agregó `trips_access`/`trip_destinations_access` con
+el mismo patrón que `enrollments_access`.
+
+**Encontrado:** al escribir tests e2e de RLS para el módulo operations.
+
+## 8. Varias tablas de `operations` expuestas por CRUD genérico nunca tuvieron RLS propia
+
+**Tablas:** `case_participants`, `chat_channels`, `message_attachments`,
+`message_reads`, `chat_translations`, `tenant_access_requests`,
+`operator_roles`, `operators`, `operator_presence`.
+
+Ninguna de estas tiene ni `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` ni
+`CREATE POLICY` en `007_operations.sql` — solo el `GRANT` a
+`app_runtime` (que en varias incluye `UPDATE`). El caso más serio es
+`case_participants`: controla quién puede unirse/leer un caso de
+emergencia, y el gateway de Socket.io (`events.gateway.ts`,
+`findActiveParticipant()`) hace su propia verificación de membresía
+precisamente **porque** esta tabla no tiene RLS — pero el CRUD genérico
+de REST no pasaba por esa verificación, así que cualquier usuario
+autenticado podía leer o alterar la lista de participantes de
+**cualquier** caso, no solo el propio. `operators`/`operator-roles`/
+`operator-presence` tienen el mismo problema con el directorio de
+operadores entre tenants (`GRANT` incluye `UPDATE`).
+
+**Estado:** por ahora, `operations.registry.ts` **excluye** estos
+recursos del CRUD genérico (ver comentario en el archivo) en vez de
+proponer una política de una — el modelo de acceso correcto de
+`chat_channels`/`message_attachments`/etc. depende del mismo esquema de
+membresía por `case_id` que ya usa `chat_messages`
+(`msg_select`/`msg_insert`), y el de `operator_*` depende de si hay un
+rol "superadmin cross-tenant" real o no (decisión de producto, no solo
+técnica). `chat_messages` sí quedó en el registro: su RLS
+(`msg_select`/`msg_insert`) ya valida membresía real vía
+`case_participants` dentro de la propia política, igual que el gateway.
+
+**Encontrado:** al escribir tests e2e de RLS para el módulo operations.
+
+## 9. `004_coverage.sql` solo tiene `GRANT` para una de sus 14 tablas
+
+**Archivo:** [`fix-004-missing-coverage-grants.sql`](src/database/sql/fix-004-missing-coverage-grants.sql)
+
+Mismo patrón que el gap #1 (`002_params.sql`): de las 14 tablas de
+`coverage.*`, solo `coverage.travel_assistance_certificates` tiene
+`GRANT` a `app_runtime` — las otras 11 expuestas por el CRUD genérico
+(`assistance-plans`, `plan-coverages`, `coverage-sponsors`,
+`card-networks`, `card-issuers`, `card-benefit-programs`,
+`travel-assistance-enrollments`, `coverage-acquisition-channels`,
+`member-card-benefit-links`, `coverage-eligibility-rules`,
+`health-coverages`) fallaban con `permiso denegado a la tabla ...` en
+**cualquier** operación, sin importar que la política RLS correspondiente
+(ej. `hc_insert`) lo permitiera — el `GRANT` es un requisito previo e
+independiente de RLS en Postgres.
+
+**Encontrado:** al escribir el test e2e de RLS del módulo coverage — el
+primer intento de crear una `health_coverage` para el propio member daba
+403 en vez de 201; el diagnóstico mostró que no era un rechazo de RLS
+(`new row violates row-level security policy`) sino de permisos
+(`permiso denegado a la tabla health_coverages`).
+
 ---
 
 ## Qué hacer con esto

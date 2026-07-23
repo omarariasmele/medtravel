@@ -133,10 +133,17 @@ actualización.
   organizaciones, matching de identidad, verificación de profesionales)
   no tienen endpoint todavía — quedaron fuera del CRUD genérico a
   propósito (ver arriba), pendientes de un flujo de negocio dedicado.
+- `case-participants`, `chat-channels`, `message-attachments`,
+  `message-reads`, `chat-translations`, `tenant-access-requests`,
+  `operator-roles`, `operators` y `operator-presence` **ya no** están en
+  el CRUD genérico de `/operations` — se sacaron por un problema de
+  seguridad real (gap #8, ver `SCHEMA_GAPS.md`): ninguna tenía RLS
+  propia, así que quedaban expuestas a cualquier usuario autenticado sin
+  el control de membresía que sí aplica el gateway de Socket.io.
 - Propuestas aplicadas a mano contra el servidor de desarrollo, pendientes
   de revisión para sumarse a la próxima versión del schema aprobado
   (v1.2.4) — no están en el baseline v1.2.3 original. Ver
-  [`SCHEMA_GAPS.md`](SCHEMA_GAPS.md) para el detalle completo de los 6
+  [`SCHEMA_GAPS.md`](SCHEMA_GAPS.md) para el detalle completo de los 9
   gaps encontrados (por qué, cómo se parchó, y qué falta decidir).
 
 ## Levantar el entorno
@@ -215,9 +222,16 @@ todavía. Cada test crea su propio `core.persons`/`core.users` con datos
 únicos y los borra en el teardown (ver
 [`test/support/test-user.ts`](test/support/test-user.ts)), así que no
 depende de datos fijos ni ensucia la base entre corridas. Cubre login
-(éxito/fallo/refresh) y que la RLS clínica realmente se aplica de punta
-a punta (titular puede crear su propio registro, no el de otra persona,
-404 en recurso desconocido).
+(éxito/fallo/refresh/logout), MFA (enroll/verify/mfaRequired), y que la
+RLS de cada módulo realmente se aplica de punta a punta:
+- **clinical**: titular crea su propio registro, no el de otra persona.
+- **identity**: `core.persons` — propio visible, ajeno oculto (404).
+- **coverage**: `health_coverages` — propio member sí, ajeno no (403),
+  nunca se puede borrar.
+- **operations**: `trips` — propio member sí, ajeno no (403); recursos
+  sacados del registro por falta de RLS (gap #8) dan 404.
+- **anonymization**: job real de anonimización (pseudonimizar + marcar
+  completado).
 
 ## Scripts
 
