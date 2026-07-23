@@ -18,6 +18,8 @@ import { TokenPairDto } from './dto/token-pair.dto';
 import { MfaRequiredResponseDto } from './dto/mfa-required-response.dto';
 import { MfaEnrollResponseDto } from './dto/mfa-enroll-response.dto';
 import { MfaVerifyDto } from './dto/mfa-verify.dto';
+import { RequestPasswordResetDto } from './dto/request-password-reset.dto';
+import { ConfirmPasswordResetDto } from './dto/confirm-password-reset.dto';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -92,5 +94,29 @@ export class AuthController {
     @CurrentContext() context: RequestContextData,
   ): Promise<{ ok: boolean }> {
     return this.authService.disableMfa(context.userId!);
+  }
+
+  /** Mismo límite que login: frena fuerza bruta de emails por IP. */
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @Post('password-reset/request')
+  @ApiOperation({
+    summary:
+      'Envía un link de reset de contraseña por email si la cuenta existe',
+  })
+  requestPasswordReset(
+    @Body() dto: RequestPasswordResetDto,
+  ): Promise<{ ok: boolean }> {
+    return this.authService.requestPasswordReset(dto);
+  }
+
+  @Post('password-reset/confirm')
+  @ApiOperation({
+    summary:
+      'Confirma el reset con el token del email y establece la nueva contraseña',
+  })
+  confirmPasswordReset(
+    @Body() dto: ConfirmPasswordResetDto,
+  ): Promise<{ ok: boolean }> {
+    return this.authService.resetPassword(dto);
   }
 }

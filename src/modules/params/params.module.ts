@@ -28,6 +28,8 @@ import { JurisdictionRuleEntity } from './entities/jurisdiction-rule.entity';
 import { CatalogsService } from './catalogs.service';
 import { CatalogsController } from './catalogs.controller';
 import { ParamsAdminResourceController } from './params-admin-resource.controller';
+import { SmtpSettingsService } from './smtp-settings.service';
+import { SmtpSettingsController } from './smtp-settings.controller';
 
 @Module({
   imports: [
@@ -57,8 +59,16 @@ import { ParamsAdminResourceController } from './params-admin-resource.controlle
       JurisdictionRuleEntity,
     ]),
   ],
-  controllers: [CatalogsController, ParamsAdminResourceController],
-  providers: [CatalogsService],
+  // SmtpSettingsController va ANTES: mismo motivo que
+  // EmergencyCasesController en operations.module.ts — Express matchea
+  // params/admin/:resource (genérico) contra params/admin/smtp-settings
+  // si se registra primero, y nunca llegaría al controller dedicado.
+  controllers: [
+    CatalogsController,
+    SmtpSettingsController,
+    ParamsAdminResourceController,
+  ],
+  providers: [CatalogsService, SmtpSettingsService],
   exports: [TypeOrmModule],
 })
 export class ParamsModule {}

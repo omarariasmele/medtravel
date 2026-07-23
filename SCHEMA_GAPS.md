@@ -196,10 +196,15 @@ el modelo de acceso — ver
   a un tenant ajeno antes de exponerlo por HTTP.
 - `operators`/`operator_roles`/`operator_presence` tienen `tenant_id`
   nullable en el schema aprobado — una fila con `tenant_id NULL`
-  representaría algo a nivel plataforma, pero queda invisible con estas
-  políticas (fail-secure: un NULL nunca amplía el alcance). Si hace
-  falta un concepto real de "rol/operador de plataforma", es una
-  decisión de producto aparte, no resuelta acá.
+  representa un operador de plataforma (Superadmin OYSGROUP), y quedaba
+  invisible con las políticas de arriba (fail-secure). **Resuelto**
+  (ver [`proposed-password-reset-and-smtp.sql`](src/database/sql/proposed-password-reset-and-smtp.sql)):
+  `core.is_platform_operator()` (SECURITY DEFINER, mismo motivo que
+  `is_active_case_participant`) agrega el carve-out — un operador con
+  `tenant_id NULL` se ve a sí mismo y a sus pares de plataforma, un
+  operador de tenant normal nunca los ve. El rol `PLATFORM_SUPERADMIN`
+  (`can_manage_config = TRUE`) ya está sembrado; falta el paso manual de
+  bootstrap (crear el primer `operations.operators` real con ese rol).
 - **NOTA LEGAL:** `BG_LEGAL_BASIS.CONTRACTUAL_SUPPORT` es un placeholder
   — confirmar la redacción real con el equipo legal antes de v1.2.4.
 

@@ -213,6 +213,28 @@ desde VS Code (extensión "REST Client").
   /auth/mfa/disable` lo desactiva. Requirió agregar RLS y sembrar el
   catalog_value `TOTP` que faltaban en el schema aprobado — ver gap #6
   en [`SCHEMA_GAPS.md`](SCHEMA_GAPS.md).
+- **Reset de password**: `POST /auth/password-reset/request` (email) →
+  si la cuenta existe y está activa, genera un token de un solo uso
+  (`core.password_reset_tokens`) y manda un link por mail; responde
+  `{ ok: true }` **siempre**, exista o no el email, y también si el
+  envío de mail falla — un 500 ahí delataría qué emails están
+  registrados. `POST /auth/password-reset/confirm` (token + newPassword)
+  cambia la contraseña y revoca todas las sesiones activas del usuario.
+- **Superadmin de plataforma**: un `operations.operators` con
+  `tenant_id = NULL` + `operator_roles.can_manage_config = TRUE` (rol
+  `PLATFORM_SUPERADMIN`, ya sembrado — falta el bootstrap manual del
+  primer operador real). Es quien administra la config SMTP
+  (`GET/PUT /params/admin/smtp-settings`) y quien puede pedir acceso
+  cross-tenant vía `audit.tenant_break_glass_grants` (ver gap #8 en
+  `SCHEMA_GAPS.md`) — nunca un flag de bypass general.
+- **SMTP propio**: la config (host/puerto/usuario/contraseña/remitente)
+  vive en `params.smtp_settings`, no en `.env` — así el Superadmin la
+  cambia desde una pantalla sin redeploy. La contraseña se cifra con
+  `core.encrypt_pii`, igual que el email de los usuarios, y nunca se
+  devuelve por HTTP ni siquiera a quien tiene acceso de config;
+  `MailService` la lee solo internamente vía
+  `params.get_active_smtp_config()` (`SECURITY DEFINER`) para armar la
+  conexión SMTP.
 
 ## Tests
 

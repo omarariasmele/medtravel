@@ -12,11 +12,14 @@ import { generateSecret, generateURI, verify } from 'otplib';
 
 import { TenantTransactionManager } from '@common/database/tenant-transaction.manager';
 import { getOperationalLimit } from '@common/database/operational-limits.helper';
+import { MailService } from '@modules/mail/mail.service';
 
 import { LoginDto } from './dto/login.dto';
 import { TokenPairDto } from './dto/token-pair.dto';
 import { MfaRequiredResponseDto } from './dto/mfa-required-response.dto';
 import { MfaEnrollResponseDto } from './dto/mfa-enroll-response.dto';
+import { RequestPasswordResetDto } from './dto/request-password-reset.dto';
+import { ConfirmPasswordResetDto } from './dto/confirm-password-reset.dto';
 import { JwtPayload } from './jwt-payload.interface';
 
 interface LoginCredentialsRow {
@@ -48,6 +51,7 @@ export class AuthService {
     private readonly txManager: TenantTransactionManager,
     private readonly jwtService: JwtService,
     private readonly config: ConfigService,
+    private readonly mailService: MailService,
   ) {}
 
   /** Replica exactamente core.blind_index(): hmac(lower(trim(value)), key, 'sha256') en hex. */
@@ -280,6 +284,118 @@ export class AuthService {
         ),
       { userId },
     );
+    return { ok: true };
+  }
+
+  /**
+   * Mismo mensaje/respuesta exista o no el email (evita enumeración,
+   * igual que login()) — si existe y está activo, manda el link; si no,
+   * simplemente no pasa nada, pero el caller nunca lo distingue.
+   */
+  async requestPasswordReset(
+    dto: RequestPasswordResetDto,
+  ): Promise<{ ok: boolean }> {
+    const emailBlindIndex = this.computeBlindIndex(dto.email);
+
+    const credentials = await this.txManager.runInTransaction<
+      LoginCredentialsRow | undefined
+    >(async (queryRunner) => {
+      const rows = await queryRunner.query(
+        'SELECT * FROM core.get_login_credentials($1)',
+        [emailBlindIndex],
+      );
+      return rows[0];
+    });
+
+    if (credentials && credentials.active) {
+      const token =
+        randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, '');
+      const tokenHash = this.hashToken(token);
+      const ttlMinutes = await getOperationalLimit(
+        this.txManager,
+        'PASSWORD_RESET_TOKEN_TTL_MINUTES',
+        30,
+      );
+
+      await this.txManager.runInTransaction(
+        (queryRunner) =>
+          queryRunner.query(
+            `INSERT INTO core.password_reset_tokens (user_id, token_hash, expires_at)
+             VALUES ($1, $2, NOW() + ($3 || ' minutes')::INTERVAL)`,
+            [credentials.user_id, tokenHash, ttlMinutes],
+          ),
+        { userId: credentials.user_id },
+      );
+
+      const resetUrl = `${this.config.get<string>('CORS_ORIGIN')}/reset-password?token=${token}`;
+      try {
+        await this.mailService.send(
+          dto.email,
+          'Restablecer tu contraseña de MedTravelApp',
+          `<p>Hacé clic <a href="${resetUrl}">acá</a> para restablecer tu contraseña.</p>
+           <p>Este link vence en ${ttlMinutes} minutos. Si no lo pediste vos, ignorá este correo.</p>`,
+        );
+      } catch (error) {
+        // No propagar: si el envío falla (SMTP no configurado, caído,
+        // etc.) la respuesta tiene que ser idéntica a la de un email que
+        // no existe — de lo contrario un 500 acá delataría cuáles
+        // emails SÍ están registrados (mismo problema que evita el
+        // mensaje genérico de login()). El token ya quedó insertado; si
+        // el usuario reintenta, requestPasswordReset genera uno nuevo.
+        this.logger.error(
+          `No se pudo enviar el mail de reset de password: ${(error as Error).message}`,
+        );
+      }
+    }
+
+    return { ok: true };
+  }
+
+  async resetPassword(dto: ConfirmPasswordResetDto): Promise<{ ok: boolean }> {
+    const tokenHash = this.hashToken(dto.token);
+
+    const userId = await this.txManager.runInTransaction<string | null>(
+      async (queryRunner) => {
+        const rows = await queryRunner.query(
+          `SELECT core.consume_password_reset_token($1) AS user_id`,
+          [tokenHash],
+        );
+        return rows[0]?.user_id ?? null;
+      },
+    );
+
+    if (!userId) {
+      throw new UnauthorizedException(
+        'Link de reset inválido, ya usado, o vencido',
+      );
+    }
+
+    const passwordHash = await bcrypt.hash(dto.newPassword, 10);
+
+    await this.txManager.runInTransaction(
+      (queryRunner) =>
+        queryRunner.query(
+          `UPDATE core.authentication_credentials
+           SET password_hash = $2, must_change = FALSE,
+               failed_attempts = 0, locked_until = NULL
+           WHERE user_id = $1`,
+          [userId, passwordHash],
+        ),
+      { userId },
+    );
+
+    // Cambiar la password invalida cualquier sesión activa robada.
+    await this.txManager.runInTransaction(
+      (queryRunner) =>
+        queryRunner.query(
+          `UPDATE core.security_sessions
+           SET is_active = FALSE, revoked_at = NOW()
+           WHERE user_id = $1 AND is_active = TRUE`,
+          [userId],
+        ),
+      { userId },
+    );
+
     return { ok: true };
   }
 

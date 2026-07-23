@@ -87,6 +87,55 @@ POST {{baseUrl}}/auth/mfa/disable
 Authorization: Bearer {{login.response.body.$.accessToken}}
 
 ###############################################################
+### Reset de password — necesita un servidor SMTP real configurado
+### (ver bloque de superadmin más abajo) para que el mail llegue de
+### verdad; el token del email hay que copiarlo del link recibido.
+###############################################################
+
+### Request — responde { ok: true } exista o no el email
+POST {{baseUrl}}/auth/password-reset/request
+Content-Type: application/json
+
+{
+  "email": "ana.prueba@medtravelapp.test"
+}
+
+### Confirm — reemplazar "token" por el valor real del link del email
+POST {{baseUrl}}/auth/password-reset/confirm
+Content-Type: application/json
+
+{
+  "token": "el-token-del-email",
+  "newPassword": "OtraClaveSegura789!"
+}
+
+###############################################################
+### Config SMTP — solo Superadmin (operations.operators con
+### tenant_id NULL + operator_roles.can_manage_config = TRUE, rol
+### PLATFORM_SUPERADMIN ya sembrado). Requiere el accessToken de un
+### login con ESE usuario, no con ana.prueba.
+###############################################################
+
+### Ver la config activa (nunca devuelve la contraseña)
+GET {{baseUrl}}/params/admin/smtp-settings
+Authorization: Bearer {{login.response.body.$.accessToken}}
+
+### Cargar/actualizar la config (desactiva la anterior, inserta una nueva)
+PUT {{baseUrl}}/params/admin/smtp-settings
+Authorization: Bearer {{login.response.body.$.accessToken}}
+Content-Type: application/json
+
+{
+  "host": "smtp.oysgroup.com",
+  "port": 587,
+  "username": "noreply@oysgroup.com",
+  "password": "la-contraseña-real-del-smtp",
+  "fromAddress": "noreply@oysgroup.com",
+  "fromName": "MedTravelApp",
+  "secure": false
+}
+
+###############################################################
 ### CRUD genérico — requiere el accessToken del login de arriba
 ### Patrón: GET/POST /<modulo>/:resource, GET/PATCH/DELETE /<modulo>/:resource/:id
 ### Módulos disponibles: identity, coverage, clinical, emergency,
