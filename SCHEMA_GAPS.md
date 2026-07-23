@@ -194,6 +194,17 @@ primer intento de crear una `health_coverage` para el propio member daba
 
 ---
 
+## Consolidación formal
+
+[`010_v1.2.4_fixes.sql`](src/database/sql/010_v1.2.4_fixes.sql) junta
+los gaps #1, #2, #3, #4, #5, #6, #7 y #9 en un solo archivo, listo para
+que el equipo de diseño lo revise como paquete — ya está aplicado y
+probado contra el servidor real (22/22 tests e2e), esto solo lo
+formaliza. El gap #3 queda marcado ahí mismo como pendiente de labels
+reales (hoy son placeholders de test). El **gap #8 no está incluido**
+todavía: sigue en diseño (ver decisión de superadmin/break-glass), no es
+un fix mecánico como el resto.
+
 ## Qué hacer con esto
 
 1. Revisar cada patch con el equipo de diseño (el mismo proceso que
