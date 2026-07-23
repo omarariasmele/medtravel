@@ -238,3 +238,12 @@ RLS de cada módulo realmente se aplica de punta a punta:
 - `npm run build` / `npm run start:dev` / `npm run lint`
 - `npm run migration:run` / `migration:revert` / `migration:show`
 - `npm run test:e2e`
+
+## CI
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) corre `npm ci`,
+`npm run lint` y `npm run build` en cada push/PR a `main`. **No** corre
+`test:e2e` — esa suite apunta al servidor de desarrollo real
+(`192.168.0.150:5433`, red privada), inalcanzable desde un runner de
+GitHub Actions; seguir corriéndola a mano desde una máquina con acceso a
+esa red (ver sección Tests arriba).

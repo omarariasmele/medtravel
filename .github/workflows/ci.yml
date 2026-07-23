@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+
+      - run: npm run lint
+
+      - run: npm run build
+
+      # No hay job de e2e acá a propósito: test/jest-e2e.json corre contra
+      # el servidor de desarrollo real (192.168.0.150:5433, red privada),
+      # no una base aislada — un runner de GitHub Actions no tiene ruta a
+      # esa IP. Ver la sección "Tests" del README. Correr test:e2e sigue
+      # siendo manual, desde una máquina con acceso a esa red.
