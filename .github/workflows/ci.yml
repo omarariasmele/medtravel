@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  build-lint:
+  api-core:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,11 +17,13 @@ jobs:
           node-version: "20"
           cache: "npm"
 
+      # Un solo lockfile en la raíz (npm workspaces) — npm ci instala
+      # todos los workspaces, lint/build corren acotados a api-core.
       - run: npm ci
 
-      - run: npm run lint
+      - run: npm run lint --workspace=apps/api-core
 
-      - run: npm run build
+      - run: npm run build --workspace=apps/api-core
 
       # No hay job de e2e acá a propósito: test/jest-e2e.json corre contra
       # el servidor de desarrollo real (192.168.0.150:5433, red privada),
