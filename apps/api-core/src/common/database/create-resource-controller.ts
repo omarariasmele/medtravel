@@ -18,6 +18,27 @@ import { TenantTransactionManager } from './tenant-transaction.manager';
 import { RlsCrudService } from './rls-crud.service';
 
 /**
+ * Forma extendida de una entrada de registro: además de la entidad
+ * "pelada" (la mayoría de los recursos), permite declarar qué
+ * propiedades están encriptadas en la base (ver
+ * proposed-clinical-encryption.sql) para que RlsCrudService las
+ * encripte/desencripte automáticamente en vez de pasarlas crudas.
+ */
+export interface EncryptedResourceEntry {
+  entity: EntityTarget<ObjectLiteral>;
+  encryptedFields: string[];
+}
+
+export type ResourceRegistryEntry =
+  EntityTarget<ObjectLiteral> | EncryptedResourceEntry;
+
+function isEncryptedEntry(
+  entry: ResourceRegistryEntry,
+): entry is EncryptedResourceEntry {
+  return typeof entry === 'object' && entry !== null && 'entity' in entry;
+}
+
+/**
  * Fábrica de un controller CRUD genérico montado en `<prefix>/:resource`,
  * usada una vez por módulo con su propio registro de entidades (ver
  * <modulo>.registry.ts). Evita repetir ~80 líneas casi idénticas en cada
@@ -25,7 +46,7 @@ import { RlsCrudService } from './rls-crud.service';
  */
 export function createResourceController(
   prefix: string,
-  registry: Record<string, EntityTarget<ObjectLiteral>>,
+  registry: Record<string, ResourceRegistryEntry>,
 ) {
   @ApiTags(prefix)
   @ApiBearerAuth()
@@ -35,13 +56,20 @@ export function createResourceController(
     constructor(private readonly txManager: TenantTransactionManager) {}
 
     private resolve(resource: string): RlsCrudService<ObjectLiteral> {
-      const entityClass = registry[resource];
-      if (!entityClass) {
+      const entry = registry[resource];
+      if (!entry) {
         throw new NotFoundException(
           `Recurso desconocido en ${prefix}: ${resource}`,
         );
       }
-      return new RlsCrudService(this.txManager, entityClass);
+      if (isEncryptedEntry(entry)) {
+        return new RlsCrudService(
+          this.txManager,
+          entry.entity,
+          entry.encryptedFields,
+        );
+      }
+      return new RlsCrudService(this.txManager, entry);
     }
 
     @Get(':resource')

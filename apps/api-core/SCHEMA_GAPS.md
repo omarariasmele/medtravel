@@ -301,6 +301,11 @@ razonables"): se agregaron los dos dominios nuevos y se sembraron los
 tres con valores típicos del rubro — quedan marcados como propuesta de
 producto a revisar, no como decisión técnica cerrada.
 
+**Actualización**: `CONDITION_STATUS` (dominio para
+`clinical.conditions.status_id`) tenía el mismo problema — existía sin
+valores. Se agregaron 4 (ACTIVE/RESOLVED/CHRONIC/IN_REMISSION) al
+armar la sección de historia clínica del call center (gap #16).
+
 ## 13. `core.persons` no es accesible a operadores ni siquiera para mostrar el nombre de un viajero — es una decisión de diseño explícita, no un bug
 
 **Encontrado:** al querer mostrar nombres reales en "Usuarios /
@@ -378,6 +383,60 @@ consentimiento — el tenant nunca puede consentir en nombre del viajero.
 Verificado: `GET /coverage/health-coverages` ahora devuelve la cobertura
 sembrada, y el e2e suite completo (22/22) sigue pasando sin
 regresiones.
+
+## 16. Encriptación a nivel de columna para texto libre sensible + acceso clínico para call center
+
+**Archivos:** [`proposed-clinical-encryption.sql`](src/database/sql/proposed-clinical-encryption.sql),
+[`proposed-anonymization-support.sql`](src/database/sql/proposed-anonymization-support.sql)
+(actualizado)
+
+**Pedido explícito del usuario**: *"si alguien roba la base de datos no
+debería poder visualizar el nombre ni los datos de un usuario
+viajero"*, más la necesidad real de que un call center pueda cargar/ver
+antecedentes médicos de un viajero durante una llamada de asistencia.
+
+No es un gap del schema — es una decisión de seguridad nueva, así que
+se documenta acá con el mismo criterio que los demás cambios de RLS/
+encriptación:
+
+- **Encriptación**: se reutilizó el mecanismo ya existente para
+  `core.users.email` (`core.encrypt_pii`/`decrypt_pii`, pgcrypto,
+  clave por conexión vía `app.encryption_key`) — no una clave ni un
+  esquema nuevo. Alcance: solo texto libre que identifica a una
+  persona — `core.persons.first_name/last_name` y el texto libre de
+  las 8 tablas clínicas (nombre de alergia/condición/medicamento/
+  cirugía/vacuna, notas, etc.). Los UUID de catálogo y los valores
+  numéricos de laboratorio/signos vitales quedan sin encriptar a
+  propósito (no identifican a nadie por sí solos, y encriptarlos
+  rompería el filtrado por valor que el propio schema pide para esos
+  campos).
+- `RlsCrudService` (`rls-crud.service.ts`) ganó un 3er parámetro
+  opcional `encryptedFields` — cuando se usa, arma los reads con
+  `QueryBuilder` (`core.decrypt_pii()`) y los writes con SQL
+  parametrizado (`core.encrypt_pii()`) en vez de `manager.find/create/
+  save`. El resto de los ~60 recursos genéricos no lo usa y sigue
+  exactamente igual.
+- `audit.anonymize_field()` (usada por los jobs de anonimización) pasó
+  a chequear el `data_type` real de la columna — si es `bytea`, envuelve
+  el valor nuevo en `core.encrypt_pii()` (y para HASH_IRREVERSIBLE,
+  desencripta el original antes de hashearlo). Sin este cambio, un job
+  de anonimización sobre `core.persons.first_name` habría escrito bytes
+  crudos no-PGP, y la próxima lectura vía `decrypt_pii()` habría
+  fallado.
+- **Acceso clínico para call center**: no fue necesario ningún cambio
+  de permisos — `clinical.has_clinical_access()` (000_extensions.sql)
+  ya tiene un camino (#5, "caso de emergencia activo con este
+  paciente") que se activa solo con el header HTTP `x-active-case-id`
+  (ya soportado por `pg-session-context.interceptor.ts`, populando
+  `app.active_case_id`). admin-web solo necesitaba mandar ese header
+  desde la nueva sección "Historia clínica" en el detalle de un caso.
+
+**Verificado end-to-end** contra el servidor real: contenido en bytea
+ilegible directamente en la base (`SELECT first_name FROM core.persons`
+devuelve bytes), decrypt correcto vía `/me/profile`,
+`/identity/persons/:id` y `/clinical/allergies` (creado y leído
+sembrado con el header de caso activo), y el e2e suite completo
+(22/22) sin regresiones.
 
 ## Consolidación formal
 

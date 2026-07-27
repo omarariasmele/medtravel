@@ -1,4 +1,4 @@
-import { EntityTarget, ObjectLiteral } from 'typeorm';
+import { ResourceRegistryEntry } from '@common/database/create-resource-controller';
 
 import { AllergyEntity } from './entities/allergy.entity';
 import { ConditionEntity } from './entities/condition.entity';
@@ -23,16 +23,88 @@ import { SubmissionVisibilityPolicyEntity } from './entities/submission-visibili
  * un recurso para crear a mano), professional-verification-attempts,
  * organization-candidates/organization-match-decisions (pipeline de
  * deduplicación MTA-511, system-driven).
+ *
+ * Campos de texto libre encriptados en la base (ver
+ * proposed-clinical-encryption.sql) — RlsCrudService los desencripta/
+ * encripta automáticamente vía `encryptedFields`. Los UUID de catálogo
+ * (severidad, tipo, estado) y los valores numéricos de laboratorio/
+ * signos vitales NO se encriptan a propósito: no identifican a nadie
+ * por sí solos, y en el caso de lab_results/vitals_history encriptarlos
+ * rompería el filtrado/indexado por valor que el propio schema pide.
  */
-export const CLINICAL_REGISTRY: Record<string, EntityTarget<ObjectLiteral>> = {
-  allergies: AllergyEntity,
-  conditions: ConditionEntity,
-  medications: MedicationEntity,
-  surgeries: SurgeryEntity,
-  'lab-results': LabResultEntity,
-  'vitals-history': VitalsHistoryEntity,
-  vaccines: VaccineEntity,
-  documents: ClinicalDocumentEntity,
+export const CLINICAL_REGISTRY: Record<string, ResourceRegistryEntry> = {
+  allergies: {
+    entity: AllergyEntity,
+    encryptedFields: ['allergenName', 'memberChallengeNotes', 'notes'],
+  },
+  conditions: {
+    entity: ConditionEntity,
+    encryptedFields: [
+      'conditionName',
+      'conditionNameEn',
+      'treatingDoctor',
+      'treatmentNotes',
+      'travelRestrictions',
+      'memberChallengeNotes',
+      'notes',
+    ],
+  },
+  medications: {
+    entity: MedicationEntity,
+    encryptedFields: [
+      'genericName',
+      'brandName',
+      'prescribedBy',
+      'travelNotes',
+      'memberChallengeNotes',
+      'notes',
+    ],
+  },
+  surgeries: {
+    entity: SurgeryEntity,
+    encryptedFields: [
+      'procedureName',
+      'procedureNameEn',
+      'indication',
+      'hospitalName',
+      'surgeonName',
+      'complications',
+      'recoveryNotes',
+      'implantDetails',
+      'memberChallengeNotes',
+      'notes',
+    ],
+  },
+  'lab-results': {
+    entity: LabResultEntity,
+    encryptedFields: ['labName', 'requestedBy', 'aiSummaryEs', 'aiSummaryEn'],
+  },
+  'vitals-history': {
+    entity: VitalsHistoryEntity,
+    encryptedFields: ['deviceUsed', 'notes'],
+  },
+  vaccines: {
+    entity: VaccineEntity,
+    encryptedFields: [
+      'vaccineName',
+      'vaccineNameEn',
+      'manufacturer',
+      'batchNumber',
+      'administeredBy',
+      'institution',
+      'certificateNumber',
+    ],
+  },
+  documents: {
+    entity: ClinicalDocumentEntity,
+    encryptedFields: [
+      'fileNameOriginal',
+      'title',
+      'description',
+      'issuingDoctor',
+      'issuingInstitution',
+    ],
+  },
   'document-shares': DocumentShareEntity,
   'healthcare-professionals': HealthcareProfessionalEntity,
   'professional-certifications': ProfessionalCertificationEntity,

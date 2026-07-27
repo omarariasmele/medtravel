@@ -31,7 +31,7 @@ BEGIN
   END IF;
 
   INSERT INTO core.persons (first_name, last_name, preferred_lang)
-  VALUES (p_first_name, p_last_name, p_preferred_lang)
+  VALUES (core.encrypt_pii(p_first_name), core.encrypt_pii(p_last_name), p_preferred_lang)
   RETURNING id INTO v_person_id;
 
   INSERT INTO core.users (person_id, email, email_blind_index, preferred_lang)

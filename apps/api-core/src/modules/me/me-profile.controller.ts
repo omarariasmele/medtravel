@@ -33,7 +33,8 @@ export class MeProfileController {
   async get(@CurrentContext() context: RequestContextData) {
     const row = await this.txManager.runInTransaction(async (queryRunner) => {
       const rows = await queryRunner.query(
-        `SELECT id, first_name, last_name, birth_date, gender_id,
+        `SELECT id, core.decrypt_pii(first_name) AS first_name,
+                core.decrypt_pii(last_name) AS last_name, birth_date, gender_id,
                 nationality_id, country_residence_id, preferred_lang, timezone
          FROM core.persons WHERE id = $1`,
         [context.personId],
@@ -55,8 +56,8 @@ export class MeProfileController {
     await this.txManager.runInTransaction((queryRunner) =>
       queryRunner.query(
         `UPDATE core.persons SET
-           first_name     = COALESCE($2, first_name),
-           last_name      = COALESCE($3, last_name),
+           first_name     = COALESCE(core.encrypt_pii($2), first_name),
+           last_name      = COALESCE(core.encrypt_pii($3), last_name),
            birth_date     = COALESCE($4, birth_date),
            preferred_lang = COALESCE($5, preferred_lang),
            timezone       = COALESCE($6, timezone)

@@ -28,8 +28,10 @@ export class MeClinicalController {
   async listAllergies(@CurrentContext() context: RequestContextData) {
     return this.txManager.runInTransaction((queryRunner) =>
       queryRunner.query(
-        `SELECT id, allergen_name, allergen_type_id, severity_id,
-                canonical_status_id, confirmation_status_id, notes
+        `SELECT id, core.decrypt_pii(allergen_name) AS allergen_name,
+                allergen_type_id, severity_id,
+                canonical_status_id, confirmation_status_id,
+                core.decrypt_pii(notes) AS notes
          FROM clinical.allergies
          WHERE person_id = $1 AND active = TRUE
          ORDER BY created_at DESC`,
@@ -49,15 +51,16 @@ export class MeClinicalController {
            (person_id, allergen_name, allergen_type_id, severity_id,
             canonical_status_id, provenance_id, notes)
          VALUES (
-           $1, $2,
+           $1, core.encrypt_pii($2),
            params.catalog_id('ALLERGEN_TYPE', $3),
            params.catalog_id('REACTION_SEVERITY', $4),
            params.catalog_id('CANONICAL_STATUS', 'PROVISIONAL'),
            params.catalog_id('PROVENANCE_TYPE', 'SELF_DECLARED'),
-           $5
+           core.encrypt_pii($5)
          )
-         RETURNING id, allergen_name, allergen_type_id, severity_id,
-                   canonical_status_id, notes`,
+         RETURNING id, core.decrypt_pii(allergen_name) AS allergen_name,
+                   allergen_type_id, severity_id,
+                   canonical_status_id, core.decrypt_pii(notes) AS notes`,
         [
           context.personId,
           dto.allergenName,
@@ -74,8 +77,10 @@ export class MeClinicalController {
   async listMedications(@CurrentContext() context: RequestContextData) {
     return this.txManager.runInTransaction((queryRunner) =>
       queryRunner.query(
-        `SELECT id, generic_name, brand_name, is_current,
-                canonical_status_id, confirmation_status_id, notes
+        `SELECT id, core.decrypt_pii(generic_name) AS generic_name,
+                core.decrypt_pii(brand_name) AS brand_name, is_current,
+                canonical_status_id, confirmation_status_id,
+                core.decrypt_pii(notes) AS notes
          FROM clinical.medications
          WHERE person_id = $1 AND active = TRUE
          ORDER BY created_at DESC`,
@@ -95,13 +100,14 @@ export class MeClinicalController {
            (person_id, generic_name, brand_name, is_current,
             canonical_status_id, provenance_id, notes)
          VALUES (
-           $1, $2, $3, $4,
+           $1, core.encrypt_pii($2), core.encrypt_pii($3), $4,
            params.catalog_id('CANONICAL_STATUS', 'PROVISIONAL'),
            params.catalog_id('PROVENANCE_TYPE', 'SELF_DECLARED'),
-           $5
+           core.encrypt_pii($5)
          )
-         RETURNING id, generic_name, brand_name, is_current,
-                   canonical_status_id, notes`,
+         RETURNING id, core.decrypt_pii(generic_name) AS generic_name,
+                   core.decrypt_pii(brand_name) AS brand_name, is_current,
+                   canonical_status_id, core.decrypt_pii(notes) AS notes`,
         [
           context.personId,
           dto.genericName,

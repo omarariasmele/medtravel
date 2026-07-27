@@ -16,10 +16,12 @@ import {
 
 import { apiClient } from '../../lib/api-client';
 import { useCatalog } from '../../lib/catalog-hooks';
+import { ClinicalHistorySection } from './clinical-history.section';
 
 interface EmergencyCase {
   id: string;
   caseNumber: string;
+  memberId: string;
   statusId: string;
   priorityId: string;
   emergencyTypeId?: string;
@@ -31,6 +33,11 @@ interface EmergencyCase {
   resolutionNotes?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+interface Member {
+  id: string;
+  personId: string;
 }
 
 export function CaseDetailPage() {
@@ -52,6 +59,17 @@ export function CaseDetailPage() {
 
   const statusCatalog = useCatalog('CASE_STATUS');
   const priorityCatalog = useCatalog('CASE_PRIORITY');
+
+  const memberQuery = useQuery({
+    queryKey: ['identity', 'members', caseQuery.data?.memberId],
+    queryFn: async () => {
+      const { data } = await apiClient.get<Member>(
+        `/identity/members/${caseQuery.data!.memberId}`,
+      );
+      return data;
+    },
+    enabled: !!caseQuery.data?.memberId,
+  });
 
   const updateMutation = useMutation({
     mutationFn: async (body: Partial<EmergencyCase>) => {
@@ -172,6 +190,13 @@ export function CaseDetailPage() {
           </Box>
         </CardContent>
       </Card>
+
+      {memberQuery.data?.personId && (
+        <ClinicalHistorySection
+          personId={memberQuery.data.personId}
+          caseId={c.id}
+        />
+      )}
     </>
   );
 }

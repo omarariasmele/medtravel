@@ -56,7 +56,8 @@ export async function createTestUser(): Promise<TestUserFixture> {
     ]);
 
     const person = await client.query(
-      `INSERT INTO core.persons (first_name, last_name) VALUES ('E2E', 'Test') RETURNING id`,
+      `INSERT INTO core.persons (first_name, last_name)
+       VALUES (core.encrypt_pii('E2E'), core.encrypt_pii('Test')) RETURNING id`,
     );
     const personId = person.rows[0].id;
 
@@ -142,8 +143,11 @@ export async function getPersonFirstName(personId: string): Promise<string> {
   const client = superuserClient();
   await client.connect();
   try {
+    await client.query(`SELECT set_config('app.encryption_key', $1, false)`, [
+      process.env.DB_ENCRYPTION_KEY,
+    ]);
     const result = await client.query(
-      `SELECT first_name FROM core.persons WHERE id = $1`,
+      `SELECT core.decrypt_pii(first_name) AS first_name FROM core.persons WHERE id = $1`,
       [personId],
     );
     return result.rows[0]?.first_name;

@@ -35,32 +35,52 @@ CREATE OR REPLACE FUNCTION audit.anonymize_field(
   p_row_id       UUID,
   p_method       TEXT
 ) RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = pg_catalog, audit, public AS $$
+SET search_path = pg_catalog, audit, core, public AS $$
 DECLARE
-  v_sql    TEXT;
-  v_exists BOOLEAN;
+  v_sql       TEXT;
+  v_data_type TEXT;
 BEGIN
-  SELECT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema = p_table_schema
-      AND table_name = p_table_name
-      AND column_name = p_field
-  ) INTO v_exists;
+  SELECT data_type INTO v_data_type
+  FROM information_schema.columns
+  WHERE table_schema = p_table_schema
+    AND table_name = p_table_name
+    AND column_name = p_field;
 
-  IF NOT v_exists THEN
+  IF v_data_type IS NULL THEN
     RAISE EXCEPTION 'Columna %.%.% no existe', p_table_schema, p_table_name, p_field;
   END IF;
 
+  -- Columnas `bytea` están encriptadas vía core.encrypt_pii() (ver
+  -- proposed-clinical-encryption.sql) — el valor nuevo tiene que pasar
+  -- por la misma función antes de guardarse, o decrypt_pii() fallará
+  -- en la próxima lectura al encontrar bytes que no son un blob PGP
+  -- válido. Para HASH_IRREVERSIBLE hay que desencriptar el valor
+  -- ORIGINAL primero (no se puede hashear el bytea crudo, sería solo
+  -- el ciphertext, no el dato real).
   IF p_method = 'HASH_IRREVERSIBLE' THEN
-    v_sql := format(
-      'UPDATE %I.%I SET %I = encode(digest(%I::text, ''sha256''), ''hex'') WHERE id = $1',
-      p_table_schema, p_table_name, p_field, p_field
-    );
+    IF v_data_type = 'bytea' THEN
+      v_sql := format(
+        'UPDATE %I.%I SET %I = core.encrypt_pii(encode(digest(core.decrypt_pii(%I), ''sha256''), ''hex'')) WHERE id = $1',
+        p_table_schema, p_table_name, p_field, p_field
+      );
+    ELSE
+      v_sql := format(
+        'UPDATE %I.%I SET %I = encode(digest(%I::text, ''sha256''), ''hex'') WHERE id = $1',
+        p_table_schema, p_table_name, p_field, p_field
+      );
+    END IF;
   ELSIF p_method = 'PSEUDONYMIZATION' THEN
-    v_sql := format(
-      'UPDATE %I.%I SET %I = ''ANON-'' || substr(md5(random()::text), 1, 12) WHERE id = $1',
-      p_table_schema, p_table_name, p_field
-    );
+    IF v_data_type = 'bytea' THEN
+      v_sql := format(
+        'UPDATE %I.%I SET %I = core.encrypt_pii(''ANON-'' || substr(md5(random()::text), 1, 12)) WHERE id = $1',
+        p_table_schema, p_table_name, p_field
+      );
+    ELSE
+      v_sql := format(
+        'UPDATE %I.%I SET %I = ''ANON-'' || substr(md5(random()::text), 1, 12) WHERE id = $1',
+        p_table_schema, p_table_name, p_field
+      );
+    END IF;
   ELSE
     -- REDACT, GENERALIZATION, SUPPRESSION: a nivel de UN campo, todas
     -- degradan a NULL. Generalización real (ej. fecha exacta -> año)

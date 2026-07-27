@@ -228,7 +228,9 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
         if (row.member_id && user.personId) {
           const personRows = await queryRunner.query(
-            `SELECT first_name, last_name FROM core.persons WHERE id = $1`,
+            `SELECT core.decrypt_pii(first_name) AS first_name,
+                    core.decrypt_pii(last_name) AS last_name
+             FROM core.persons WHERE id = $1`,
             [user.personId],
           );
           if (personRows[0]) {

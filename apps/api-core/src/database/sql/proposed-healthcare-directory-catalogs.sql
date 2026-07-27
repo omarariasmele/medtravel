@@ -44,7 +44,14 @@ JOIN (VALUES
   ('ORG_VERIFICATION_STATUS', 'UNVERIFIED', 'Sin verificar',         'Unverified',               1),
   ('ORG_VERIFICATION_STATUS', 'PENDING',    'Verificación pendiente','Verification pending',     2),
   ('ORG_VERIFICATION_STATUS', 'VERIFIED',   'Verificada',            'Verified',                 3),
-  ('ORG_VERIFICATION_STATUS', 'REJECTED',   'Rechazada',             'Rejected',                 4)
+  ('ORG_VERIFICATION_STATUS', 'REJECTED',   'Rechazada',             'Rejected',                 4),
+
+  -- Encontrado al armar la sección "Historia clínica" del call center
+  -- (clinical.conditions.status_id NOT NULL, mismo caso que arriba).
+  ('CONDITION_STATUS', 'ACTIVE',       'Activa',       'Active',       1),
+  ('CONDITION_STATUS', 'RESOLVED',     'Resuelta',     'Resolved',     2),
+  ('CONDITION_STATUS', 'CHRONIC',      'Crónica',      'Chronic',      3),
+  ('CONDITION_STATUS', 'IN_REMISSION', 'En remisión',  'In remission', 4)
 ) AS v(domain_code, code, es, en, ord) ON dc.code = v.domain_code
 WHERE NOT EXISTS (
   SELECT 1 FROM params.catalog_values cv

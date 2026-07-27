@@ -23,6 +23,7 @@ import { EncounterSubmissionEntity } from './entities/encounter-submission.entit
 import { RecordReviewTaskEntity } from './entities/record-review-task.entity';
 import { SubmissionVisibilityPolicyEntity } from './entities/submission-visibility-policy.entity';
 import { ClinicalResourceController } from './clinical-resource.controller';
+import { ProfessionalsRegistrationController } from './professionals-registration.controller';
 
 @Module({
   imports: [
@@ -50,7 +51,10 @@ import { ClinicalResourceController } from './clinical-resource.controller';
       SubmissionVisibilityPolicyEntity,
     ]),
   ],
-  controllers: [ClinicalResourceController],
+  controllers: [
+    ProfessionalsRegistrationController,
+    ClinicalResourceController,
+  ],
   exports: [TypeOrmModule],
 })
 export class ClinicalModule {}
