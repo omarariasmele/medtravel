@@ -322,6 +322,25 @@ algún nivel de consentimiento explícito (`core.member_data_consents`
 ya existe para otra cosa, podría ser el lugar). Pendiente de decisión
 antes de construir "Usuarios / viajeros" como pantalla real.
 
+## 14. `COUNTRY` existe como dominio pero nunca tuvo ningún `catalog_value` sembrado
+
+**Archivo:** [`proposed-country-catalog.sql`](src/database/sql/proposed-country-catalog.sql)
+
+**Encontrado:** al agregar campos de dirección real (país, provincia,
+domicilio, teléfono) a "Centros médicos" en admin-web — el usuario
+notó que un sistema global no puede quedarse con solo "ciudad" como
+dato de ubicación. `core.persons.nationality_id`/`country_residence_id`,
+`clinical.healthcare_organizations.country_id` y
+`clinical.healthcare_professionals.country_id`/`license_country_id`
+referencian todos el dominio `COUNTRY`, que existe desde `008_seeds.sql`
+pero con 0 valores — mismo patrón que gap #11/#12.
+
+**Resuelto:** se sembraron 165 países (código ISO 3166-1 alpha-2 +
+nombre es/en) — cubre Latinoamérica, los mercados de turismo médico más
+comunes y la mayoría de los países del mundo. Marcado como lista de
+referencia a validar por el equipo de producto si necesitan la lista
+oficial completa (195+ países/territorios) para uso legal/compliance.
+
 ## Consolidación formal
 
 [`010_v1.2.4_fixes.sql`](src/database/sql/010_v1.2.4_fixes.sql) junta

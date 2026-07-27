@@ -10,6 +10,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  Grid,
   MenuItem,
   Paper,
   Table,
@@ -30,15 +31,36 @@ interface HealthcareOrganization {
   name: string;
   organizationTypeId: string;
   verificationStatusId: string;
+  countryId?: string;
+  stateProvince?: string;
   city?: string;
+  address?: string;
   phone?: string;
 }
 
+interface FormState {
+  name: string;
+  organizationTypeId: string;
+  countryId: string;
+  stateProvince: string;
+  city: string;
+  address: string;
+  phone: string;
+}
+
+const EMPTY_FORM: FormState = {
+  name: '',
+  organizationTypeId: '',
+  countryId: '',
+  stateProvince: '',
+  city: '',
+  address: '',
+  phone: '',
+};
+
 export function MedicalCentersPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [name, setName] = useState('');
-  const [orgTypeId, setOrgTypeId] = useState('');
-  const [city, setCity] = useState('');
+  const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
@@ -54,6 +76,10 @@ export function MedicalCentersPage() {
 
   const typeCatalog = useCatalog('ORGANIZATION_TYPE');
   const verificationCatalog = useCatalog('ORG_VERIFICATION_STATUS');
+  const countryCatalog = useCatalog('COUNTRY');
+
+  const setField = (field: keyof FormState) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setForm((f) => ({ ...f, [field]: e.target.value }));
 
   const createMutation = useMutation({
     mutationFn: async () => {
@@ -61,9 +87,13 @@ export function MedicalCentersPage() {
         (v) => v.code === 'UNVERIFIED',
       );
       const { data } = await apiClient.post('/clinical/healthcare-organizations', {
-        name,
-        organizationTypeId: orgTypeId,
-        city: city || undefined,
+        name: form.name,
+        organizationTypeId: form.organizationTypeId,
+        countryId: form.countryId || undefined,
+        stateProvince: form.stateProvince || undefined,
+        city: form.city || undefined,
+        address: form.address || undefined,
+        phone: form.phone || undefined,
         verificationStatusId: unverified?.id,
       });
       return data;
@@ -73,13 +103,18 @@ export function MedicalCentersPage() {
         queryKey: ['clinical', 'healthcare-organizations'],
       });
       setDialogOpen(false);
-      setName('');
-      setOrgTypeId('');
-      setCity('');
+      setForm(EMPTY_FORM);
       setError(null);
     },
     onError: () => setError('No se pudo crear el centro médico.'),
   });
+
+  const locationLabel = (o: HealthcareOrganization) => {
+    const parts = [o.city, o.stateProvince, labelFor(countryCatalog.data, o.countryId)].filter(
+      (p) => p && p !== '—',
+    );
+    return parts.length > 0 ? parts.join(', ') : '—';
+  };
 
   return (
     <>
@@ -105,7 +140,9 @@ export function MedicalCentersPage() {
               <TableRow>
                 <TableCell>Nombre</TableCell>
                 <TableCell>Tipo</TableCell>
-                <TableCell>Ciudad</TableCell>
+                <TableCell>Ubicación</TableCell>
+                <TableCell>Dirección</TableCell>
+                <TableCell>Teléfono</TableCell>
                 <TableCell>Verificación</TableCell>
               </TableRow>
             </TableHead>
@@ -114,7 +151,9 @@ export function MedicalCentersPage() {
                 <TableRow key={o.id} hover>
                   <TableCell>{o.name}</TableCell>
                   <TableCell>{labelFor(typeCatalog.data, o.organizationTypeId)}</TableCell>
-                  <TableCell>{o.city ?? '—'}</TableCell>
+                  <TableCell>{locationLabel(o)}</TableCell>
+                  <TableCell>{o.address ?? '—'}</TableCell>
+                  <TableCell>{o.phone ?? '—'}</TableCell>
                   <TableCell>
                     <Chip
                       size="small"
@@ -136,40 +175,91 @@ export function MedicalCentersPage() {
               {error}
             </Alert>
           )}
-          <TextField
-            label="Nombre"
-            fullWidth
-            margin="normal"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-          <TextField
-            select
-            label="Tipo"
-            fullWidth
-            margin="normal"
-            value={orgTypeId}
-            onChange={(e) => setOrgTypeId(e.target.value)}
-          >
-            {(typeCatalog.data ?? []).map((opt) => (
-              <MenuItem key={opt.id} value={opt.id}>
-                {opt.labelEs}
-              </MenuItem>
-            ))}
-          </TextField>
-          <TextField
-            label="Ciudad"
-            fullWidth
-            margin="normal"
-            value={city}
-            onChange={(e) => setCity(e.target.value)}
-          />
+          <Grid container spacing={1}>
+            <Grid size={{ xs: 12 }}>
+              <TextField
+                label="Nombre"
+                fullWidth
+                margin="normal"
+                value={form.name}
+                onChange={setField('name')}
+              />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField
+                select
+                label="Tipo"
+                fullWidth
+                margin="normal"
+                value={form.organizationTypeId}
+                onChange={setField('organizationTypeId')}
+              >
+                {(typeCatalog.data ?? []).map((opt) => (
+                  <MenuItem key={opt.id} value={opt.id}>
+                    {opt.labelEs}
+                  </MenuItem>
+                ))}
+              </TextField>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField
+                select
+                label="País"
+                fullWidth
+                margin="normal"
+                value={form.countryId}
+                onChange={setField('countryId')}
+              >
+                {(countryCatalog.data ?? []).map((opt) => (
+                  <MenuItem key={opt.id} value={opt.id}>
+                    {opt.labelEs}
+                  </MenuItem>
+                ))}
+              </TextField>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField
+                label="Provincia / Estado"
+                fullWidth
+                margin="normal"
+                value={form.stateProvince}
+                onChange={setField('stateProvince')}
+              />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField
+                label="Ciudad"
+                fullWidth
+                margin="normal"
+                value={form.city}
+                onChange={setField('city')}
+              />
+            </Grid>
+            <Grid size={{ xs: 12 }}>
+              <TextField
+                label="Dirección (calle y número)"
+                fullWidth
+                margin="normal"
+                value={form.address}
+                onChange={setField('address')}
+              />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField
+                label="Teléfono"
+                fullWidth
+                margin="normal"
+                value={form.phone}
+                onChange={setField('phone')}
+              />
+            </Grid>
+          </Grid>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDialogOpen(false)}>Cancelar</Button>
           <Button
             variant="contained"
-            disabled={!name || !orgTypeId || createMutation.isPending}
+            disabled={!form.name || !form.organizationTypeId || createMutation.isPending}
             onClick={() => createMutation.mutate()}
           >
             Crear
