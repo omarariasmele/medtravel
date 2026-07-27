@@ -4,8 +4,11 @@ import { ProtectedRoute } from './auth/protected-route';
 import { AppLayout } from './layout/app-layout';
 import { LoginPage } from './pages/login.page';
 import { DashboardPage } from './pages/dashboard.page';
+import { TravelersListPage } from './pages/travelers/travelers-list.page';
 import { CasesListPage } from './pages/cases/cases-list.page';
 import { CaseDetailPage } from './pages/cases/case-detail.page';
+import { AuditLogPage } from './pages/audit/audit-log.page';
+import { MedicalCentersPage } from './pages/medical-centers/medical-centers.page';
 import { PlaceholderPage } from './pages/placeholder.page';
 
 function App() {
@@ -16,10 +19,7 @@ function App() {
       <Route element={<ProtectedRoute />}>
         <Route element={<AppLayout />}>
           <Route path="/" element={<DashboardPage />} />
-          <Route
-            path="/travelers"
-            element={<PlaceholderPage title="Usuarios / viajeros" />}
-          />
+          <Route path="/travelers" element={<TravelersListPage />} />
           <Route
             path="/coverages"
             element={<PlaceholderPage title="Coberturas" />}
@@ -27,18 +27,12 @@ function App() {
           <Route path="/trips" element={<PlaceholderPage title="Viajes" />} />
           <Route path="/cases" element={<CasesListPage />} />
           <Route path="/cases/:id" element={<CaseDetailPage />} />
-          <Route
-            path="/medical-centers"
-            element={<PlaceholderPage title="Centros médicos" />}
-          />
+          <Route path="/medical-centers" element={<MedicalCentersPage />} />
           <Route
             path="/professionals"
             element={<PlaceholderPage title="Profesionales" />}
           />
-          <Route
-            path="/audit"
-            element={<PlaceholderPage title="Auditoría de accesos" />}
-          />
+          <Route path="/audit" element={<AuditLogPage />} />
         </Route>
       </Route>
 

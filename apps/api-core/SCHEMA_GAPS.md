@@ -282,6 +282,46 @@ punta.
 
 ---
 
+## 12. `ORGANIZATION_TYPE` y `MEDICAL_SPECIALTY` no existen ni como `domain_catalogs`; `DOCUMENT_TYPE` existe pero sin valores
+
+**Archivo:** [`proposed-healthcare-directory-catalogs.sql`](src/database/sql/proposed-healthcare-directory-catalogs.sql)
+
+**Encontrado:** al planear la pantalla "Centros médicos"/"Profesionales"
+de admin-web. `clinical.healthcare_organizations.organization_type_id`
+y `clinical.healthcare_professionals.specialty_id` son `NOT NULL`/
+`nullable` sin ningún dominio al que apuntar — a diferencia del gap #11
+(dominios que existen pero sin `catalog_values`), acá **el dominio en sí
+no existe**. `DOCUMENT_TYPE` sí existe (la entidad lo referencia con el
+nombre de comentario `DOC_TYPE`, pero el código real en
+`params.domain_catalogs` es `DOCUMENT_TYPE`) — solo le faltaban valores,
+mismo caso que gap #11.
+
+**Resuelto** (confirmado con el usuario: "Sí, proponé valores
+razonables"): se agregaron los dos dominios nuevos y se sembraron los
+tres con valores típicos del rubro — quedan marcados como propuesta de
+producto a revisar, no como decisión técnica cerrada.
+
+## 13. `core.persons` no es accesible a operadores ni siquiera para mostrar el nombre de un viajero — es una decisión de diseño explícita, no un bug
+
+**Encontrado:** al querer mostrar nombres reales en "Usuarios /
+viajeros" de admin-web. `persons_self_access` (003_core_identity.sql,
+B3) es explícita: *"El tenant NO accede a `core.persons` directamente
+— el acceso del tenant es solo a través de `core.members`"*. Un
+operador puede listar `core.members` de su tenant (política
+`members_tenant_or_self`), pero no puede resolver el nombre del
+titular: eso requeriría una política nueva tipo `persons_tenant_member`
+(mismo patrón que gap #8) que hoy no existe.
+
+**No lo toqué** porque es exactamente el tipo de cambio que el brief
+pide no hacer en silencio ("nunca modificar la arquitectura de
+seguridad ya aprobada sin documentarlo como nueva versión de schema") y
+porque además es una decisión de privacidad real, no solo técnica: si
+el modelo del producto es que el staff del tenant puede ver el nombre
+de sus propios viajeros (razonable, es su cliente) o si eso requiere
+algún nivel de consentimiento explícito (`core.member_data_consents`
+ya existe para otra cosa, podría ser el lugar). Pendiente de decisión
+antes de construir "Usuarios / viajeros" como pantalla real.
+
 ## Consolidación formal
 
 [`010_v1.2.4_fixes.sql`](src/database/sql/010_v1.2.4_fixes.sql) junta

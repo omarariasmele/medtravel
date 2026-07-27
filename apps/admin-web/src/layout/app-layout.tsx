@@ -46,7 +46,7 @@ const NAV_ITEMS = [
 ];
 
 export function AppLayout() {
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const location = useLocation();
   const { logout } = useAuth();
 
@@ -76,14 +76,30 @@ export function AppLayout() {
     <Box sx={{ display: 'flex' }}>
       <AppBar
         position="fixed"
-        sx={{ zIndex: (theme) => theme.zIndex.drawer + 1 }}
+        sx={{
+          zIndex: (theme) => theme.zIndex.drawer + 1,
+          transition: (theme) =>
+            theme.transitions.create(['width', 'margin'], {
+              easing: theme.transitions.easing.sharp,
+              duration: theme.transitions.duration.leavingScreen,
+            }),
+          ...(open && {
+            width: { sm: `calc(100% - ${DRAWER_WIDTH}px)` },
+            marginLeft: { sm: `${DRAWER_WIDTH}px` },
+            transition: (theme) =>
+              theme.transitions.create(['width', 'margin'], {
+                easing: theme.transitions.easing.easeOut,
+                duration: theme.transitions.duration.enteringScreen,
+              }),
+          }),
+        }}
       >
         <Toolbar>
           <IconButton
             color="inherit"
             edge="start"
-            onClick={() => setMobileOpen(!mobileOpen)}
-            sx={{ mr: 2, display: { sm: 'none' } }}
+            onClick={() => setOpen(!open)}
+            sx={{ mr: 2 }}
           >
             <MenuIcon />
           </IconButton>
@@ -94,25 +110,19 @@ export function AppLayout() {
       </AppBar>
 
       <Drawer
-        variant="temporary"
-        open={mobileOpen}
-        onClose={() => setMobileOpen(false)}
-        ModalProps={{ keepMounted: true }}
+        variant="persistent"
+        anchor="left"
+        open={open}
+        onClose={() => setOpen(false)}
         sx={{
-          display: { xs: 'block', sm: 'none' },
-          '& .MuiDrawer-paper': { width: DRAWER_WIDTH },
+          width: open ? DRAWER_WIDTH : 0,
+          flexShrink: 0,
+          transition: (theme) => theme.transitions.create('width'),
+          '& .MuiDrawer-paper': {
+            width: DRAWER_WIDTH,
+            boxSizing: 'border-box',
+          },
         }}
-      >
-        <Toolbar />
-        {drawerContent}
-      </Drawer>
-      <Drawer
-        variant="permanent"
-        sx={{
-          display: { xs: 'none', sm: 'block' },
-          '& .MuiDrawer-paper': { width: DRAWER_WIDTH, boxSizing: 'border-box' },
-        }}
-        open
       >
         <Toolbar />
         {drawerContent}
@@ -120,7 +130,12 @@ export function AppLayout() {
 
       <Box
         component="main"
-        sx={{ flexGrow: 1, p: 3, width: { sm: `calc(100% - ${DRAWER_WIDTH}px)` } }}
+        sx={{
+          flexGrow: 1,
+          p: 3,
+          minWidth: 0,
+          transition: (theme) => theme.transitions.create('margin'),
+        }}
       >
         <Toolbar />
         <Outlet />

@@ -11,6 +11,7 @@ import { AccessNotificationEntity } from './entities/access-notification.entity'
 import { BreakGlassService } from './break-glass.service';
 import { TenantBreakGlassService } from './tenant-break-glass.service';
 import { AuditResourceController } from './audit-resource.controller';
+import { AuditEventsController } from './audit-events.controller';
 
 @Module({
   imports: [
@@ -23,7 +24,7 @@ import { AuditResourceController } from './audit-resource.controller';
       AccessNotificationEntity,
     ]),
   ],
-  controllers: [AuditResourceController],
+  controllers: [AuditEventsController, AuditResourceController],
   providers: [BreakGlassService, TenantBreakGlassService],
   exports: [TypeOrmModule, BreakGlassService, TenantBreakGlassService],
 })
