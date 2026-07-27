@@ -5,6 +5,8 @@ import { AppLayout } from './layout/app-layout';
 import { LoginPage } from './pages/login.page';
 import { DashboardPage } from './pages/dashboard.page';
 import { TravelersListPage } from './pages/travelers/travelers-list.page';
+import { CoveragesListPage } from './pages/coverages/coverages-list.page';
+import { TripsListPage } from './pages/trips/trips-list.page';
 import { CasesListPage } from './pages/cases/cases-list.page';
 import { CaseDetailPage } from './pages/cases/case-detail.page';
 import { AuditLogPage } from './pages/audit/audit-log.page';
@@ -20,11 +22,8 @@ function App() {
         <Route element={<AppLayout />}>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/travelers" element={<TravelersListPage />} />
-          <Route
-            path="/coverages"
-            element={<PlaceholderPage title="Coberturas" />}
-          />
-          <Route path="/trips" element={<PlaceholderPage title="Viajes" />} />
+          <Route path="/coverages" element={<CoveragesListPage />} />
+          <Route path="/trips" element={<TripsListPage />} />
           <Route path="/cases" element={<CasesListPage />} />
           <Route path="/cases/:id" element={<CaseDetailPage />} />
           <Route path="/medical-centers" element={<MedicalCentersPage />} />

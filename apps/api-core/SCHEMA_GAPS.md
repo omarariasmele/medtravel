@@ -341,6 +341,44 @@ comunes y la mayoría de los países del mundo. Marcado como lista de
 referencia a validar por el equipo de producto si necesitan la lista
 oficial completa (195+ países/territorios) para uso legal/compliance.
 
+## 15. `core.member_data_consents` tenía RLS habilitada sin ninguna política — bloqueaba el sistema de consentimiento entero, no solo un caso puntual
+
+**Archivo:** [`proposed-member-data-consents-rls.sql`](src/database/sql/proposed-member-data-consents-rls.sql)
+
+**Distinto a los gaps anteriores — esto es un bug real, no un catálogo
+vacío.** `003_core_identity.sql` hace `ALTER TABLE core.member_data_consents
+ENABLE ROW LEVEL SECURITY` pero nunca define ningún `CREATE POLICY` para
+esa tabla. En Postgres, RLS habilitada sin ninguna política = denegar
+TODO acceso a cualquier rol sin bypass — ni siquiera el propio titular
+podía leer o dar de alta su propio consentimiento vía la API genérica
+(`/identity/member-data-consents`, ya expuesta en `IDENTITY_REGISTRY`).
+
+**Impacto concreto verificado:** `hc_select` (004_coverage.sql) hace un
+`JOIN` contra `member_data_consents` para decidir si el tenant puede ver
+la cobertura de un member con consentimiento otorgado — como ese JOIN
+corre con los privilegios normales de `app_runtime` (no es
+`SECURITY DEFINER`), la falta de política hacía que el JOIN devolviera
+siempre vacío, **aunque el consentimiento existiera y estuviera
+correctamente otorgado**. Lo encontré armando datos de prueba
+para la pantalla "Coberturas" de admin-web: sembré member + coverage +
+consentimiento a mano, y `GET /coverage/health-coverages` devolvía `[]`
+de todos modos.
+
+`clinical.has_clinical_access()` (000_extensions.sql) NO se ve afectada
+porque es `SECURITY DEFINER` — corre como el owner de la función,
+bypasseando RLS para su propio chequeo interno de consentimiento
+clínico. El bug es específico de cualquier acceso que consulte la tabla
+directamente bajo RLS normal, que hoy es solo `hc_select`.
+
+**Resuelto:** se agregaron 3 políticas (`member_data_consents_select/
+_insert/_update`), mismo patrón que `hc_select/hc_insert/hc_update`: el
+tenant puede LEER el estado del consentimiento de sus members (para
+decidir acceso), pero solo el propio titular puede otorgar/actualizar su
+consentimiento — el tenant nunca puede consentir en nombre del viajero.
+Verificado: `GET /coverage/health-coverages` ahora devuelve la cobertura
+sembrada, y el e2e suite completo (22/22) sigue pasando sin
+regresiones.
+
 ## Consolidación formal
 
 [`010_v1.2.4_fixes.sql`](src/database/sql/010_v1.2.4_fixes.sql) junta
