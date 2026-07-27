@@ -192,9 +192,23 @@ export class AuthService {
 
     await this.resetFailedAttempts(credentials.user_id);
 
+    // Si además es operador, el JWT lleva su tenantId — sin esto,
+    // ninguna política *_tenant_access (gap #8) se activa nunca para su
+    // sesión, vería 0 filas en todo /operations aunque tenga acceso real.
+    const operatorContext = await this.txManager.runInTransaction<
+      { tenant_id: string | null } | undefined
+    >(async (queryRunner) => {
+      const rows = await queryRunner.query(
+        `SELECT tenant_id FROM operations.get_operator_login_context($1)`,
+        [credentials.user_id],
+      );
+      return rows[0];
+    });
+
     return this.issueTokenPair({
       userId: credentials.user_id,
       personId: credentials.person_id,
+      tenantId: operatorContext?.tenant_id ?? undefined,
     });
   }
 
@@ -309,7 +323,11 @@ export class AuthService {
     }
 
     return this.issueTokenPair(
-      { userId: payload.sub, personId: payload.personId },
+      {
+        userId: payload.sub,
+        personId: payload.personId,
+        tenantId: payload.tenantId,
+      },
       session.id,
     );
   }
@@ -500,7 +518,7 @@ export class AuthService {
    * app.current_user_id = user_id de la fila — por eso el contextOverride.
    */
   private async issueTokenPair(
-    claims: { userId: string; personId?: string },
+    claims: { userId: string; personId?: string; tenantId?: string },
     existingSessionId?: string,
   ): Promise<TokenPairDto> {
     const sessionId = existingSessionId ?? randomUUID();
@@ -508,6 +526,7 @@ export class AuthService {
     const payload: JwtPayload = {
       sub: claims.userId,
       personId: claims.personId,
+      tenantId: claims.tenantId,
       sessionId,
     };
 

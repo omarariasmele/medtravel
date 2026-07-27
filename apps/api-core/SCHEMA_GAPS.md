@@ -272,6 +272,14 @@ exactos los debería confirmar el equipo de diseño/producto).
 `POST /me/trips` fallaba por `NOT NULL` en `status_id` sin ningún
 `TRIP_STATUS` sembrado.
 
+**Actualización (admin-web):** al crear el primer operador real para
+probar el panel, `OPERATOR_TYPE` y `OPERATOR_STATUS` también estaban
+vacíos (`operations.operators` los tiene `NOT NULL`). Se agregaron al
+mismo patch (4 valores para `OPERATOR_TYPE`: AGENT/SUPERVISOR/MEDICAL/
+ADMIN; 3 para `OPERATOR_STATUS`: ACTIVE/INACTIVE/ON_LEAVE), ya aplicados
+contra el servidor real y verificados creando un operador de punta a
+punta.
+
 ---
 
 ## Consolidación formal

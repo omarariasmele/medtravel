@@ -56,7 +56,19 @@ JOIN (VALUES
   ('ENROLLMENT_STATUS', 'ACTIVE',    'Activo',    'Active',    1),
   ('ENROLLMENT_STATUS', 'PENDING',   'Pendiente', 'Pending',   2),
   ('ENROLLMENT_STATUS', 'EXPIRED',   'Vencido',   'Expired',   3),
-  ('ENROLLMENT_STATUS', 'CANCELLED', 'Cancelado', 'Cancelled', 4)
+  ('ENROLLMENT_STATUS', 'CANCELLED', 'Cancelado', 'Cancelled', 4),
+
+  -- Encontrados vacíos al crear el primer operador real para admin-web:
+  -- operations.operators tiene operator_type_id/status_id NOT NULL sin
+  -- ningún valor sembrado en ninguno de los dos dominios.
+  ('OPERATOR_TYPE', 'AGENT',      'Agente',            'Agent',      1),
+  ('OPERATOR_TYPE', 'SUPERVISOR', 'Supervisor',        'Supervisor', 2),
+  ('OPERATOR_TYPE', 'MEDICAL',    'Coordinador médico','Medical coordinator', 3),
+  ('OPERATOR_TYPE', 'ADMIN',      'Administrador',     'Admin',      4),
+
+  ('OPERATOR_STATUS', 'ACTIVE',   'Activo',    'Active',   1),
+  ('OPERATOR_STATUS', 'INACTIVE', 'Inactivo',  'Inactive', 2),
+  ('OPERATOR_STATUS', 'ON_LEAVE', 'Licencia',  'On leave', 3)
 ) AS v(domain_code, code, es, en, ord) ON dc.code = v.domain_code
 WHERE NOT EXISTS (
   SELECT 1 FROM params.catalog_values cv
