@@ -13,6 +13,7 @@ import { RequestContextData } from '@common/request-context/request-context.type
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { LoginDto } from './dto/login.dto';
+import { RegisterDto } from './dto/register.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { TokenPairDto } from './dto/token-pair.dto';
 import { MfaRequiredResponseDto } from './dto/mfa-required-response.dto';
@@ -25,6 +26,16 @@ import { ConfirmPasswordResetDto } from './dto/confirm-password-reset.dto';
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
+
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @Post('register')
+  @ApiOperation({
+    summary: 'Alta propia de un viajero (core.persons + core.users)',
+  })
+  @ApiOkResponse({ type: TokenPairDto })
+  register(@Body() dto: RegisterDto): Promise<TokenPairDto> {
+    return this.authService.register(dto);
+  }
 
   /**
    * Límite propio, más estricto que el global (ThrottlerModule.forRoot en

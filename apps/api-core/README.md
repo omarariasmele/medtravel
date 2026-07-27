@@ -58,6 +58,41 @@ para RLS (tenant → person → member → user, member → case, case → chat)
 el resto de FKs quedan como columna UUID simple con un comentario de a
 qué tabla referencian.
 
+## API para el viajero (`/me/*`)
+
+Paso 1 del brief operativo ("ver pantallas reales cuanto antes"):
+`src/modules/me/` — siempre scoped a "lo mío" vía el `personId` del JWT,
+nunca recibe un `:id` de otra persona en la URL. Distinto del CRUD
+genérico de abajo (ese sirve al lado operador/admin, donde sí hace falta
+apuntar a un recurso ajeno con permiso).
+
+- `POST /auth/register` — alta propia (`core.persons` + `core.users`),
+  vía `core.register_person_and_user()` (`SECURITY DEFINER` — ninguna de
+  las dos tablas tiene una política RLS que permita este INSERT pre-auth,
+  mismo motivo que el login necesita `get_login_credentials`). No crea
+  `core.members`: pertenecer a un tenant es una relación aparte.
+- `GET/PUT /me/profile` — `core.persons` propio.
+- `GET /me/coverages` — junta `health_coverages` +
+  `travel_assistance_certificates` del propio `person_id`.
+- `GET/POST /me/trips` — `operations.trips`. `POST` sin `memberId` usa
+  el único member del viajero; da 404 claro si todavía no tiene ninguno.
+- `GET/POST /me/clinical/allergies` y `/medications` — `provenance_id`
+  siempre `SELF_DECLARED` y `canonical_status_id` siempre `PROVISIONAL`,
+  sin que el cliente los pueda elegir (protege la máquina de estados
+  MTA-511 — solo un flujo de profesional certificado puede mover un dato
+  a `IN_CANONICAL`/`PROFESSIONALLY_CERTIFIED`).
+- `POST /me/emergency/qr` — token QR dinámico
+  (`TOKEN_DYNAMIC_QR_TTL_SECONDS`, 60s por default, nunca hardcodeado).
+  `access_url` usa `CORS_ORIGIN` como placeholder — actualizar cuando
+  exista `apps/share-web` (el portal que resuelve estos tokens sin
+  exponer la API interna).
+
+Verificado de punta a punta contra el servidor real: registro → login →
+perfil → cobertura vacía → intento de viaje sin member (404 correcto) →
+alergia/medicación (no dependen de member) → viaje/QR con member real.
+Ver gaps #10 y #11 en `SCHEMA_GAPS.md` (función de registro + catálogos
+que faltaban para que esto funcionara).
+
 ## CRUD genérico
 
 Además de `params/catalogs` (lectura de catálogos) y `auth` (login/refresh
@@ -178,8 +213,14 @@ migración automática porque no son parte del baseline aprobado.
 ```bash
 npm run start:dev
 # GET  http://localhost:3000/health
-# POST http://localhost:3000/auth/login | /refresh | /logout
+# POST http://localhost:3000/auth/register | /login | /refresh | /logout
 # POST http://localhost:3000/auth/mfa/enroll | /verify | /disable
+# POST http://localhost:3000/auth/password-reset/request | /confirm
+# GET/PUT  http://localhost:3000/me/profile
+# GET      http://localhost:3000/me/coverages
+# GET/POST http://localhost:3000/me/trips
+# GET/POST http://localhost:3000/me/clinical/allergies | /medications
+# POST     http://localhost:3000/me/emergency/qr
 # GET  http://localhost:3000/params/catalogs/:domainCode
 # GET/POST/PATCH/DELETE http://localhost:3000/<modulo>/:resource[/:id]
 # Swagger: http://localhost:3000/docs

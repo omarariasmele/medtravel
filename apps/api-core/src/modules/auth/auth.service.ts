@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   UnauthorizedException,
@@ -9,12 +10,14 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { createHash, createHmac, randomUUID } from 'crypto';
 import { generateSecret, generateURI, verify } from 'otplib';
+import { QueryFailedError } from 'typeorm';
 
 import { TenantTransactionManager } from '@common/database/tenant-transaction.manager';
 import { getOperationalLimit } from '@common/database/operational-limits.helper';
 import { MailService } from '@modules/mail/mail.service';
 
 import { LoginDto } from './dto/login.dto';
+import { RegisterDto } from './dto/register.dto';
 import { TokenPairDto } from './dto/token-pair.dto';
 import { MfaRequiredResponseDto } from './dto/mfa-required-response.dto';
 import { MfaEnrollResponseDto } from './dto/mfa-enroll-response.dto';
@@ -63,6 +66,50 @@ export class AuthService {
 
   private hashToken(token: string): string {
     return createHash('sha256').update(token).digest('hex');
+  }
+
+  /**
+   * Alta propia (self-service) — core.persons/core.users no tienen
+   * ninguna política RLS que permita este INSERT pre-auth (mismo motivo
+   * que login() necesita core.get_login_credentials), así que pasa por
+   * core.register_person_and_user (SECURITY DEFINER). No crea
+   * core.members: pertenecer a un tenant es una relación aparte
+   * (enrollment/importación), no parte del alta de la persona.
+   */
+  async register(dto: RegisterDto): Promise<TokenPairDto> {
+    const emailBlindIndex = this.computeBlindIndex(dto.email);
+    const passwordHash = await bcrypt.hash(dto.password, 10);
+
+    let result: { person_id: string; user_id: string } | undefined;
+    try {
+      result = await this.txManager.runInTransaction(async (queryRunner) => {
+        const rows = await queryRunner.query(
+          `SELECT * FROM core.register_person_and_user($1, $2, $3, $4, $5, $6)`,
+          [
+            dto.firstName,
+            dto.lastName,
+            dto.email,
+            emailBlindIndex,
+            passwordHash,
+            dto.preferredLang ?? 'es',
+          ],
+        );
+        return rows[0];
+      });
+    } catch (error) {
+      if (
+        error instanceof QueryFailedError &&
+        (error as QueryFailedError & { code?: string }).code === '23505'
+      ) {
+        throw new ConflictException('Ya existe una cuenta con ese email');
+      }
+      throw error;
+    }
+
+    return this.issueTokenPair({
+      userId: result!.user_id,
+      personId: result!.person_id,
+    });
   }
 
   async login(dto: LoginDto): Promise<TokenPairDto | MfaRequiredResponseDto> {

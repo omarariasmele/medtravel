@@ -19,6 +19,7 @@ import { OperationsModule } from '@modules/operations/operations.module';
 import { AuthModule } from '@modules/auth/auth.module';
 import { JobsModule } from '@modules/jobs/jobs.module';
 import { EventsModule } from '@modules/events/events.module';
+import { MeModule } from '@modules/me/me.module';
 
 import { AppController } from './app.controller';
 
@@ -34,6 +35,7 @@ import { AppController } from './app.controller';
     AuthModule,
     JobsModule,
     EventsModule,
+    MeModule,
     ParamsModule,
     AuditModule,
     IdentityModule,

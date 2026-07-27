@@ -232,6 +232,46 @@ primer intento de crear una `health_coverage` para el propio member daba
 (`new row violates row-level security policy`) sino de permisos
 (`permiso denegado a la tabla health_coverages`).
 
+## 10. `core.persons`/`core.users` no tienen ningún camino de alta propia (registro)
+
+**Archivo:** [`proposed-registration.sql`](src/database/sql/proposed-registration.sql)
+
+Mismo tipo de gap que el #2 (login): ambas tablas tienen RLS forzada sin
+ninguna política que permita el INSERT pre-auth —
+`persons_self_access` exige `id = current_person_id`, que todavía no
+existe en el momento del alta; `core.users` directamente no tiene
+ninguna política (ni de SELECT ni de INSERT). Sin un camino controlado,
+**no hay forma de que un viajero se registre solo** — necesario para el
+Paso 1 del brief operativo (`POST /auth/register`). Se agregó
+`core.register_person_and_user()` (`SECURITY DEFINER`, mismo patrón que
+`core.get_login_credentials`): crea `persons` + `users` +
+`authentication_credentials` atómicamente, sin crear ningún
+`core.members` — pertenecer a un tenant es una relación aparte
+(enrollment/importación), no parte del alta de la persona.
+
+**Encontrado:** al implementar la API `/me/*` (Paso 1 del brief).
+
+## 11. La mayoría de los `domain_catalogs` no tienen ningún `catalog_value` sembrado
+
+**Archivo:** [`proposed-mvp-catalog-values.sql`](src/database/sql/proposed-mvp-catalog-values.sql)
+
+`008_seeds.sql` crea la taxonomía completa (~100 `domain_catalogs`) pero
+solo siembra `catalog_values` reales para un subconjunto — el resto son
+"slots" vacíos a propósito (parametrización real, no hardcodeada en el
+seed). Esto **no es un bug**, pero bloquea funcionalidad real del MVP:
+sin ningún valor en `TRIP_STATUS`, `TOKEN_STATUS`, `HEALTH_COVERAGE_TYPE`,
+`COVERAGE_STATUS`, `ALLERGEN_TYPE`, `REACTION_SEVERITY`,
+`PROVENANCE_TYPE`, `ASSISTANCE_PLAN_TYPE` o `ENROLLMENT_STATUS`, ni
+siquiera se puede crear un viaje, un token de emergencia o una alergia
+(columnas `NOT NULL` sin ningún valor válido al que apuntar). Se
+sembraron valores razonables para esos 9 dominios — quedan como
+propuesta de producto, no como decisión técnica cerrada (los códigos
+exactos los debería confirmar el equipo de diseño/producto).
+
+**Encontrado:** al implementar la API `/me/*` — el primer intento de
+`POST /me/trips` fallaba por `NOT NULL` en `status_id` sin ningún
+`TRIP_STATUS` sembrado.
+
 ---
 
 ## Consolidación formal
