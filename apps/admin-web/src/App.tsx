@@ -11,7 +11,7 @@ import { CasesListPage } from './pages/cases/cases-list.page';
 import { CaseDetailPage } from './pages/cases/case-detail.page';
 import { AuditLogPage } from './pages/audit/audit-log.page';
 import { MedicalCentersPage } from './pages/medical-centers/medical-centers.page';
-import { PlaceholderPage } from './pages/placeholder.page';
+import { ProfessionalsPage } from './pages/professionals/professionals.page';
 
 function App() {
   return (
@@ -27,10 +27,7 @@ function App() {
           <Route path="/cases" element={<CasesListPage />} />
           <Route path="/cases/:id" element={<CaseDetailPage />} />
           <Route path="/medical-centers" element={<MedicalCentersPage />} />
-          <Route
-            path="/professionals"
-            element={<PlaceholderPage title="Profesionales" />}
-          />
+          <Route path="/professionals" element={<ProfessionalsPage />} />
           <Route path="/audit" element={<AuditLogPage />} />
         </Route>
       </Route>
