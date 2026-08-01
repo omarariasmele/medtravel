@@ -18,8 +18,13 @@ async function bootstrap() {
 
   app.use(helmet());
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+  const extraOrigins =
+    config
+      .get<string>('CORS_EXTRA_ORIGINS')
+      ?.split(',')
+      .map((o) => o.trim()) ?? [];
   app.enableCors({
-    origin: config.get<string>('CORS_ORIGIN'),
+    origin: [config.get<string>('CORS_ORIGIN')!, ...extraOrigins],
     credentials: true,
   });
 
