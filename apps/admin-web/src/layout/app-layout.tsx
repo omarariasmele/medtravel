@@ -31,6 +31,8 @@ import WarningIcon from '@mui/icons-material/Warning';
 import AssignmentIcon from '@mui/icons-material/Assignment';
 import CardMembershipIcon from '@mui/icons-material/CardMembership';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
+import PersonOffIcon from '@mui/icons-material/PersonOff';
+import LocalPharmacyIcon from '@mui/icons-material/LocalPharmacy';
 
 import { useAuth } from '../auth/auth-context';
 import logoHorizontal from '../assets/brand/logo-horizontal.png';
@@ -145,6 +147,30 @@ export function AppLayout() {
           {claims?.canManageConfig && (
             <ListItemButton
               component={RouterLink}
+              to="/travelers-without-coverage"
+              selected={location.pathname === '/travelers-without-coverage'}
+            >
+              <ListItemIcon>
+                <PersonOffIcon />
+              </ListItemIcon>
+              <ListItemText primary="Usuarios sin cobertura" />
+            </ListItemButton>
+          )}
+          {claims?.canManageConfig && (
+            <ListItemButton
+              component={RouterLink}
+              to="/healthcare-plans"
+              selected={location.pathname === '/healthcare-plans'}
+            >
+              <ListItemIcon>
+                <LocalPharmacyIcon />
+              </ListItemIcon>
+              <ListItemText primary="Prestadores y planes de salud" />
+            </ListItemButton>
+          )}
+          {claims?.canManageConfig && (
+            <ListItemButton
+              component={RouterLink}
               to="/test-consents"
               selected={location.pathname === '/test-consents'}
             >
@@ -189,7 +215,7 @@ export function AppLayout() {
           }),
         }}
       >
-        <Toolbar>
+        <Toolbar sx={{ display: 'flex', justifyContent: 'space-between' }}>
           <IconButton
             color="inherit"
             edge="start"
@@ -197,6 +223,9 @@ export function AppLayout() {
           >
             <MenuIcon />
           </IconButton>
+          {claims?.email && (
+            <Box sx={{ fontSize: 14, opacity: 0.9 }}>{claims.email}</Box>
+          )}
         </Toolbar>
       </AppBar>
 

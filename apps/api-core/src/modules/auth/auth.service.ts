@@ -109,6 +109,7 @@ export class AuthService {
     return this.issueTokenPair({
       userId: result!.user_id,
       personId: result!.person_id,
+      email: dto.email,
     });
   }
 
@@ -221,6 +222,7 @@ export class AuthService {
       canManageOperators: operatorContext?.can_manage_operators,
       canCloseCases: operatorContext?.can_close_cases,
       canAccessMedical: operatorContext?.can_access_medical,
+      email: dto.email,
     });
   }
 
@@ -343,6 +345,7 @@ export class AuthService {
         canManageOperators: payload.canManageOperators,
         canCloseCases: payload.canCloseCases,
         canAccessMedical: payload.canAccessMedical,
+        email: payload.email,
       },
       session.id,
     );
@@ -545,6 +548,7 @@ export class AuthService {
       canManageOperators?: boolean;
       canCloseCases?: boolean;
       canAccessMedical?: boolean;
+      email?: string;
     },
     existingSessionId?: string,
   ): Promise<TokenPairDto> {
@@ -558,6 +562,7 @@ export class AuthService {
       canManageOperators: claims.canManageOperators,
       canCloseCases: claims.canCloseCases,
       canAccessMedical: claims.canAccessMedical,
+      email: claims.email,
       sessionId,
     };
 

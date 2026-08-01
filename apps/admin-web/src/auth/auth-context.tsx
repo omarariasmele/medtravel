@@ -22,6 +22,7 @@ interface JwtClaims {
   canManageConfig?: boolean;
   canManageOperators?: boolean;
   canCloseCases?: boolean;
+  email?: string;
 }
 
 interface LoginResult {

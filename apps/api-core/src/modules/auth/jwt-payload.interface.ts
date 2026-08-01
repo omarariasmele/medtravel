@@ -21,4 +21,6 @@ export interface JwtPayload {
   canManageOperators?: boolean;
   canCloseCases?: boolean;
   canAccessMedical?: boolean;
+  /** Email en texto plano, solo para mostrar "conectado como X" en la UI — no es un GUC. */
+  email?: string;
 }

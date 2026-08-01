@@ -709,6 +709,148 @@ quedan pendientes por falta de una fuente pública verificable en esa sesión).
 `proposed-coverage-demo-data.sql` agrega un sponsor y un plan de ejemplo
 ("AXA Assistance", pedido del usuario para poder probar) atados al tenant demo.
 
+## 27. `coverage.health_coverages` obligaba a tener un `member_id` (empresa de asistencia al viajero) para poder cargar la obra social/prepaga — dos conceptos sin relación
+
+**Archivos:** [`proposed-healthcare-plans.sql`](src/database/sql/proposed-healthcare-plans.sql),
+[`proposed-healthcare-providers-seed.sql`](src/database/sql/proposed-healthcare-providers-seed.sql)
+
+No es un bug del baseline aprobado — es una decisión de diseño de esta sesión,
+a pedido explícito del usuario: *"la obra social o prestador médico o empresa
+prestadora de salud no tiene nada que ver con asistencia al viajero"*. Antes de
+este cambio, un viajero recién registrado (sin ningún `core.members`, ver gap
+#10) no podía cargar su obra social/prepaga en absoluto, porque
+`health_coverages.member_id` era `NOT NULL`.
+
+- `health_coverages` gana `person_id` (nullable, alternativo a `member_id` —
+  `CHECK (member_id IS NOT NULL OR person_id IS NOT NULL)`) y `provider_id`/
+  `plan_id`/`contractor_name`. `hc_select`/`hc_insert`/`hc_update`
+  (`004_coverage.sql`) ganan una rama `OR person_id = current_person_id` —
+  `hc_no_delete` no se toca, dar de baja sigue siendo `valid_until`, nunca un
+  DELETE.
+- Dos tablas nuevas, `coverage.healthcare_providers` (prestador — con
+  `provider_type_id` FK a `HEALTH_COVERAGE_TYPE` para distinguir **obra
+  social** de **prepaga**, que el usuario aclaró explícitamente que no son lo
+  mismo — una obra social agrupa trabajadores de un rubro/sindicato en
+  Argentina, una prepaga es una empresa privada de medicina — más `country_id`
+  y `code` opcional para el número de registro oficial) y
+  `coverage.healthcare_plans` (el plan anidado bajo un prestador, ej. "OSDE
+  210"). No encajan en `params.domain_catalogs`/`catalog_values` por la
+  jerarquía prestador→plan con FK real.
+- Ambas reutilizan el mecanismo `lifecycle_status`
+  (`DRAFT`/`APPROVED`/`ACTIVE`/`RETIRED`) que `catalog_values` ya tenía desde
+  el baseline aprobado sin que ningún endpoint lo usara: un viajero puede
+  cargar un prestador o plan que no está en la lista (`POST
+  /coverage/healthcare-providers` / `.../healthcare-plans`, solo
+  `AuthGuard('jwt')`), queda `DRAFT` — utilizable de inmediato por quien lo
+  cargó, invisible en el combo público de otros viajeros — hasta que un
+  operador lo revisa desde "Prestadores y planes de salud" en admin-web:
+  aprobar tal cual, corregir el nombre y aprobar, o **fusionar con uno
+  existente** si es un duplicado con otro nombre (reasigna
+  `health_coverages`/`healthcare_plans` que apuntaban al duplicado, lo marca
+  `RETIRED`). Pedido explícito del usuario para el caso real de que un
+  viajero escriba "Swiss Medical" cuando ya existe "SWISS MEDICAL SA".
+- Seed inicial con datos reales pasados por el usuario, no inventados: el
+  padrón oficial RNOS (Registro Nacional de Obras Sociales de Argentina, con
+  código) para obras sociales, más un set de prepagas/hospitales conocidos por
+  marca comercial (sin código oficial).
+- Nuevo `GET /identity/travelers-without-tenant` (identity module,
+  `ConfigAccessGuard`) — pedido del usuario para ver, desde el panel, a los
+  usuarios que se registraron pero nunca quedaron afiliados a ninguna empresa
+  de asistencia al viajero (antes invisibles en "Usuarios / viajeros", que
+  lista `core.members`).
+
+**Encontrado:** al registrar un viajero de prueba en la app Flutter y no
+encontrarlo en ningún lado del panel admin.
+
+## 28. `clinical.allergies` no tenía `ai_assisted`/`ai_completed_fields` — `clinical.medications` sí, inconsistencia entre ambas tablas en el baseline aprobado
+
+**Archivo:** [`proposed-allergies-ai-columns.sql`](src/database/sql/proposed-allergies-ai-columns.sql)
+
+`005_clinical.sql` define `ai_assisted BOOLEAN`/`ai_completed_fields JSONB` en
+`clinical.medications` (líneas 118-119) pero nunca las agregó a
+`clinical.allergies`, aunque el resto de las columnas de ambas tablas son
+paralelas (mismo patrón MTA-511 de 3 estados, mismas columnas de
+confirmación/procedencia). No es una decisión de esta sesión — es una
+omisión del baseline que quedó invisible hasta que se activó el asistente de
+IA con una key real: `AIService.confirmProposal()`
+(`src/modules/ai/ai.service.ts`) siempre insertó ambas columnas en las dos
+tablas (alergias y medicamentos) desde que se escribió, pero solo el INSERT
+a `medications` podía funcionar contra el schema real.
+
+- `ALTER TABLE clinical.allergies ADD COLUMN ai_assisted BOOLEAN NOT NULL
+  DEFAULT FALSE, ADD COLUMN ai_completed_fields JSONB NOT NULL DEFAULT '{}'`
+  — mismos tipos/defaults que ya tiene `medications`.
+- No requiere cambios en `ai.service.ts`: el INSERT ya estaba escrito para
+  el schema correcto, solo la tabla no lo tenía.
+
+**Encontrado:** al confirmar una alergia propuesta por el asistente de IA
+desde el chat en la app móvil ("penicilina, severidad moderada") — el botón
+"Confirmar" fallaba con "proba de nuevo"; el log del backend mostró
+`QueryFailedError: no existe la columna «ai_assisted» en la relación
+«allergies»`.
+
+## 29. `clinical.medications` no tenía columna para laboratorio/fabricante; dosis y unidad ya existían en el schema pero ninguna vía de carga las usaba
+
+**Archivo:** [`proposed-medications-manufacturer.sql`](src/database/sql/proposed-medications-manufacturer.sql)
+
+Pedido del usuario: al cargar un medicamento poder guardar droga, dosis
+(cantidad + unidad), marca comercial y laboratorio. `dose_amount`/
+`dose_unit_id` ya estaban en `005_clinical.sql` desde el baseline (con el
+catálogo `DOSE_UNIT` ya sembrado — mg/ml/mcg/UI/gotas/comprimidos/parche),
+pero ni el formulario manual de la app (`health_records_screen.dart`) ni el
+asistente de IA (`openai.provider.ts`/`ai.service.ts`) los exponían.
+Laboratorio no existía como columna en ningún lado.
+
+- `ALTER TABLE clinical.medications ADD COLUMN manufacturer TEXT` — mismo
+  patrón que `brand_name`, encriptado vía `encryptedFields` en
+  `clinical.registry.ts` (no vía `RlsCrudService`, no requiere lógica nueva).
+- Formulario manual (`_MedicationsTab._openForm`): agrega dosis
+  (cantidad + combo de `DOSE_UNIT`), laboratorio, junto a droga/marca que ya
+  existían.
+- Asistente de IA: el JSON schema de extracción
+  (`RESPONSE_JSON_SCHEMA.proposals[].data` en `openai.provider.ts`) gana
+  `manufacturer`, `doseAmount`, `doseUnit` (enum con los mismos códigos del
+  catálogo `DOSE_UNIT`) — opcionales, nunca bloquean la propuesta si falta
+  la droga. `confirmProposal()` (`ai.service.ts`) resuelve `doseUnit` al
+  UUID real vía `params.catalog_id('DOSE_UNIT', $6)` antes de insertar,
+  mismo patrón que ya usaba para `allergenType`/`severity` en alergias.
+
+**Encontrado:** pedido directo del usuario mientras probaba el asistente de
+IA para medicamentos.
+
+## 30. `/identity/travelers-without-tenant` devolvía siempre 0 filas para cualquier operador real — `core.users` tiene RLS habilitada sin ninguna policy
+
+**Archivo:** [`proposed-travelers-without-tenant-function.sql`](src/database/sql/proposed-travelers-without-tenant-function.sql)
+
+Reportado por el usuario al registrar un viajero de prueba (Omar Arias
+Mele, DNI 13430714) y no encontrarlo en "Usuarios sin cobertura de
+asistencia al viajero" pese a que la fila existía y `has_member = FALSE`.
+El controller original (`travelers-without-tenant.controller.ts`, gap #27)
+hacía `JOIN core.users u ON u.person_id = p.id` directo con
+`queryRunner.query()` normal. `core.users` tiene
+`ENABLE ROW LEVEL SECURITY` desde el baseline
+(`003_core_identity.sql:295`) pero **nunca tuvo ninguna `CREATE POLICY`** —
+el patrón ya establecido en el resto del schema (`core.get_user_email`,
+`core.get_login_credentials`, `proposed-operator-account-email.sql`) es que
+esa tabla solo se lee vía funciones `SECURITY DEFINER`, nunca con
+SELECT/JOIN directo. El JOIN directo devolvía 0 filas siempre, para
+cualquier operador, sin importar sus permisos — confirmado simulando la
+sesión exacta del operador real (`app.current_user_id` + rol
+`medtravel_app`, no superusuario): `core.current_operator_can_manage_config()`
+daba `TRUE`, pero el JOIN a `core.users` igual quedaba vacío.
+
+- Nueva función `core.get_travelers_without_tenant()` (`SECURITY DEFINER`),
+  mismo patrón que `clinical.get_patient_summary()`/
+  `emergency.get_shared_contacts()`: hace el JOIN adentro (bypassea RLS)
+  pero se autoriza sola llamando a `core.current_operator_can_manage_config()`
+  (ya existente, `proposed-tenants-rls.sql`) — si no es `TRUE`, devuelve
+  vacío en vez de tirar error.
+- El controller pasó de armar la query a mano a `SELECT * FROM
+  core.get_travelers_without_tenant()`.
+
+**Encontrado:** el usuario registró un viajero de prueba y reportó
+"no lo veo" en la pantalla que se había armado específicamente para verlo.
+
 ## Consolidación formal
 
 [`010_v1.2.4_fixes.sql`](src/database/sql/010_v1.2.4_fixes.sql) junta
