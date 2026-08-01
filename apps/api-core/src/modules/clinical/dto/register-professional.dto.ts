@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsEmail,
   IsOptional,
   IsString,
@@ -44,4 +45,25 @@ export class RegisterProfessionalDto {
   @IsOptional()
   @IsString()
   institution?: string;
+
+  @IsOptional()
+  @IsUUID()
+  genderId?: string;
+
+  @IsOptional()
+  @IsString()
+  stateProvince?: string;
+
+  @IsOptional()
+  @IsString()
+  city?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isInstitution?: boolean;
+
+  /** CUIT/dato impositivo — solo tiene sentido si isInstitution. */
+  @IsOptional()
+  @IsString()
+  taxId?: string;
 }
