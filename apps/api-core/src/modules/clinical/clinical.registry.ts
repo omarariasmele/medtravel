@@ -54,6 +54,7 @@ export const CLINICAL_REGISTRY: Record<string, ResourceRegistryEntry> = {
     encryptedFields: [
       'genericName',
       'brandName',
+      'manufacturer',
       'prescribedBy',
       'travelNotes',
       'memberChallengeNotes',

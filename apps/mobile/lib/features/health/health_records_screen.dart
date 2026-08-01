@@ -316,8 +316,12 @@ class _MedicationsTabState extends State<_MedicationsTab> {
   Future<void> _openForm() async {
     final canonicalCatalog = await CatalogService.get('CANONICAL_STATUS');
     final provenanceCatalog = await CatalogService.get('PROVENANCE_TYPE');
+    final doseUnitCatalog = await CatalogService.get('DOSE_UNIT');
     final nameController = TextEditingController();
     final brandController = TextEditingController();
+    final manufacturerController = TextEditingController();
+    final doseAmountController = TextEditingController();
+    String? doseUnitId;
 
     if (!mounted) return;
     await showModalBottomSheet(
@@ -325,36 +329,65 @@ class _MedicationsTabState extends State<_MedicationsTab> {
       isScrollControlled: true,
       builder: (ctx) => Padding(
         padding: EdgeInsets.only(left: 16, right: 16, top: 16, bottom: MediaQuery.of(ctx).viewInsets.bottom + 16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('Agregar medicamento', style: Theme.of(ctx).textTheme.titleLarge),
-            const SizedBox(height: 12),
-            TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Nombre genérico')),
-            const SizedBox(height: 12),
-            TextField(controller: brandController, decoration: const InputDecoration(labelText: 'Nombre comercial (opcional)')),
-            const SizedBox(height: 16),
-            FilledButton(
-              onPressed: nameController.text.trim().isEmpty
-                  ? null
-                  : () async {
-                      final provisional = canonicalCatalog.firstWhere((s) => s.code == 'PROVISIONAL');
-                      final selfDeclared = provenanceCatalog.firstWhere((p) => p.code == 'SELF_DECLARED');
-                      await ApiClient.instance.dio.post('/clinical/medications', data: {
-                        'personId': _personId,
-                        'genericName': nameController.text.trim(),
-                        if (brandController.text.trim().isNotEmpty) 'brandName': brandController.text.trim(),
-                        'isCurrent': true,
-                        'canonicalStatusId': provisional.id,
-                        'provenanceId': selfDeclared.id,
-                      });
-                      if (ctx.mounted) Navigator.of(ctx).pop();
-                      await _load();
-                    },
-              child: const Text('Guardar'),
-            ),
-          ],
+        child: StatefulBuilder(
+          builder: (ctx, setSheetState) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('Agregar medicamento', style: Theme.of(ctx).textTheme.titleLarge),
+              const SizedBox(height: 12),
+              TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Droga (nombre genérico)')),
+              const SizedBox(height: 12),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: doseAmountController,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(labelText: 'Dosis (opcional)'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      initialValue: doseUnitId,
+                      decoration: const InputDecoration(labelText: 'Unidad'),
+                      items: doseUnitCatalog.map((c) => DropdownMenuItem(value: c.id, child: Text(c.labelEs))).toList(),
+                      onChanged: (v) => setSheetState(() => doseUnitId = v),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(controller: brandController, decoration: const InputDecoration(labelText: 'Nombre comercial (opcional)')),
+              const SizedBox(height: 12),
+              TextField(controller: manufacturerController, decoration: const InputDecoration(labelText: 'Laboratorio (opcional)')),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: nameController.text.trim().isEmpty
+                    ? null
+                    : () async {
+                        final provisional = canonicalCatalog.firstWhere((s) => s.code == 'PROVISIONAL');
+                        final selfDeclared = provenanceCatalog.firstWhere((p) => p.code == 'SELF_DECLARED');
+                        await ApiClient.instance.dio.post('/clinical/medications', data: {
+                          'personId': _personId,
+                          'genericName': nameController.text.trim(),
+                          if (brandController.text.trim().isNotEmpty) 'brandName': brandController.text.trim(),
+                          if (manufacturerController.text.trim().isNotEmpty) 'manufacturer': manufacturerController.text.trim(),
+                          if (doseAmountController.text.trim().isNotEmpty) 'doseAmount': doseAmountController.text.trim(),
+                          if (doseUnitId != null) 'doseUnitId': doseUnitId,
+                          'isCurrent': true,
+                          'canonicalStatusId': provisional.id,
+                          'provenanceId': selfDeclared.id,
+                        });
+                        if (ctx.mounted) Navigator.of(ctx).pop();
+                        await _load();
+                      },
+                child: const Text('Guardar'),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -373,7 +406,16 @@ class _MedicationsTabState extends State<_MedicationsTab> {
                 itemBuilder: (context, i) {
                   final m = _items[i] as Map<String, dynamic>;
                   final brand = m['brandName'] as String?;
-                  return ListTile(title: Text('${m['genericName']}${brand != null ? ' ($brand)' : ''}'));
+                  final manufacturer = m['manufacturer'] as String?;
+                  final doseAmount = m['doseAmount'];
+                  final subtitleParts = <String>[
+                    if (doseAmount != null) '$doseAmount',
+                    if (manufacturer != null) manufacturer,
+                  ];
+                  return ListTile(
+                    title: Text('${m['genericName']}${brand != null ? ' ($brand)' : ''}'),
+                    subtitle: subtitleParts.isEmpty ? null : Text(subtitleParts.join(' · ')),
+                  );
                 },
               ),
       ),

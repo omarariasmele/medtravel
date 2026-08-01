@@ -14,12 +14,16 @@ Tu único trabajo es ayudar al viajero a registrar sus alergias y medicamentos
 actuales charlando en español, de forma breve y clara (2-4 oraciones por turno).
 Hacé una pregunta a la vez. Cuando tengas datos suficientes de UNA alergia o UN
 medicamento, agregalo al array "proposals" (podés proponer varios en la misma
-respuesta si el usuario los mencionó juntos). NUNCA dás diagnósticos,
-indicaciones de tratamiento, ni interpretás síntomas — solo capturás los datos
-que el usuario te cuenta, tal como los dice. Si falta un dato obligatorio
-(allergenType, severity para alergias; genericName para medicamentos), preguntalo
-antes de proponerlo. "confidence" es qué tan seguro estás de haber entendido bien
-el dato (0 a 1), no una opinión médica.`;
+respuesta si el usuario los mencionó juntos). Para medicamentos, si el usuario
+lo menciona espontáneamente pedile también la dosis (cantidad + unidad, ej.
+"50 mg"), la marca comercial y el laboratorio/fabricante — pero NUNCA los
+conviertas en requisito para proponer el medicamento: alcanza con la droga
+(genericName). NUNCA dás diagnósticos, indicaciones de tratamiento, ni
+interpretás síntomas — solo capturás los datos que el usuario te cuenta, tal
+como los dice. Si falta un dato obligatorio (allergenType, severity para
+alergias; genericName para medicamentos), preguntalo antes de proponerlo.
+"confidence" es qué tan seguro estás de haber entendido bien el dato (0 a 1),
+no una opinión médica.`;
 
 const RESPONSE_JSON_SCHEMA = {
   name: 'health_chat_response',
@@ -43,6 +47,21 @@ const RESPONSE_JSON_SCHEMA = {
               properties: {
                 genericName: { type: ['string', 'null'] },
                 brandName: { type: ['string', 'null'] },
+                manufacturer: { type: ['string', 'null'] },
+                doseAmount: { type: ['number', 'null'] },
+                doseUnit: {
+                  type: ['string', 'null'],
+                  enum: [
+                    'MG',
+                    'ML',
+                    'MCG',
+                    'UI',
+                    'GOTAS',
+                    'COMPRIMIDOS',
+                    'PARCHE',
+                    null,
+                  ],
+                },
                 isCurrent: { type: ['boolean', 'null'] },
                 allergenName: { type: ['string', 'null'] },
                 allergenType: {
@@ -58,6 +77,9 @@ const RESPONSE_JSON_SCHEMA = {
               required: [
                 'genericName',
                 'brandName',
+                'manufacturer',
+                'doseAmount',
+                'doseUnit',
                 'isCurrent',
                 'allergenName',
                 'allergenType',

@@ -129,23 +129,28 @@ export class AIService {
       if (proposal.proposal_type === 'MEDICATION') {
         const [row] = await queryRunner.query(
           `INSERT INTO clinical.medications
-             (person_id, generic_name, brand_name, is_current,
-              canonical_status_id, confirmation_status_id, certification_status_id,
+             (person_id, generic_name, brand_name, manufacturer, dose_amount, dose_unit_id,
+              is_current, canonical_status_id, confirmation_status_id, certification_status_id,
               provenance_id, ai_assisted, ai_completed_fields,
               member_confirmed, member_confirmed_at, requires_member_confirmation, notes)
            VALUES (
-             $1, core.encrypt_pii($2), core.encrypt_pii($3), $4,
+             $1, core.encrypt_pii($2), core.encrypt_pii($3), core.encrypt_pii($4), $5,
+             CASE WHEN $6::text IS NULL THEN NULL ELSE params.catalog_id('DOSE_UNIT', $6) END,
+             $7,
              params.catalog_id('CANONICAL_STATUS', 'PROVISIONAL'),
              params.catalog_id('CONFIRMATION_STATUS', 'MEMBER_CONFIRMED'),
              params.catalog_id('CERTIFICATION_STATUS', 'UNCERTIFIED'),
              params.catalog_id('PROVENANCE_TYPE', 'AI_ASSISTED'),
-             TRUE, $5::jsonb, TRUE, NOW(), FALSE, core.encrypt_pii($6)
+             TRUE, $8::jsonb, TRUE, NOW(), FALSE, core.encrypt_pii($9)
            )
            RETURNING id`,
           [
             personId,
             data.genericName,
             data.brandName ?? null,
+            data.manufacturer ?? null,
+            data.doseAmount ?? null,
+            data.doseUnit ?? null,
             data.isCurrent ?? true,
             JSON.stringify(data),
             data.notes ?? null,

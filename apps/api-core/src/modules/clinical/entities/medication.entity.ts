@@ -22,6 +22,9 @@ export class MedicationEntity extends UuidBaseEntity {
   @Column({ name: 'brand_name', type: 'text', nullable: true })
   brandName?: string;
 
+  @Column({ name: 'manufacturer', type: 'text', nullable: true })
+  manufacturer?: string;
+
   /** FK a params.catalog_values (dominio COUNTRY). */
   @Column({ name: 'brand_country_id', type: 'uuid', nullable: true })
   brandCountryId?: string;
