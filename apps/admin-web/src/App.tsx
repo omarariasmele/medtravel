@@ -26,6 +26,8 @@ import { PublicSharePage } from './pages/public-share/public-share.page';
 import { ProfessionalRegistrationPage } from './pages/professional-registration/professional-registration.page';
 import { SharePreviewPage } from './pages/share-preview/share-preview.page';
 import { AiConsumptionPage } from './pages/ai-consumption/ai-consumption.page';
+import { TravelersWithoutCoveragePage } from './pages/travelers-without-coverage/travelers-without-coverage.page';
+import { HealthcarePlansPage } from './pages/healthcare-plans/healthcare-plans.page';
 
 function App() {
   return (
@@ -57,6 +59,8 @@ function App() {
           <Route path="/partner-records" element={<PartnerRecordsPage />} />
           <Route path="/assistance-plans" element={<AssistancePlansPage />} />
           <Route path="/ai-consumption" element={<AiConsumptionPage />} />
+          <Route path="/travelers-without-coverage" element={<TravelersWithoutCoveragePage />} />
+          <Route path="/healthcare-plans" element={<HealthcarePlansPage />} />
         </Route>
       </Route>
 

@@ -76,6 +76,7 @@ interface HealthCoverage {
   coverageName: string;
   coverageTypeId: string;
   providerName: string;
+  providerId?: string;
   policyNumber?: string;
   memberNumber?: string;
   validFrom?: string;
@@ -236,15 +237,22 @@ export function TravelerDetailPage() {
     },
   });
 
+  /**
+   * Filtra por personId, no por memberId: la obra social/prepaga es un
+   * hecho de la persona, independiente de si tiene o no una empresa de
+   * asistencia al viajero asociada (ver proposed-healthcare-plans.sql)
+   * — así también aparecen acá las que el propio viajero cargó desde
+   * "Mi cobertura" en la app, sin necesitar ningún member.
+   */
   const healthCoveragesQuery = useQuery({
-    queryKey: ['coverage', 'health-coverages', id],
+    queryKey: ['coverage', 'health-coverages', personQuery.data?.id],
     queryFn: async () => {
       const { data } = await apiClient.get<HealthCoverage[]>('/coverage/health-coverages', {
-        params: { memberId: id },
+        params: { personId: personQuery.data!.id },
       });
       return data;
     },
-    enabled: !!id,
+    enabled: !!personQuery.data?.id,
   });
 
   const planNameById = new Map((plansQuery.data ?? []).map((p) => [p.id, p.name]));
@@ -278,7 +286,7 @@ export function TravelerDetailPage() {
     mutationFn: async () => {
       const active = healthCoverageStatusCatalog.data?.find((s) => s.code === 'ACTIVE');
       const { data } = await apiClient.post('/coverage/health-coverages', {
-        memberId: id,
+        personId: personQuery.data?.id,
         coverageName: hcForm.coverageName,
         coverageTypeId: hcForm.coverageTypeId,
         providerName: hcForm.providerName,
@@ -292,7 +300,7 @@ export function TravelerDetailPage() {
       return data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['coverage', 'health-coverages', id] });
+      queryClient.invalidateQueries({ queryKey: ['coverage', 'health-coverages'] });
       setHcOpen(false);
       setHcForm(EMPTY_HC_FORM);
       setHcError(null);
@@ -398,8 +406,11 @@ export function TravelerDetailPage() {
             </Button>
           </Box>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-            Puede tener más de una fila a la vez (ej. una prepaga y una obra social en
-            paralelo), cada una con su propia vigencia — no son excluyentes.
+            Independiente de la empresa de asistencia al viajero — puede tener más de una
+            fila a la vez (ej. una prepaga y una obra social en paralelo), cada una con
+            su propia vigencia. Las que dicen "Cargado desde la app" las declaró el
+            propio viajero en "Mi cobertura" y pueden estar pendientes de confirmación
+            (ver Catálogos/Planes de salud).
           </Typography>
           {healthCoveragesQuery.isLoading && <CircularProgress size={24} />}
           {(healthCoveragesQuery.data?.length ?? 0) === 0 && !healthCoveragesQuery.isLoading && (
@@ -428,6 +439,9 @@ export function TravelerDetailPage() {
                     <TableCell>{labelFor(healthCoverageTypeCatalog.data, hc.coverageTypeId)}</TableCell>
                     <TableCell>
                       {hc.coverageName} {hc.isPrimary && <Chip size="small" color="primary" label="Principal" />}
+                      {hc.providerId && (
+                        <Chip size="small" variant="outlined" label="Cargado desde la app" sx={{ ml: 0.5 }} />
+                      )}
                     </TableCell>
                     <TableCell>{hc.providerName}</TableCell>
                     <TableCell>{hc.policyNumber ?? '—'}</TableCell>

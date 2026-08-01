@@ -19,6 +19,7 @@ import { MemberDataConsentEntity } from './entities/member-data-consent.entity';
 import { MemberContactEntity } from './entities/member-contact.entity';
 import { IdentityResourceController } from './identity-resource.controller';
 import { TravelersOverviewController } from './travelers-overview.controller';
+import { TravelersWithoutTenantController } from './travelers-without-tenant.controller';
 
 @Module({
   imports: [
@@ -41,7 +42,11 @@ import { TravelersOverviewController } from './travelers-overview.controller';
       MemberContactEntity,
     ]),
   ],
-  controllers: [TravelersOverviewController, IdentityResourceController],
+  controllers: [
+    TravelersOverviewController,
+    TravelersWithoutTenantController,
+    IdentityResourceController,
+  ],
   exports: [TypeOrmModule],
 })
 export class IdentityModule {}
