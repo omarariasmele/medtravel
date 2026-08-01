@@ -36,6 +36,15 @@ export class TenantEntity extends UuidBaseEntity {
   @Column({ name: 'api_key_hash', type: 'text', nullable: true })
   apiKeyHash?: string;
 
+  /**
+   * TRUE solo para OYSGROUP — la empresa que administra la plataforma,
+   * no una empresa de asistencia al viajero más (ver
+   * proposed-platform-tenant-and-config-bypass.sql). Distingue el
+   * "dueño del sistema" del resto de los tenants/clientes.
+   */
+  @Column({ name: 'is_platform_tenant', type: 'boolean', default: false })
+  isPlatformTenant: boolean;
+
   @Column({ type: 'boolean', default: true })
   active: boolean;
 

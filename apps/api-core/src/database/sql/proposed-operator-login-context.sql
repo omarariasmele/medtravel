@@ -10,14 +10,24 @@
 -- No se toca el baseline 000-009 aprobado; aplicar como patch adicional.
 -- ============================================================
 
+DROP FUNCTION IF EXISTS operations.get_operator_login_context(UUID);
+
 CREATE OR REPLACE FUNCTION operations.get_operator_login_context(p_user_id UUID)
-RETURNS TABLE (operator_id UUID, tenant_id UUID)
+RETURNS TABLE (
+  operator_id UUID,
+  tenant_id UUID,
+  can_manage_config BOOLEAN,
+  can_manage_operators BOOLEAN,
+  can_close_cases BOOLEAN,
+  can_access_medical BOOLEAN
+)
 LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, operations AS $$
 BEGIN
   RETURN QUERY
-  SELECT op.id, op.tenant_id
+  SELECT op.id, op.tenant_id, r.can_manage_config, r.can_manage_operators, r.can_close_cases, r.can_access_medical
   FROM operations.operators op
+  JOIN operations.operator_roles r ON r.id = op.role_id
   WHERE op.user_id = p_user_id;
 END;
 $$;

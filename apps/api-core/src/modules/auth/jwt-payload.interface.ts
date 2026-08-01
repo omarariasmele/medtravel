@@ -11,4 +11,14 @@ export interface JwtPayload {
   sessionId?: string;
   emergencyTokenActive?: boolean;
   emergencyTokenPersonId?: string;
+  /**
+   * Permisos del rol de operador (operations.operator_roles), solo
+   * presentes si el usuario es un operador. No son GUCs de Postgres (RLS
+   * no los lee) — son para que la app decida qué mostrar/permitir sin
+   * otra consulta: guards de rutas admin y el menú de admin-web.
+   */
+  canManageConfig?: boolean;
+  canManageOperators?: boolean;
+  canCloseCases?: boolean;
+  canAccessMedical?: boolean;
 }

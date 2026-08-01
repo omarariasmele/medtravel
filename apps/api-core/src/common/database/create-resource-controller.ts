@@ -1,5 +1,6 @@
 import {
   Body,
+  CanActivate,
   Controller,
   Delete,
   Get,
@@ -8,6 +9,7 @@ import {
   Patch,
   Post,
   Query,
+  Type,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
@@ -43,14 +45,21 @@ function isEncryptedEntry(
  * usada una vez por módulo con su propio registro de entidades (ver
  * <modulo>.registry.ts). Evita repetir ~80 líneas casi idénticas en cada
  * uno de los 7 módulos que la usan.
+ *
+ * `extraGuards` (opcional): guards adicionales después de AuthGuard('jwt')
+ * — hoy solo lo usa params/admin (ConfigAccessGuard): esas tablas
+ * (feature-flags, workflow-definitions, etc.) no tienen RLS propia por
+ * tenant, son configuración global, así que sin este guard cualquier
+ * operador autenticado podría editarlas.
  */
 export function createResourceController(
   prefix: string,
   registry: Record<string, ResourceRegistryEntry>,
+  extraGuards: Type<CanActivate>[] = [],
 ) {
   @ApiTags(prefix)
   @ApiBearerAuth()
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(AuthGuard('jwt'), ...extraGuards)
   @Controller(prefix)
   class ResourceController {
     constructor(private readonly txManager: TenantTransactionManager) {}

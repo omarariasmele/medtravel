@@ -30,6 +30,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       sessionId: payload.sessionId,
       emergencyTokenActive: payload.emergencyTokenActive ?? false,
       emergencyTokenPersonId: payload.emergencyTokenPersonId,
+      canManageConfig: payload.canManageConfig ?? false,
+      canManageOperators: payload.canManageOperators ?? false,
+      canCloseCases: payload.canCloseCases ?? false,
+      canAccessMedical: payload.canAccessMedical ?? false,
     };
   }
 }

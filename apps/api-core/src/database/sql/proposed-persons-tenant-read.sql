@@ -22,4 +22,5 @@ CREATE POLICY persons_tenant_member_select ON core.persons
       WHERE m.person_id = persons.id
         AND m.tenant_id = app.current_uuid('app.current_tenant_id')
     )
+    OR core.current_operator_can_manage_config()
   );

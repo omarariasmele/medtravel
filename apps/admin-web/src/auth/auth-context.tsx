@@ -19,6 +19,9 @@ interface JwtClaims {
   personId?: string;
   tenantId?: string;
   sessionId?: string;
+  canManageConfig?: boolean;
+  canManageOperators?: boolean;
+  canCloseCases?: boolean;
 }
 
 interface LoginResult {

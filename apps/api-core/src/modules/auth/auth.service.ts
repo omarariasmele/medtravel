@@ -196,10 +196,18 @@ export class AuthService {
     // ninguna política *_tenant_access (gap #8) se activa nunca para su
     // sesión, vería 0 filas en todo /operations aunque tenga acceso real.
     const operatorContext = await this.txManager.runInTransaction<
-      { tenant_id: string | null } | undefined
+      | {
+          tenant_id: string | null;
+          can_manage_config: boolean;
+          can_manage_operators: boolean;
+          can_close_cases: boolean;
+          can_access_medical: boolean;
+        }
+      | undefined
     >(async (queryRunner) => {
       const rows = await queryRunner.query(
-        `SELECT tenant_id FROM operations.get_operator_login_context($1)`,
+        `SELECT tenant_id, can_manage_config, can_manage_operators, can_close_cases, can_access_medical
+         FROM operations.get_operator_login_context($1)`,
         [credentials.user_id],
       );
       return rows[0];
@@ -209,6 +217,10 @@ export class AuthService {
       userId: credentials.user_id,
       personId: credentials.person_id,
       tenantId: operatorContext?.tenant_id ?? undefined,
+      canManageConfig: operatorContext?.can_manage_config,
+      canManageOperators: operatorContext?.can_manage_operators,
+      canCloseCases: operatorContext?.can_close_cases,
+      canAccessMedical: operatorContext?.can_access_medical,
     });
   }
 
@@ -327,6 +339,10 @@ export class AuthService {
         userId: payload.sub,
         personId: payload.personId,
         tenantId: payload.tenantId,
+        canManageConfig: payload.canManageConfig,
+        canManageOperators: payload.canManageOperators,
+        canCloseCases: payload.canCloseCases,
+        canAccessMedical: payload.canAccessMedical,
       },
       session.id,
     );
@@ -396,9 +412,12 @@ export class AuthService {
       try {
         await this.mailService.send(
           dto.email,
-          'Restablecer tu contraseña de MedTravelApp',
+          'Restablecer tu contraseña de MedTravelApp / Reset your MedTravelApp password',
           `<p>Hacé clic <a href="${resetUrl}">acá</a> para restablecer tu contraseña.</p>
-           <p>Este link vence en ${ttlMinutes} minutos. Si no lo pediste vos, ignorá este correo.</p>`,
+           <p>Este link vence en ${ttlMinutes} minutos. Si no lo pediste vos, ignorá este correo.</p>
+           <hr style="border:none; border-top:1px solid #e6e8e7; margin:20px 0;" />
+           <p>Click <a href="${resetUrl}">here</a> to reset your password.</p>
+           <p>This link expires in ${ttlMinutes} minutes. If you didn't request this, please ignore this email.</p>`,
         );
       } catch (error) {
         // No propagar: si el envío falla (SMTP no configurado, caído,
@@ -518,7 +537,15 @@ export class AuthService {
    * app.current_user_id = user_id de la fila — por eso el contextOverride.
    */
   private async issueTokenPair(
-    claims: { userId: string; personId?: string; tenantId?: string },
+    claims: {
+      userId: string;
+      personId?: string;
+      tenantId?: string;
+      canManageConfig?: boolean;
+      canManageOperators?: boolean;
+      canCloseCases?: boolean;
+      canAccessMedical?: boolean;
+    },
     existingSessionId?: string,
   ): Promise<TokenPairDto> {
     const sessionId = existingSessionId ?? randomUUID();
@@ -527,6 +554,10 @@ export class AuthService {
       sub: claims.userId,
       personId: claims.personId,
       tenantId: claims.tenantId,
+      canManageConfig: claims.canManageConfig,
+      canManageOperators: claims.canManageOperators,
+      canCloseCases: claims.canCloseCases,
+      canAccessMedical: claims.canAccessMedical,
       sessionId,
     };
 
