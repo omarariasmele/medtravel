@@ -24,6 +24,7 @@ import {
 
 import { apiClient } from '../../lib/api-client';
 import { labelFor, useCatalog } from '../../lib/catalog-hooks';
+import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface Operator {
   id: string;
@@ -197,6 +198,9 @@ export function OperatorsPage() {
     },
   });
 
+  const { pageRows: operatorPageRows, page: operatorPage, setPage: setOperatorPage, totalCount: operatorTotalCount } =
+    usePagination(operatorsQuery.data ?? []);
+
   const isCreateFormValid =
     createForm.firstName &&
     createForm.lastName &&
@@ -235,7 +239,7 @@ export function OperatorsPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {operatorsQuery.data.map((o) => (
+              {operatorPageRows.map((o) => (
                 <TableRow key={o.id} hover onClick={() => openEdit(o)} sx={{ cursor: 'pointer' }}>
                   <TableCell>{o.firstName} {o.lastName}</TableCell>
                   <TableCell>{o.tenantId ? tenantNameById.get(o.tenantId) ?? '—' : '—'}</TableCell>
@@ -248,6 +252,7 @@ export function OperatorsPage() {
               ))}
             </TableBody>
           </Table>
+          <PaginationFooter page={operatorPage} totalCount={operatorTotalCount} onPageChange={setOperatorPage} />
         </TableContainer>
       )}
 

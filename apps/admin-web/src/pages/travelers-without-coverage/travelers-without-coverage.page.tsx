@@ -14,6 +14,7 @@ import {
 } from '@mui/material';
 
 import { apiClient } from '../../lib/api-client';
+import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface TravelerWithoutTenant {
   person_id: string;
@@ -43,6 +44,8 @@ export function TravelersWithoutCoveragePage() {
       return data;
     },
   });
+
+  const { pageRows, page, setPage, totalCount } = usePagination(query.data ?? []);
 
   return (
     <>
@@ -74,7 +77,7 @@ export function TravelersWithoutCoveragePage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {query.data.map((t) => (
+              {pageRows.map((t) => (
                 <TableRow key={t.person_id} hover>
                   <TableCell>{t.first_name} {t.last_name}</TableCell>
                   <TableCell>{t.email}</TableCell>
@@ -97,6 +100,7 @@ export function TravelersWithoutCoveragePage() {
               ))}
             </TableBody>
           </Table>
+          <PaginationFooter page={page} totalCount={totalCount} onPageChange={setPage} />
         </TableContainer>
       )}
     </>

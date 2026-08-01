@@ -22,6 +22,7 @@ import { useAuth } from '../../auth/auth-context';
 import { apiClient } from '../../lib/api-client';
 import { labelFor, useCatalog } from '../../lib/catalog-hooks';
 import { useTravelersOverview } from '../../lib/travelers-overview-hooks';
+import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface EmergencyCase {
   id: string;
@@ -79,6 +80,8 @@ export function CasesListPage() {
       (!tenantFilter || c.tenantId === tenantFilter) &&
       (!statusFilter || c.statusId === statusFilter),
   );
+  const { pageRows: casePageRows, page: casePage, setPage: setCasePage, totalCount: caseTotalCount } =
+    usePagination(filteredCases);
 
   return (
     <>
@@ -147,7 +150,7 @@ export function CasesListPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {filteredCases.map((c) => {
+              {casePageRows.map((c) => {
                 const traveler = overviewByMemberId.get(c.memberId);
                 return (
                 <TableRow
@@ -189,6 +192,7 @@ export function CasesListPage() {
               })}
             </TableBody>
           </Table>
+          <PaginationFooter page={casePage} totalCount={caseTotalCount} onPageChange={setCasePage} />
         </TableContainer>
       )}
     </>

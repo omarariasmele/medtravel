@@ -19,6 +19,7 @@ import {
 } from '@mui/material';
 
 import { apiClient } from '../../lib/api-client';
+import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface Summary {
   costToday: number;
@@ -161,6 +162,9 @@ export function AiConsumptionPage() {
 
   const s = summaryQuery.data;
 
+  const { pageRows: topUsersPageRows, page: topUsersPage, setPage: setTopUsersPage, totalCount: topUsersTotalCount } =
+    usePagination(topUsersQuery.data ?? []);
+
   return (
     <>
       <Typography variant="h4" gutterBottom>
@@ -256,7 +260,7 @@ export function AiConsumptionPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {topUsersQuery.data.map((u) => (
+              {topUsersPageRows.map((u) => (
                 <TableRow key={u.personId}>
                   <TableCell>{u.fullName}</TableCell>
                   <TableCell align="right">{u.messageCount}</TableCell>
@@ -267,6 +271,7 @@ export function AiConsumptionPage() {
               ))}
             </TableBody>
           </Table>
+          <PaginationFooter page={topUsersPage} totalCount={topUsersTotalCount} onPageChange={setTopUsersPage} />
         </TableContainer>
       )}
     </>

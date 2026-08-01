@@ -27,6 +27,7 @@ import EditIcon from '@mui/icons-material/Edit';
 
 import { apiClient } from '../../lib/api-client';
 import { useCatalog } from '../../lib/catalog-hooks';
+import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface HealthcareProvider {
   id: string;
@@ -53,16 +54,27 @@ interface HealthcarePlan {
   submittedByLastName?: string;
 }
 
+type ProviderTypeCode = 'PRIVATE_INSURANCE' | 'SOCIAL_SECURITY';
+
 /**
- * Administra coverage.healthcare_providers (prestadores privados/prepagas Y
- * obras sociales — mismo modelo, distinguidos por provider_type_id, pero
- * el usuario pidió explícitamente que se vean como dos listas separadas
- * porque "no es lo mismo una obra social que una prepaga") y
- * coverage.healthcare_plans (el nivel "plan" anidado bajo un prestador).
- * Los planes se gestionan desde adentro del diálogo de edición de un
- * prestador, no como una sección aparte — pedido explícito del usuario.
+ * Administra coverage.healthcare_providers para UN tipo (prepaga u obra
+ * social) y coverage.healthcare_plans anidado bajo cada prestador de ese
+ * tipo. Antes era una sola pantalla con las dos listas juntas — el
+ * usuario pidió separarlas en pantallas distintas porque mezcladas
+ * confunden y con volumen se vuelve difícil de visualizar. Este
+ * componente es el mismo para ambos casos, parametrizado por
+ * `typeCode`/`title` — cada pantalla (healthcare-providers.page.tsx,
+ * healthcare-social-security.page.tsx) es solo un wrapper de una línea.
  */
-export function HealthcarePlansPage() {
+export function HealthcareProviderTypePage({
+  typeCode,
+  title,
+  newItemLabel,
+}: {
+  typeCode: ProviderTypeCode;
+  title: string;
+  newItemLabel: string;
+}) {
   const queryClient = useQueryClient();
   const countryCatalog = useCatalog('COUNTRY');
   const providerTypeCatalog = useCatalog('HEALTH_COVERAGE_TYPE');
@@ -70,18 +82,14 @@ export function HealthcarePlansPage() {
   const providerTypeCodeById = (id: string) =>
     (providerTypeCatalog.data ?? []).find((c) => c.id === id)?.code;
 
-  // ── Prestadores (ambos tipos) ────────────────────────────────
   const [providerDialogOpen, setProviderDialogOpen] = useState(false);
-  const [providerDialogTypeCode, setProviderDialogTypeCode] = useState<'PRIVATE_INSURANCE' | 'SOCIAL_SECURITY'>('PRIVATE_INSURANCE');
   const [providerForm, setProviderForm] = useState({ name: '', countryId: '' });
   const [providerError, setProviderError] = useState<string | null>(null);
   const [providerApproveEditTarget, setProviderApproveEditTarget] = useState<HealthcareProvider | null>(null);
   const [providerApproveEditName, setProviderApproveEditName] = useState('');
   const [providerMergeTarget, setProviderMergeTarget] = useState<HealthcareProvider | null>(null);
   const [providerMergeIntoId, setProviderMergeIntoId] = useState('');
-
-  const [privateCountryFilter, setPrivateCountryFilter] = useState('');
-  const [socialCountryFilter, setSocialCountryFilter] = useState('');
+  const [countryFilter, setCountryFilter] = useState('');
 
   const providersQuery = useQuery({
     queryKey: ['coverage', 'admin', 'healthcare-providers'],
@@ -94,21 +102,16 @@ export function HealthcarePlansPage() {
   const invalidateProviders = () =>
     queryClient.invalidateQueries({ queryKey: ['coverage', 'admin', 'healthcare-providers'] });
 
-  const allPending = (providersQuery.data ?? []).filter((p) => p.lifecycleStatus === 'DRAFT');
-  const allActive = (providersQuery.data ?? []).filter((p) => p.lifecycleStatus !== 'DRAFT');
+  const forThisType = (providersQuery.data ?? []).filter(
+    (p) => providerTypeCodeById(p.providerTypeId) === typeCode,
+  );
+  const pending = forThisType.filter((p) => p.lifecycleStatus === 'DRAFT');
+  const active = forThisType
+    .filter((p) => p.lifecycleStatus !== 'DRAFT')
+    .filter((p) => !countryFilter || p.countryId === countryFilter);
+  const { pageRows: activePageRows, page: activePage, setPage: setActivePage, totalCount: activeTotalCount } =
+    usePagination(active);
 
-  const pendingPrivate = allPending.filter((p) => providerTypeCodeById(p.providerTypeId) === 'PRIVATE_INSURANCE');
-  const pendingSocial = allPending.filter((p) => providerTypeCodeById(p.providerTypeId) === 'SOCIAL_SECURITY');
-
-  const activePrivate = allActive
-    .filter((p) => providerTypeCodeById(p.providerTypeId) === 'PRIVATE_INSURANCE')
-    .filter((p) => !privateCountryFilter || p.countryId === privateCountryFilter);
-  const activeSocial = allActive
-    .filter((p) => providerTypeCodeById(p.providerTypeId) === 'SOCIAL_SECURITY')
-    .filter((p) => !socialCountryFilter || p.countryId === socialCountryFilter);
-
-  // Prestador abierto en el diálogo de edición (también controla qué
-  // planes se cargan/muestran anidados adentro del diálogo).
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
   const editingProvider = (providersQuery.data ?? []).find((p) => p.id === editingProviderId) ?? null;
   const [editForm, setEditForm] = useState({ name: '', code: '', countryId: '' });
@@ -123,7 +126,7 @@ export function HealthcarePlansPage() {
       apiClient.post('/coverage/healthcare-providers', {
         name: providerForm.name,
         countryId: providerForm.countryId || undefined,
-        providerTypeId: (providerTypeCatalog.data ?? []).find((c) => c.code === providerDialogTypeCode)?.id,
+        providerTypeId: (providerTypeCatalog.data ?? []).find((c) => c.code === typeCode)?.id,
       }),
     onSuccess: () => {
       invalidateProviders();
@@ -186,10 +189,8 @@ export function HealthcarePlansPage() {
     },
   });
 
-  const providerMergeCandidates = allActive.filter(
-    (p) =>
-      p.id !== providerMergeTarget?.id &&
-      providerTypeCodeById(p.providerTypeId) === providerTypeCodeById(providerMergeTarget?.providerTypeId ?? ''),
+  const providerMergeCandidates = forThisType.filter(
+    (p) => p.lifecycleStatus !== 'DRAFT' && p.id !== providerMergeTarget?.id,
   );
 
   // ── Planes (del prestador que está abierto en el diálogo de edición) ──
@@ -270,53 +271,10 @@ export function HealthcarePlansPage() {
 
   const planMergeCandidates = activePlans.filter((p) => p.id !== planMergeTarget?.id);
 
-  const renderPendingTable = (title: string, rows: HealthcareProvider[]) =>
-    rows.length > 0 && (
-      <Paper variant="outlined" sx={{ mb: 2, borderColor: 'warning.main' }}>
-        <Box sx={{ bgcolor: 'warning.light', px: 2, py: 1 }}>
-          <Typography variant="subtitle2">{title}</Typography>
-        </Box>
-        <Table size="small">
-          <TableBody>
-            {rows.map((p) => (
-              <TableRow key={p.id}>
-                <TableCell>
-                  {p.name} <Chip size="small" color="warning" label="Nuevo" sx={{ ml: 1 }} />
-                </TableCell>
-                <TableCell>
-                  {p.submittedByFirstName ? `${p.submittedByFirstName} ${p.submittedByLastName}` : '—'}
-                </TableCell>
-                <TableCell align="right">
-                  <Button size="small" onClick={() => approveProviderMutation.mutate(p)}>Aprobar</Button>
-                  <Button
-                    size="small"
-                    onClick={() => {
-                      setProviderApproveEditTarget(p);
-                      setProviderApproveEditName(p.name);
-                    }}
-                  >
-                    Editar y aprobar
-                  </Button>
-                  <Button size="small" onClick={() => setProviderMergeTarget(p)}>Fusionar con existente</Button>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </Paper>
-    );
-
-  const renderProviderSection = (
-    title: string,
-    typeCode: 'PRIVATE_INSURANCE' | 'SOCIAL_SECURITY',
-    pending: HealthcareProvider[],
-    active: HealthcareProvider[],
-    countryFilter: string,
-    setCountryFilter: (v: string) => void,
-  ) => (
-    <Box sx={{ mb: 4 }}>
+  return (
+    <>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1, gap: 2 }}>
-        <Typography variant="h5">{title}</Typography>
+        <Typography variant="h4">{title}</Typography>
         <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
           <TextField
             select
@@ -331,20 +289,46 @@ export function HealthcarePlansPage() {
               <MenuItem key={c.id} value={c.id}>{c.labelEs}</MenuItem>
             ))}
           </TextField>
-          <Button
-            variant="contained"
-            size="small"
-            onClick={() => {
-              setProviderDialogTypeCode(typeCode);
-              setProviderDialogOpen(true);
-            }}
-          >
+          <Button variant="contained" onClick={() => setProviderDialogOpen(true)}>
             Nuevo
           </Button>
         </Box>
       </Box>
 
-      {renderPendingTable(`${title} pendientes de confirmación`, pending)}
+      {pending.length > 0 && (
+        <Paper variant="outlined" sx={{ mb: 2, borderColor: 'warning.main' }}>
+          <Box sx={{ bgcolor: 'warning.light', px: 2, py: 1 }}>
+            <Typography variant="subtitle2">Pendientes de confirmación</Typography>
+          </Box>
+          <Table size="small">
+            <TableBody>
+              {pending.map((p) => (
+                <TableRow key={p.id}>
+                  <TableCell>
+                    {p.name} <Chip size="small" color="warning" label="Nuevo" sx={{ ml: 1 }} />
+                  </TableCell>
+                  <TableCell>
+                    {p.submittedByFirstName ? `${p.submittedByFirstName} ${p.submittedByLastName}` : '—'}
+                  </TableCell>
+                  <TableCell align="right">
+                    <Button size="small" onClick={() => approveProviderMutation.mutate(p)}>Aprobar</Button>
+                    <Button
+                      size="small"
+                      onClick={() => {
+                        setProviderApproveEditTarget(p);
+                        setProviderApproveEditName(p.name);
+                      }}
+                    >
+                      Editar y aprobar
+                    </Button>
+                    <Button size="small" onClick={() => setProviderMergeTarget(p)}>Fusionar con existente</Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Paper>
+      )}
 
       {providersQuery.isLoading && <CircularProgress />}
       {providersQuery.data && active.length === 0 && (
@@ -364,7 +348,7 @@ export function HealthcarePlansPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {active.map((p) => (
+              {activePageRows.map((p) => (
                 <TableRow key={p.id} hover>
                   <TableCell>{p.code ?? '—'}</TableCell>
                   <TableCell>{p.name}</TableCell>
@@ -381,38 +365,13 @@ export function HealthcarePlansPage() {
               ))}
             </TableBody>
           </Table>
+          <PaginationFooter page={activePage} totalCount={activeTotalCount} onPageChange={setActivePage} />
         </TableContainer>
-      )}
-    </Box>
-  );
-
-  return (
-    <>
-      <Typography variant="h4" sx={{ mb: 3 }}>Prestadores y obras sociales</Typography>
-
-      {renderProviderSection(
-        'Prestadores (prepagas)',
-        'PRIVATE_INSURANCE',
-        pendingPrivate,
-        activePrivate,
-        privateCountryFilter,
-        setPrivateCountryFilter,
-      )}
-
-      {renderProviderSection(
-        'Obras sociales',
-        'SOCIAL_SECURITY',
-        pendingSocial,
-        activeSocial,
-        socialCountryFilter,
-        setSocialCountryFilter,
       )}
 
       {/* ── Diálogo: nuevo prestador/obra social ── */}
       <Dialog open={providerDialogOpen} onClose={() => setProviderDialogOpen(false)} fullWidth maxWidth="sm">
-        <DialogTitle>
-          {providerDialogTypeCode === 'PRIVATE_INSURANCE' ? 'Nuevo prestador (prepaga)' : 'Nueva obra social'}
-        </DialogTitle>
+        <DialogTitle>{newItemLabel}</DialogTitle>
         <DialogContent>
           {providerError && <Alert severity="error" sx={{ mb: 2 }}>{providerError}</Alert>}
           <TextField

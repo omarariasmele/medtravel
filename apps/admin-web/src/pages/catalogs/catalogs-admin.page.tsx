@@ -23,6 +23,7 @@ import {
 } from '@mui/material';
 
 import { apiClient } from '../../lib/api-client';
+import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface DomainCatalog {
   id: string;
@@ -148,6 +149,12 @@ export function CatalogsAdminPage() {
     setEditError(null);
   };
 
+  const sortedValues = (valuesQuery.data ?? [])
+    .slice()
+    .sort((a, b) => a.displayOrder - b.displayOrder);
+  const { pageRows: valuePageRows, page: valuePage, setPage: setValuePage, totalCount: valueTotalCount } =
+    usePagination(sortedValues);
+
   const updateMutation = useMutation({
     mutationFn: async () => {
       if (!editingValue || !editForm) return;
@@ -224,26 +231,24 @@ export function CatalogsAdminPage() {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {valuesQuery.data
-                    .slice()
-                    .sort((a, b) => a.displayOrder - b.displayOrder)
-                    .map((v) => (
-                      <TableRow key={v.id} hover onClick={() => openEdit(v)} sx={{ cursor: 'pointer' }}>
-                        <TableCell>{v.code}</TableCell>
-                        <TableCell>{v.labelEs}</TableCell>
-                        <TableCell>{v.labelEn ?? '—'}</TableCell>
-                        <TableCell>{v.displayOrder}</TableCell>
-                        <TableCell onClick={(e) => e.stopPropagation()}>
-                          <Switch
-                            size="small"
-                            checked={v.active}
-                            onChange={() => toggleActiveMutation.mutate(v)}
-                          />
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                  {valuePageRows.map((v) => (
+                    <TableRow key={v.id} hover onClick={() => openEdit(v)} sx={{ cursor: 'pointer' }}>
+                      <TableCell>{v.code}</TableCell>
+                      <TableCell>{v.labelEs}</TableCell>
+                      <TableCell>{v.labelEn ?? '—'}</TableCell>
+                      <TableCell>{v.displayOrder}</TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()}>
+                        <Switch
+                          size="small"
+                          checked={v.active}
+                          onChange={() => toggleActiveMutation.mutate(v)}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  ))}
                 </TableBody>
               </Table>
+              <PaginationFooter page={valuePage} totalCount={valueTotalCount} onPageChange={setValuePage} />
             </TableContainer>
           )}
         </>

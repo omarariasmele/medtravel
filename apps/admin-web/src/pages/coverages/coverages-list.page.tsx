@@ -15,6 +15,7 @@ import {
 
 import { apiClient } from '../../lib/api-client';
 import { labelFor, useCatalog } from '../../lib/catalog-hooks';
+import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface HealthCoverage {
   id: string;
@@ -79,6 +80,9 @@ export function CoveragesListPage() {
     return person ? `${person.firstName} ${person.lastName}` : '—';
   };
 
+  const { pageRows: coveragePageRows, page: coveragePage, setPage: setCoveragePage, totalCount: coverageTotalCount } =
+    usePagination(coveragesQuery.data ?? []);
+
   return (
     <>
       <Typography variant="h4" gutterBottom>
@@ -111,7 +115,7 @@ export function CoveragesListPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {coveragesQuery.data.map((c) => (
+              {coveragePageRows.map((c) => (
                 <TableRow key={c.id} hover>
                   <TableCell>{memberLabel(c.memberId)}</TableCell>
                   <TableCell>
@@ -130,6 +134,7 @@ export function CoveragesListPage() {
               ))}
             </TableBody>
           </Table>
+          <PaginationFooter page={coveragePage} totalCount={coverageTotalCount} onPageChange={setCoveragePage} />
         </TableContainer>
       )}
     </>

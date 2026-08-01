@@ -25,6 +25,7 @@ import {
 
 import { apiClient } from '../../lib/api-client';
 import { labelFor, useCatalog } from '../../lib/catalog-hooks';
+import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface HealthcareProfessional {
   id: string;
@@ -114,6 +115,9 @@ export function ProfessionalsPage() {
     onError: () => setError('No se pudo registrar el profesional (¿email o documento ya usado?).'),
   });
 
+  const { pageRows: professionalPageRows, page: professionalPage, setPage: setProfessionalPage, totalCount: professionalTotalCount } =
+    usePagination(listQuery.data ?? []);
+
   const isFormValid =
     form.firstName &&
     form.lastName &&
@@ -154,7 +158,7 @@ export function ProfessionalsPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {listQuery.data.map((p) => (
+              {professionalPageRows.map((p) => (
                 <TableRow key={p.id} hover>
                   <TableCell>{p.firstName} {p.lastName}</TableCell>
                   <TableCell>{labelFor(specialtyCatalog.data, p.specialtyId)}</TableCell>
@@ -174,6 +178,7 @@ export function ProfessionalsPage() {
               ))}
             </TableBody>
           </Table>
+          <PaginationFooter page={professionalPage} totalCount={professionalTotalCount} onPageChange={setProfessionalPage} />
         </TableContainer>
       )}
 

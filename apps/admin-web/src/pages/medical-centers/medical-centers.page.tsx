@@ -25,6 +25,7 @@ import {
 
 import { apiClient } from '../../lib/api-client';
 import { labelFor, useCatalog } from '../../lib/catalog-hooks';
+import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface HealthcareOrganization {
   id: string;
@@ -116,6 +117,9 @@ export function MedicalCentersPage() {
     return parts.length > 0 ? parts.join(', ') : '—';
   };
 
+  const { pageRows: orgPageRows, page: orgPage, setPage: setOrgPage, totalCount: orgTotalCount } =
+    usePagination(orgsQuery.data ?? []);
+
   return (
     <>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
@@ -147,7 +151,7 @@ export function MedicalCentersPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {orgsQuery.data.map((o) => (
+              {orgPageRows.map((o) => (
                 <TableRow key={o.id} hover>
                   <TableCell>{o.name}</TableCell>
                   <TableCell>{labelFor(typeCatalog.data, o.organizationTypeId)}</TableCell>
@@ -164,6 +168,7 @@ export function MedicalCentersPage() {
               ))}
             </TableBody>
           </Table>
+          <PaginationFooter page={orgPage} totalCount={orgTotalCount} onPageChange={setOrgPage} />
         </TableContainer>
       )}
 

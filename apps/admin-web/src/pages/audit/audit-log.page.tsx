@@ -14,6 +14,7 @@ import {
 } from '@mui/material';
 
 import { apiClient } from '../../lib/api-client';
+import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface AuditEvent {
   id: string;
@@ -65,6 +66,9 @@ export function AuditLogPage() {
     return operatorNameByUserId.get(userId) ?? userId;
   };
 
+  const { pageRows: auditPageRows, page: auditPage, setPage: setAuditPage, totalCount: auditTotalCount } =
+    usePagination(auditQuery.data ?? []);
+
   return (
     <>
       <Typography variant="h4" gutterBottom>
@@ -94,7 +98,7 @@ export function AuditLogPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {auditQuery.data.map((e) => (
+              {auditPageRows.map((e) => (
                 <TableRow key={e.id} hover>
                   <TableCell>
                     {new Date(e.performedAt).toLocaleString('es-AR')}
@@ -119,6 +123,7 @@ export function AuditLogPage() {
               ))}
             </TableBody>
           </Table>
+          <PaginationFooter page={auditPage} totalCount={auditTotalCount} onPageChange={setAuditPage} />
         </TableContainer>
       )}
     </>

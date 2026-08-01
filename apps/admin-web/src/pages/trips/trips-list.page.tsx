@@ -26,6 +26,7 @@ import {
 import { useAuth } from '../../auth/auth-context';
 import { apiClient } from '../../lib/api-client';
 import { labelFor, useCatalog } from '../../lib/catalog-hooks';
+import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface Trip {
   id: string;
@@ -143,6 +144,8 @@ export function TripsListPage() {
   const filteredTrips = (tripsQuery.data ?? []).filter(
     (t) => !tenantFilter || tenantIdByMemberId.get(t.memberId) === tenantFilter,
   );
+  const { pageRows: tripPageRows, page: tripPage, setPage: setTripPage, totalCount: tripTotalCount } =
+    usePagination(filteredTrips);
 
   return (
     <>
@@ -194,7 +197,7 @@ export function TripsListPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {filteredTrips.map((t) => (
+              {tripPageRows.map((t) => (
                 <TableRow key={t.id} hover>
                   <TableCell>{memberLabel(t.memberId)}</TableCell>
                   <TableCell>{tenantNameById.get(tenantIdByMemberId.get(t.memberId) ?? '') ?? '—'}</TableCell>
@@ -208,6 +211,7 @@ export function TripsListPage() {
               ))}
             </TableBody>
           </Table>
+          <PaginationFooter page={tripPage} totalCount={tripTotalCount} onPageChange={setTripPage} />
         </TableContainer>
       )}
 

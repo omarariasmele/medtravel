@@ -27,6 +27,7 @@ import {
 
 import { apiClient } from '../../lib/api-client';
 import { labelFor, useCatalog } from '../../lib/catalog-hooks';
+import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface Tenant {
   id: string;
@@ -95,6 +96,8 @@ export function TenantsPage() {
   });
 
   const countryCatalog = useCatalog('COUNTRY');
+  const { pageRows: tenantPageRows, page: tenantPage, setPage: setTenantPage, totalCount: tenantTotalCount } =
+    usePagination(tenantsQuery.data ?? []);
 
   const setField = (field: keyof FormState) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [field]: e.target.value }));
@@ -185,7 +188,7 @@ export function TenantsPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {tenantsQuery.data.map((t) => (
+              {tenantPageRows.map((t) => (
                 <TableRow key={t.id} hover onClick={() => openEdit(t)} sx={{ cursor: 'pointer' }}>
                   <TableCell>{t.code}</TableCell>
                   <TableCell>{t.name}</TableCell>
@@ -203,6 +206,7 @@ export function TenantsPage() {
               ))}
             </TableBody>
           </Table>
+          <PaginationFooter page={tenantPage} totalCount={tenantTotalCount} onPageChange={setTenantPage} />
         </TableContainer>
       )}
 

@@ -31,6 +31,7 @@ import UploadFileIcon from '@mui/icons-material/UploadFile';
 import { apiClient } from '../../lib/api-client';
 import { useAuth } from '../../auth/auth-context';
 import { useCatalog } from '../../lib/catalog-hooks';
+import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface PartnerRecord {
   id: string;
@@ -168,6 +169,8 @@ export function PartnerRecordsPage() {
   const filteredDeclared = (declaredQuery.data ?? []).filter(
     (d) => !tenantFilter || d.tenant_id === tenantFilter,
   );
+  const { pageRows: recordPageRows, page: recordPage, setPage: setRecordPage, totalCount: recordTotalCount } =
+    usePagination(filteredRecords);
 
   const plansQuery = useQuery({
     queryKey: ['coverage', 'assistance-plans', approveTarget?.tenant_id],
@@ -480,7 +483,7 @@ export function PartnerRecordsPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {filteredRecords.map((r) => (
+              {recordPageRows.map((r) => (
                 <TableRow key={r.id}>
                   <TableCell>{r.tenant_name ?? tenantNameById.get(r.tenant_id) ?? '—'}</TableCell>
                   <TableCell>{r.partner_ref_id}</TableCell>
@@ -508,6 +511,7 @@ export function PartnerRecordsPage() {
               ))}
             </TableBody>
           </Table>
+          <PaginationFooter page={recordPage} totalCount={recordTotalCount} onPageChange={setRecordPage} />
         </TableContainer>
       )}
 

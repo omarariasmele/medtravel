@@ -33,6 +33,7 @@ import CardMembershipIcon from '@mui/icons-material/CardMembership';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import PersonOffIcon from '@mui/icons-material/PersonOff';
 import LocalPharmacyIcon from '@mui/icons-material/LocalPharmacy';
+import VolunteerActivismIcon from '@mui/icons-material/VolunteerActivism';
 
 import { useAuth } from '../auth/auth-context';
 import logoHorizontal from '../assets/brand/logo-horizontal.png';
@@ -159,13 +160,25 @@ export function AppLayout() {
           {claims?.canManageConfig && (
             <ListItemButton
               component={RouterLink}
-              to="/healthcare-plans"
-              selected={location.pathname === '/healthcare-plans'}
+              to="/healthcare-providers"
+              selected={location.pathname === '/healthcare-providers'}
             >
               <ListItemIcon>
                 <LocalPharmacyIcon />
               </ListItemIcon>
-              <ListItemText primary="Prestadores y planes de salud" />
+              <ListItemText primary="Prestadores (prepagas)" />
+            </ListItemButton>
+          )}
+          {claims?.canManageConfig && (
+            <ListItemButton
+              component={RouterLink}
+              to="/healthcare-social-security"
+              selected={location.pathname === '/healthcare-social-security'}
+            >
+              <ListItemIcon>
+                <VolunteerActivismIcon />
+              </ListItemIcon>
+              <ListItemText primary="Obras sociales" />
             </ListItemButton>
           )}
           {claims?.canManageConfig && (

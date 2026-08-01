@@ -27,7 +27,8 @@ import { ProfessionalRegistrationPage } from './pages/professional-registration/
 import { SharePreviewPage } from './pages/share-preview/share-preview.page';
 import { AiConsumptionPage } from './pages/ai-consumption/ai-consumption.page';
 import { TravelersWithoutCoveragePage } from './pages/travelers-without-coverage/travelers-without-coverage.page';
-import { HealthcarePlansPage } from './pages/healthcare-plans/healthcare-plans.page';
+import { HealthcareProvidersPage } from './pages/healthcare-plans/healthcare-providers.page';
+import { HealthcareSocialSecurityPage } from './pages/healthcare-plans/healthcare-social-security.page';
 
 function App() {
   return (
@@ -60,7 +61,8 @@ function App() {
           <Route path="/assistance-plans" element={<AssistancePlansPage />} />
           <Route path="/ai-consumption" element={<AiConsumptionPage />} />
           <Route path="/travelers-without-coverage" element={<TravelersWithoutCoveragePage />} />
-          <Route path="/healthcare-plans" element={<HealthcarePlansPage />} />
+          <Route path="/healthcare-providers" element={<HealthcareProvidersPage />} />
+          <Route path="/healthcare-social-security" element={<HealthcareSocialSecurityPage />} />
         </Route>
       </Route>
 

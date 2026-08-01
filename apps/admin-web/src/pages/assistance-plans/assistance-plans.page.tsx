@@ -28,6 +28,7 @@ import {
 import { apiClient } from '../../lib/api-client';
 import { useAuth } from '../../auth/auth-context';
 import { labelFor, useCatalog } from '../../lib/catalog-hooks';
+import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface AssistancePlan {
   id: string;
@@ -113,6 +114,8 @@ export function AssistancePlansPage() {
   const filteredPlans = (plansQuery.data ?? []).filter(
     (p) => !tenantFilter || p.tenantId === tenantFilter,
   );
+  const { pageRows: planPageRows, page: planPage, setPage: setPlanPage, totalCount: planTotalCount } =
+    usePagination(filteredPlans);
 
   function openCreate() {
     setEditTarget(null);
@@ -223,7 +226,7 @@ export function AssistancePlansPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {filteredPlans.map((p) => (
+              {planPageRows.map((p) => (
                 <TableRow key={p.id} hover>
                   {isConfigAdmin && <TableCell>{tenantNameById.get(p.tenantId) ?? '—'}</TableCell>}
                   <TableCell>{p.code}</TableCell>
@@ -241,6 +244,7 @@ export function AssistancePlansPage() {
               ))}
             </TableBody>
           </Table>
+          <PaginationFooter page={planPage} totalCount={planTotalCount} onPageChange={setPlanPage} />
         </TableContainer>
       )}
 

@@ -22,6 +22,7 @@ import { useAuth } from '../../auth/auth-context';
 import { apiClient } from '../../lib/api-client';
 import { labelFor, useCatalog } from '../../lib/catalog-hooks';
 import { useTravelersOverview } from '../../lib/travelers-overview-hooks';
+import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface Tenant {
   id: string;
@@ -64,6 +65,8 @@ export function TravelersListPage() {
       (!tenantFilter || r.tenantId === tenantFilter) &&
       (!countryFilter || r.countryResidenceId === countryFilter),
   );
+  const { pageRows: travelerPageRows, page: travelerPage, setPage: setTravelerPage, totalCount: travelerTotalCount } =
+    usePagination(filteredRows);
 
   return (
     <>
@@ -130,7 +133,7 @@ export function TravelersListPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {filteredRows.map((r) => (
+              {travelerPageRows.map((r) => (
                 <TableRow
                   key={r.memberId}
                   hover
@@ -152,6 +155,7 @@ export function TravelersListPage() {
               ))}
             </TableBody>
           </Table>
+          <PaginationFooter page={travelerPage} totalCount={travelerTotalCount} onPageChange={setTravelerPage} />
         </TableContainer>
       )}
     </>
