@@ -6,6 +6,7 @@ import {
 import * as nodemailer from 'nodemailer';
 
 import { TenantTransactionManager } from '@common/database/tenant-transaction.manager';
+import { logoAttachment, renderEmailHtml } from './email-template';
 
 interface SmtpConfigRow {
   host: string;
@@ -46,7 +47,8 @@ export class MailService {
       from: `"${config.from_name}" <${config.from_address}>`,
       to,
       subject,
-      html,
+      html: renderEmailHtml(html),
+      attachments: [logoAttachment()],
     });
   }
 

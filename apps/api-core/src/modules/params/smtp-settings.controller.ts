@@ -1,12 +1,14 @@
-import { Body, Controller, Get, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Put, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import { CurrentContext } from '@common/request-context/current-context.decorator';
 import { RequestContextData } from '@common/request-context/request-context.types';
+import { ConfigAccessGuard } from '@common/auth/config-access.guard';
 
 import { SmtpSettingsService, SmtpSettingsView } from './smtp-settings.service';
 import { UpdateSmtpSettingsDto } from './dto/smtp-settings.dto';
+import { TestSmtpSettingsDto } from './dto/test-smtp-settings.dto';
 
 /**
  * Restringido al Superadmin de plataforma
@@ -17,7 +19,7 @@ import { UpdateSmtpSettingsDto } from './dto/smtp-settings.dto';
  */
 @ApiTags('params/admin/smtp-settings')
 @ApiBearerAuth()
-@UseGuards(AuthGuard('jwt'))
+@UseGuards(AuthGuard('jwt'), ConfigAccessGuard)
 @Controller('params/admin/smtp-settings')
 export class SmtpSettingsController {
   constructor(private readonly smtpSettingsService: SmtpSettingsService) {}
@@ -33,5 +35,10 @@ export class SmtpSettingsController {
     @CurrentContext() context: RequestContextData,
   ): Promise<SmtpSettingsView> {
     return this.smtpSettingsService.upsert(dto, context.userId!);
+  }
+
+  @Post('test')
+  test(@Body() dto: TestSmtpSettingsDto): Promise<{ ok: boolean }> {
+    return this.smtpSettingsService.sendTestEmail(dto);
   }
 }

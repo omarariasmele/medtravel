@@ -4,7 +4,7 @@
   "sourceRoot": "src",
   "compilerOptions": {
     "deleteOutDir": true,
-    "assets": ["database/sql/**/*.sql"],
+    "assets": ["database/sql/**/*.sql", "modules/mail/assets/**/*.png"],
     "watchAssets": true
   }
 }
