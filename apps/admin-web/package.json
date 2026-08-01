@@ -17,6 +17,7 @@
     "@mui/material": "^9.2.0",
     "@tanstack/react-query": "^5.101.4",
     "axios": "^1.18.1",
+    "papaparse": "^5.5.4",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-hook-form": "^7.83.0",
@@ -25,6 +26,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.13.2",
+    "@types/papaparse": "^5.5.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",

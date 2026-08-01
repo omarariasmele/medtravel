@@ -26,6 +26,13 @@ interface AuditEvent {
   performedAt: string;
 }
 
+interface Operator {
+  id: string;
+  userId: string;
+  firstName: string;
+  lastName: string;
+}
+
 const OPERATION_COLOR: Record<AuditEvent['operation'], 'success' | 'info' | 'error'> = {
   INSERT: 'success',
   UPDATE: 'info',
@@ -40,6 +47,23 @@ export function AuditLogPage() {
       return data;
     },
   });
+
+  const operatorsQuery = useQuery({
+    queryKey: ['operations', 'operators'],
+    queryFn: async () => {
+      const { data } = await apiClient.get<Operator[]>('/operations/operators');
+      return data;
+    },
+  });
+
+  const operatorNameByUserId = new Map(
+    (operatorsQuery.data ?? []).map((o) => [o.userId, `${o.firstName} ${o.lastName}`]),
+  );
+
+  const performedByLabel = (userId?: string) => {
+    if (!userId) return '—';
+    return operatorNameByUserId.get(userId) ?? userId;
+  };
 
   return (
     <>
@@ -90,7 +114,7 @@ export function AuditLogPage() {
                       ? Object.keys(e.changedFields).join(', ')
                       : '—'}
                   </TableCell>
-                  <TableCell>{e.performedBy ?? '—'}</TableCell>
+                  <TableCell>{performedByLabel(e.performedBy)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

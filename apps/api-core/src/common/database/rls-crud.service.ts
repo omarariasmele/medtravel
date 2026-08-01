@@ -39,19 +39,34 @@ export class RlsCrudService<T extends ObjectLiteral> {
   ) {}
 
   async findAll(query: Record<string, string>): Promise<T[]> {
+    const { limit: rawLimit, ...filters } = query;
+    const take = this.parseLimit(rawLimit);
     try {
       return await this.txManager.runInTransaction((queryRunner) => {
         if (this.encryptedFields.length === 0) {
           return queryRunner.manager.find(this.entityClass, {
-            where: query as any,
-            take: 100,
+            where: filters as any,
+            take,
           });
         }
-        return this.findAllEncrypted(queryRunner, query);
+        return this.findAllEncrypted(queryRunner, filters, take);
       });
     } catch (error) {
       mapPgError(error);
     }
+  }
+
+  /**
+   * Tope duro de 500 para no permitir un scrape completo de una tabla
+   * grande vía un solo `?limit=`. El default sigue siendo 100 (mismo
+   * comportamiento de antes) para no cambiar la respuesta de ningún
+   * cliente existente que no pase `limit` — solo quien lo necesita
+   * (ej. Catálogos/Parámetros con >100 dominios) lo pide explícitamente.
+   */
+  private parseLimit(raw: string | undefined): number {
+    const n = raw ? parseInt(raw, 10) : 100;
+    if (!Number.isFinite(n) || n < 1) return 100;
+    return Math.min(n, 500);
   }
 
   async findOne(id: string): Promise<T> {
@@ -166,6 +181,7 @@ export class RlsCrudService<T extends ObjectLiteral> {
   private async findAllEncrypted(
     queryRunner: QueryRunner,
     query: Record<string, string>,
+    take: number,
   ): Promise<T[]> {
     const metadata = this.metadata(queryRunner);
     const qb = this.baseSelectQuery(queryRunner, metadata);
@@ -178,7 +194,7 @@ export class RlsCrudService<T extends ObjectLiteral> {
         qb.andWhere(`"${ALIAS}"."${dbCol}" = :${key}`, { [key]: value });
       }
     }
-    return qb.limit(100).getRawMany<T>();
+    return qb.limit(take).getRawMany<T>();
   }
 
   private async findOneEncrypted(

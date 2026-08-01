@@ -1,5 +1,7 @@
 import { EntityTarget, ObjectLiteral } from 'typeorm';
 
+import { DomainCatalogEntity } from './entities/domain-catalog.entity';
+import { CatalogValueEntity } from './entities/catalog-value.entity';
 import { WorkflowDefinitionEntity } from './entities/workflow-definition.entity';
 import { StateTransitionEntity } from './entities/state-transition.entity';
 import { WorkflowActionEntity } from './entities/workflow-action.entity';
@@ -22,13 +24,19 @@ import { ConsentPurposeEntity } from './entities/consent-purpose.entity';
 import { JurisdictionRuleEntity } from './entities/jurisdiction-rule.entity';
 
 /**
- * Resto de tablas de params (config/admin), separadas de
- * domain-catalogs/catalog-values/catalog-translations que ya tienen su
- * propio controller dedicado en catalogs.controller.ts
- * (GET /params/catalogs/:domainCode) — este registro monta en
- * /params/admin/:resource para no pisar esa ruta.
+ * Resto de tablas de params (config/admin). domain-catalogs/
+ * catalog-values también se administran acá (alta/edición real de
+ * catálogos — países, tipos de alergia, etc.) — la lectura pública
+ * de solo-lectura sigue en catalogs.controller.ts
+ * (GET /params/catalogs/:domainCode, sin el guard de abajo, la usa
+ * cualquier operador para poblar selects). Todo este controller está
+ * gateado con ConfigAccessGuard (ver params-admin-resource.controller.ts):
+ * ninguna de estas tablas tiene RLS por tenant, son configuración
+ * global del sistema.
  */
 export const PARAMS_REGISTRY: Record<string, EntityTarget<ObjectLiteral>> = {
+  'domain-catalogs': DomainCatalogEntity,
+  'catalog-values': CatalogValueEntity,
   'workflow-definitions': WorkflowDefinitionEntity,
   'state-transitions': StateTransitionEntity,
   'workflow-actions': WorkflowActionEntity,

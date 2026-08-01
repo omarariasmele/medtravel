@@ -23,6 +23,7 @@ import {
   Typography,
 } from '@mui/material';
 
+import { useAuth } from '../../auth/auth-context';
 import { apiClient } from '../../lib/api-client';
 import { labelFor, useCatalog } from '../../lib/catalog-hooks';
 
@@ -39,6 +40,12 @@ interface Trip {
 interface Member {
   id: string;
   personId: string;
+  tenantId: string;
+}
+
+interface Tenant {
+  id: string;
+  name: string;
 }
 
 interface Person {
@@ -57,9 +64,11 @@ interface FormState {
 const EMPTY_FORM: FormState = { memberId: '', tripName: '', tripStart: '', tripEnd: '' };
 
 export function TripsListPage() {
+  const { claims } = useAuth();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
+  const [tenantFilter, setTenantFilter] = useState('');
   const queryClient = useQueryClient();
 
   const tripsQuery = useQuery({
@@ -92,6 +101,17 @@ export function TripsListPage() {
     (membersQuery.data ?? []).map((m, i) => [m.id, personQueries[i]?.data]),
   );
 
+  const tenantsQuery = useQuery({
+    queryKey: ['identity', 'tenants'],
+    queryFn: async () => {
+      const { data } = await apiClient.get<Tenant[]>('/identity/tenants');
+      return data;
+    },
+  });
+
+  const tenantNameById = new Map((tenantsQuery.data ?? []).map((t) => [t.id, t.name]));
+  const tenantIdByMemberId = new Map((membersQuery.data ?? []).map((m) => [m.id, m.tenantId]));
+
   const statusCatalog = useCatalog('TRIP_STATUS');
 
   const createMutation = useMutation({
@@ -120,6 +140,10 @@ export function TripsListPage() {
     return person ? `${person.firstName} ${person.lastName}` : '—';
   };
 
+  const filteredTrips = (tripsQuery.data ?? []).filter(
+    (t) => !tenantFilter || tenantIdByMemberId.get(t.memberId) === tenantFilter,
+  );
+
   return (
     <>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
@@ -129,18 +153,40 @@ export function TripsListPage() {
         </Button>
       </Box>
 
+      {claims?.canManageConfig && (tenantsQuery.data?.length ?? 0) > 1 && (
+        <Box sx={{ mb: 2 }}>
+          <TextField
+            select
+            label="Filtrar por empresa"
+            size="small"
+            sx={{ minWidth: 260 }}
+            value={tenantFilter}
+            onChange={(e) => setTenantFilter(e.target.value)}
+          >
+            <MenuItem value="">Todas las empresas</MenuItem>
+            {(tenantsQuery.data ?? []).map((t) => (
+              <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>
+            ))}
+          </TextField>
+        </Box>
+      )}
+
       {tripsQuery.isLoading && <CircularProgress />}
       {tripsQuery.isError && <Alert severity="error">No se pudieron cargar los viajes.</Alert>}
       {tripsQuery.data && tripsQuery.data.length === 0 && (
         <Alert severity="info">No hay viajes registrados en este tenant.</Alert>
       )}
+      {tripsQuery.data && tripsQuery.data.length > 0 && filteredTrips.length === 0 && (
+        <Alert severity="info">Sin viajes para esta empresa.</Alert>
+      )}
 
-      {tripsQuery.data && tripsQuery.data.length > 0 && (
+      {filteredTrips.length > 0 && (
         <TableContainer component={Paper}>
           <Table size="small">
             <TableHead>
               <TableRow>
                 <TableCell>Viajero</TableCell>
+                <TableCell>Empresa</TableCell>
                 <TableCell>Nombre del viaje</TableCell>
                 <TableCell>Inicio</TableCell>
                 <TableCell>Fin</TableCell>
@@ -148,9 +194,10 @@ export function TripsListPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {tripsQuery.data.map((t) => (
+              {filteredTrips.map((t) => (
                 <TableRow key={t.id} hover>
                   <TableCell>{memberLabel(t.memberId)}</TableCell>
+                  <TableCell>{tenantNameById.get(tenantIdByMemberId.get(t.memberId) ?? '') ?? '—'}</TableCell>
                   <TableCell>{t.tripName ?? '—'}</TableCell>
                   <TableCell>{new Date(t.tripStart).toLocaleDateString('es-AR')}</TableCell>
                   <TableCell>{new Date(t.tripEnd).toLocaleDateString('es-AR')}</TableCell>
