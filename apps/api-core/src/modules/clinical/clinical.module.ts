@@ -24,6 +24,8 @@ import { RecordReviewTaskEntity } from './entities/record-review-task.entity';
 import { SubmissionVisibilityPolicyEntity } from './entities/submission-visibility-policy.entity';
 import { ClinicalResourceController } from './clinical-resource.controller';
 import { ProfessionalsRegistrationController } from './professionals-registration.controller';
+import { PatientSummaryController } from './patient-summary.controller';
+import { SharePreviewController } from './share-preview.controller';
 
 @Module({
   imports: [
@@ -53,6 +55,8 @@ import { ProfessionalsRegistrationController } from './professionals-registratio
   ],
   controllers: [
     ProfessionalsRegistrationController,
+    PatientSummaryController,
+    SharePreviewController,
     ClinicalResourceController,
   ],
   exports: [TypeOrmModule],
