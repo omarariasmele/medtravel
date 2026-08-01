@@ -327,6 +327,15 @@ algún nivel de consentimiento explícito (`core.member_data_consents`
 ya existe para otra cosa, podría ser el lugar). Pendiente de decisión
 antes de construir "Usuarios / viajeros" como pantalla real.
 
+**Resuelto** (decisión de producto confirmada): ver
+[`proposed-persons-tenant-read.sql`](src/database/sql/proposed-persons-tenant-read.sql)
+— política `persons_tenant_member_select` adicional (no reemplaza
+`persons_self_access`: sigue siendo la única que aplica a INSERT/UPDATE/DELETE,
+el operador solo gana lectura). Ampliada en la ronda de RBAC (gap #17) con el
+mismo bypass `core.current_operator_can_manage_config()` que el resto de las
+tablas raíz, para que un superadmin de plataforma también pueda leer
+`core.persons` cross-tenant.
+
 ## 14. `COUNTRY` existe como dominio pero nunca tuvo ningún `catalog_value` sembrado
 
 **Archivo:** [`proposed-country-catalog.sql`](src/database/sql/proposed-country-catalog.sql)
@@ -437,6 +446,268 @@ devuelve bytes), decrypt correcto vía `/me/profile`,
 `/identity/persons/:id` y `/clinical/allergies` (creado y leído
 sembrado con el header de caso activo), y el e2e suite completo
 (22/22) sin regresiones.
+
+## 17. `core.tenants` nunca tuvo RLS habilitada — cualquier operador podía listar/editar TODAS las empresas del sistema
+
+**Archivos:** [`proposed-tenants-rls.sql`](src/database/sql/proposed-tenants-rls.sql),
+[`proposed-tenants-traveler-read.sql`](src/database/sql/proposed-tenants-traveler-read.sql),
+[`proposed-platform-tenant-and-config-bypass.sql`](src/database/sql/proposed-platform-tenant-and-config-bypass.sql)
+
+A diferencia del resto del sistema (members, cases, coverages, etc.), que sí está
+scopeado por `tenant_id`, `core.tenants` era la única tabla raíz sin ninguna
+restricción: `GET/PATCH/POST /identity/tenants` exponía y dejaba editar/crear
+cualquier empresa a cualquier operador autenticado, de cualquier tenant.
+
+Se agregó `tenants_self_or_config_admin` (un operador ve/edita solo su propio
+tenant; `can_manage_config = TRUE` ve/administra todas) y
+`core.current_operator_can_manage_config()` (`SECURITY DEFINER`, resuelve el
+permiso del rol porque RLS solo puede leer GUCs de sesión, no el rol del
+operador). Un viajero (sin `tenantId` de operador en su sesión) tampoco podía
+ver el nombre de su propia empresa de asistencia aunque sí veía su enrollment —
+`proposed-tenants-traveler-read.sql` amplía la política para incluir
+`id IN (SELECT tenant_id FROM core.members WHERE person_id = ...)`.
+
+Además, `core.tenants.is_platform_tenant` distingue OYSGROUP (administradora de
+la plataforma) de las empresas de asistencia reales — sin esta columna no había
+forma de separar "la plataforma" de "un cliente más" en el dashboard, ni de
+confirmar que solo el tenant de plataforma tiene superusuarios. Con ese flag se
+agregó también bypass de `can_manage_config` a `members_tenant_or_self`,
+`cases_access`, `trips_access` y `enrollments_access` (para que OYSGROUP pueda
+ver y filtrar por empresa en Viajes/Usuarios/Casos) — **a propósito sin tocar**
+`coverage.health_coverages`: ese dato médico/obra social sigue exigiendo
+consentimiento del titular incluso para OYSGROUP.
+
+**Encontrado:** armando la pantalla "Empresas" del panel.
+
+**Relacionado:** `operations.get_operator_login_context()` (ya existía) se
+amplió en la misma ronda para devolver también los flags del rol
+(`can_manage_config`/`can_manage_operators`/`can_close_cases`/
+`can_access_medical`), llevados en el JWT — así el resto del sistema (guards de
+ruta, menú de admin-web, las políticas de arriba) puede gatear sin una consulta
+extra por request.
+
+## 18. El schema `ai` tenía `GRANT` por tabla pero nunca `GRANT USAGE ON SCHEMA` — bloqueaba cualquier request al asistente
+
+**Archivos:** [`proposed-ai-module.sql`](src/database/sql/proposed-ai-module.sql),
+[`proposed-ai-schema-grant.sql`](src/database/sql/proposed-ai-schema-grant.sql)
+
+Mismo patrón que los gaps #1/#9 (GRANT es un requisito previo e independiente de
+RLS en Postgres), pero a nivel de esquema en vez de tabla: `ai.conversations`/
+`ai.messages`/`ai.proposals` tenían `GRANT SELECT/INSERT/UPDATE` correctos, pero
+sin `USAGE ON SCHEMA ai` Postgres rechaza cualquier acceso con "permiso denegado
+al esquema ai" sin importar los grants de tabla. Detectado probando en vivo
+`POST /me/health-assistant/chat` con `AI_ENABLED=true`.
+
+De paso quedan documentadas acá las funciones `SECURITY DEFINER` que acompañan
+al módulo (no son un gap, son necesarias porque `ai.messages` solo deja ver "lo
+propio" a un viajero, y el dashboard de consumo — pedido explícito del usuario,
+"ir monitoreando el consumo de agentes de IA en costos o tokens... un promedio
+de consumo, quien consumió más que otro" — necesita agregados de TODOS los
+usuarios): `ai.get_platform_summary()`, `ai.get_top_users()`,
+`ai.get_daily_trend()` ([`proposed-ai-consumption-dashboard-fns.sql`](src/database/sql/proposed-ai-consumption-dashboard-fns.sql))
+y `ai.get_consumption_totals()` ([`proposed-ai-consumption-totals-fn.sql`](src/database/sql/proposed-ai-consumption-totals-fn.sql),
+para el chequeo de `AI_DAILY_BUDGET_USD`/`AI_MONTHLY_BUDGET_USD`). El controller
+ya valida `canManageConfig` (`ConfigAccessGuard`) antes de llamarlas.
+
+## 19. `operations.case_medical_events` tenía `GRANT` pero nunca se le habilitó RLS; `CASE_RESOLUTION_TYPE` y `NOTIFICATION_TYPE.BREAK_GLASS_ACCESS` sin sembrar
+
+**Archivos:** [`proposed-case-medical-events-rls.sql`](src/database/sql/proposed-case-medical-events-rls.sql),
+[`proposed-case-resolution-types.sql`](src/database/sql/proposed-case-resolution-types.sql),
+[`proposed-break-glass-notification-type.sql`](src/database/sql/proposed-break-glass-notification-type.sql)
+
+**Gap de seguridad real, mismo patrón que #8/#15/#20:** `007_operations.sql`
+otorga `GRANT SELECT/INSERT` sobre `case_medical_events` (la bitácora de un
+caso — notas de cada operador interviniente) pero nunca la habilita con RLS.
+Sin este patch, cualquier operador autenticado de cualquier tenant podía leer o
+insertar notas en la bitácora de cualquier caso de cualquier empresa. Se agregó
+`case_medical_events_access` con el mismo criterio que `cases_access`: tenant
+del caso, o el propio viajero titular.
+
+Dos gaps de catálogo vacío acompañan esto (mismo patrón que #3/#11): el schema
+ya tenía las columnas para cerrar un caso (`resolution_type_id`,
+`resolution_notes`, `resolved_at`, `closed_at`, `closed_by` en
+`operations.emergency_cases`) pero el dominio `CASE_RESOLUTION_TYPE` nunca se
+creó — pedido explícito del usuario ("no veo que el cierre de un caso esté
+contemplado en el modelo actual"), resuelto sembrando 8 valores. Y conectar
+Break Glass clínico a HTTP por primera vez hubiera fallado por una violación de
+constraint `NOT NULL`: el trigger `audit.log_break_glass_access()` inserta con
+`params.catalog_id('NOTIFICATION_TYPE', 'BREAK_GLASS_ACCESS')`, pero el dominio
+`NOTIFICATION_TYPE` nunca se sembró — nunca detectado porque el flujo nunca se
+había ejercitado de punta a punta.
+
+**Encontrado:** al construir el historial/bitácora de caso y el diálogo de
+cierre de caso en admin-web.
+
+## 20. Las tablas de matching de pólizas de partners nunca tuvieron RLS; nombre/documento del partner nunca se cifraron
+
+**Archivos:** [`proposed-partner-matching-rls.sql`](src/database/sql/proposed-partner-matching-rls.sql),
+[`proposed-partner-records-encryption.sql`](src/database/sql/proposed-partner-records-encryption.sql),
+[`proposed-partner-records-gender.sql`](src/database/sql/proposed-partner-records-gender.sql),
+[`proposed-partner-matching-catalogs.sql`](src/database/sql/proposed-partner-matching-catalogs.sql),
+[`proposed-partner-matching-function.sql`](src/database/sql/proposed-partner-matching-function.sql)
+
+**Gap de seguridad real:** `core.partner_member_records` /
+`identity_match_candidates` / `identity_match_decisions` tenían `GRANT`
+INSERT/SELECT/UPDATE para `app_runtime` desde `003_core_identity.sql`, pero
+**ninguna política de RLS ni siquiera `ENABLE ROW LEVEL SECURITY`** — exponerlas
+tal cual (como requiere que una empresa cargue sus pólizas) hubiera dejado que
+cualquier operador viera las pólizas de cualquier empresa. Se agregó el mismo
+patrón tenant-scoped ya usado para members/cases/trips/enrollments.
+
+`core.partner_member_records.raw_name`/`raw_doc_number` habían quedado sin
+cifrar en el diseño original (comentario "dato del partner, sin cifrar" en
+`003_core_identity.sql`) — pero es nombre + documento de identidad de una
+persona real, la misma clase de dato que ya se cifra en
+`core.persons`/`external_identifiers`/`healthcare_professionals`. La tabla
+nunca tuvo filas reales, así que la migración a `BYTEA` fue directa. También se
+agregó `raw_gender` (dato crudo del partner, mismo patrón que `raw_doc_type`,
+sin FK) — sin esto no se podía distinguir a dos personas que comparten número
+de documento.
+
+`proposed-partner-matching-function.sql` agrega `core.try_match_partner_record()`/
+`core.try_match_pending_records_for_person()` (`SECURITY DEFINER`, matching v1
+deliberadamente simple: solo exacto por `doc_number`) y
+`proposed-partner-matching-catalogs.sql` siembra el dominio
+`MATCH_CANDIDATE_STATUS` (no existía) y los valores de `MATCH_TYPE`/
+`VERIFICATION_SOURCE`/`IMPORT_STATUS` (existían vacíos) que esas funciones
+necesitan para poder insertar.
+
+**Encontrado:** al conectar por primera vez la carga de pólizas de una empresa
+a un controller real.
+
+## 21. No existía un camino para que un viajero declare su propia póliza cuando la empresa todavía no la cargó
+
+**Archivo:** [`proposed-member-declared-policies.sql`](src/database/sql/proposed-member-declared-policies.sql)
+
+No es un bug del schema — es una tabla y un flujo nuevos, pedidos por el
+usuario. `core.member_declared_policies` (con su propia RLS: el tenant, el
+propio titular, o `can_manage_config`) modela "declaración propia → aprobación
+por la empresa → enrollment real", mismo patrón que las notas de médico sin
+registrar (draft → aprobación → promoción a la tabla real) — un viajero no
+puede crear directamente un `coverage.travel_assistance_enrollments` porque
+`plan_id` es `NOT NULL` ahí y el viajero no elige el plan exacto de la empresa.
+`core.declare_member_policy()`/`core.approve_member_declared_policy()`
+(`SECURITY DEFINER`) implementan las dos puntas.
+
+## 22. Un viajero no podía crear su propio caso de asistencia de punta a punta — bloqueado por diseño, no por bug
+
+**Archivo:** [`proposed-member-emergency-cases.sql`](src/database/sql/proposed-member-emergency-cases.sql)
+
+`operations.emergency_cases` sí deja insertar el caso desde `/me` (`cases_access`
+permite `member_id` propio), pero `case_participants_insert` es deliberadamente
+solo para operador/superadmin ("gestión de participantes es tarea de operador,
+no del viajero" — `proposed-tenant-access-model.sql`, gap #8) — así que un
+INSERT directo del viajero dejaría el caso creado pero **sin el viajero como
+participante**, y sin ser participante no puede entrar a la sala de chat de su
+propio caso (`events.gateway.ts` valida `is_active_case_participant` en cada
+join). `operations.create_member_emergency_case()` (`SECURITY DEFINER`) resuelve
+exactamente ese único caso: crea el caso, agrega al viajero como participante y
+crea el canal de chat (gap adicional encontrado en el camino: ningún otro
+código creaba esa fila — un caso podía existir sin canal de chat), todo
+atómicamente, sin abrir la política general de `case_participants_insert` a los
+viajeros para el resto de los casos.
+
+**Encontrado:** implementando el Paso 2 del brief (creación de caso desde la
+app Flutter).
+
+## 23. El flujo de compartir historia clínica con un médico (QR/link) reutiliza un camino de RLS que existía diseñado pero nunca conectado
+
+**Archivos:** [`proposed-share-links.sql`](src/database/sql/proposed-share-links.sql),
+[`proposed-shared-membership.sql`](src/database/sql/proposed-shared-membership.sql),
+[`proposed-patient-summary.sql`](src/database/sql/proposed-patient-summary.sql),
+[`proposed-professional-registration-v2.sql`](src/database/sql/proposed-professional-registration-v2.sql)
+
+Hallazgo clave (no es un bug): `clinical.has_clinical_access()`
+(`000_extensions.sql`) ya tenía un camino #2 pensado para esto — GUCs
+`app.emergency_token_active`/`app.emergency_token_person_id`, ya mapeados por
+`RequestContextData` — pero nunca se usaron porque nunca existió un endpoint de
+redención de token. Este set de patches no reimplementa el filtrado de
+historia clínica (alergias/condiciones/medicamentos siguen pasando por las
+mismas tablas con la RLS de siempre); solo agrega lo que faltaba:
+`emergency.redeem_share_token()` (valida vigencia/usos/estado, loguea en
+`access_log`/`token_usage_log`, que existían sin ningún writer),
+`emergency.submit_anonymous_share_note()` (nota de un médico sin sesión, Hito 1)
+y `emergency.claim_share_note()` (el médico se registra/loguea después y
+reclama esa nota como un `encounter_submission` real de su autoría, certificado
+solo si su `trust_level` ya es `IDENTITY_VERIFIED` o superior — más bajo que el
+umbral de MFA obligatorio `PROFESSIONAL_CERTIFIED`, a propósito).
+
+`emergency_contacts` (`core.member_contacts`, RLS tenant/self) y la membresía de
+asistencia (`coverage.travel_assistance_enrollments`, RLS tenant/self) tampoco
+contemplaban el camino de token de emergencia — mismo puente puntual
+`SECURITY DEFINER` que reutiliza exactamente `has_clinical_access()`:
+`emergency.get_shared_contacts()` y `emergency.get_shared_membership()`.
+`clinical.get_patient_summary()` hace lo mismo para datos demográficos básicos
+(sexo, fecha de nacimiento, país) que hoy no se veían en ningún lado de la
+historia clínica de un caso — `core.persons` es self-access-only por diseño
+(gap #13), así que no hay `findById()` genérico posible sin este puente.
+
+`proposed-professional-registration-v2.sql` amplía el alta del profesional
+(sexo, provincia/localidad, CUIT si es institución) y siembra los dominios que
+faltaban para poder crear `encounters`/`encounter_submissions` reales
+(`ENCOUNTER_TYPE`, `ENCOUNTER_STATUS`, `SUBMISSION_TYPE`, `REVIEW_PRIORITY`,
+`REVIEW_DECISION`, `GENDER`) — existían vacíos desde `008_seeds.sql`.
+
+**Encontrado:** implementando compartir historia clínica con el médico tratante
+(QR/link), Hitos 1 y 2.
+
+## 24. `core.has_platform_config_access()` exigía `tenant_id IS NULL`, que ningún superadmin real tiene — bloqueaba SMTP para el propio superadmin; el username de SMTP nunca se cifró
+
+**Archivos:** [`proposed-smtp-access-fix.sql`](src/database/sql/proposed-smtp-access-fix.sql),
+[`proposed-smtp-username-encryption.sql`](src/database/sql/proposed-smtp-username-encryption.sql)
+
+**Bug real**, encontrado probando "Correo (SMTP)" con el superadmin real:
+`core.has_platform_config_access()` (`proposed-password-reset-and-smtp.sql`)
+exigía `op.tenant_id IS NULL` — pensado para un "operador de plataforma" puro
+que el propio archivo original ya marcaba como pendiente de bootstrap manual, y
+ese paso nunca se hizo. El superadmin real que sí existe tiene
+`tenant_id = OYSGROUP Demo`, no `NULL`, así que el `INSERT` en
+`params.smtp_settings` fallaba con "viola la política de seguridad de
+registros" pese a tener el permiso correcto. Se alineó el criterio con
+`core.current_operator_can_manage_config()` (gap #17) y el resto del panel: con
+o sin tenant, lo único que importa es `can_manage_config = TRUE`.
+
+`params.smtp_settings.username` quedó en texto plano cuando se cifró
+`password_encrypted` — pedido explícito del usuario de que TODA credencial
+esté cifrada, no solo la contraseña (`from_address`/`from_name`/`host` quedan
+sin cifrar a propósito: no son secretos). Migración seudo-online (columna
+nueva + `UPDATE` con `encrypt_pii` + drop/rename de la vieja) porque ya había
+~26 filas reales de pruebas anteriores.
+
+## 25. Cambiar el email de login de un operador no tenía ningún camino — `core.users` no tiene política propia
+
+**Archivo:** [`proposed-operator-account-email.sql`](src/database/sql/proposed-operator-account-email.sql)
+
+Mismo patrón que los gaps #2/#10: el diálogo de edición de "Operadores" permite
+cambiar rol/tipo/estado/nombre (columnas de `operations.operators`), pero el
+email de login vive en `core.users` (cifrado, con blind index para el
+`UNIQUE`), que tiene RLS forzada sin ninguna política propia — solo se toca vía
+función `SECURITY DEFINER` puntual, nunca por CRUD genérico. Se agregaron
+`core.get_user_email()`/`core.update_user_email()`; el controller ya valida con
+la conexión RLS normal (`operators_tenant_access`) que el `operator_id` es
+visible/editable por quien llama antes de invocarlas, así que estas funciones
+no repiten ese chequeo de tenant.
+
+## 26. Varios catálogos referenciados por pantallas nuevas existían vacíos o no existían — mismo patrón que #11/#12/#14
+
+**Archivos:** [`proposed-clinical-form-catalogs.sql`](src/database/sql/proposed-clinical-form-catalogs.sql),
+[`proposed-clinical-standard-catalogs.sql`](src/database/sql/proposed-clinical-standard-catalogs.sql),
+[`proposed-coverage-demo-data.sql`](src/database/sql/proposed-coverage-demo-data.sql)
+
+Construyendo la historia clínica completa (dosis/frecuencia/vía de
+medicamentos, antecedentes quirúrgicos, riesgo de viaje) y el alta de un plan
+de asistencia real: `DOSE_UNIT`/`SURGICAL_APPROACH`/`SURGERY_OUTCOME`/
+`TRAVEL_RISK` existían vacíos, `MEDICATION_FREQUENCY`/`MEDICATION_ROUTE`/
+`PLAN_TYPE`/`HEALTH_COVERAGE_STATUS` ni siquiera existían como dominio.
+`proposed-clinical-standard-catalogs.sql` además siembra catálogos de
+referencia de estándares reales — `ICD10_CONDITION`/`RXNORM_MEDICATION`/
+`RXNORM_ALLERGEN` — para que un operador pueda buscar/seleccionar un código
+verificado en vez de texto libre; los códigos se verificaron contra las APIs
+públicas de la NLM/NIH al momento de escribir el archivo, pero es un set
+inicial (~15-20 códigos por categoría, no el estándar completo — CVX/SNOMED
+quedan pendientes por falta de una fuente pública verificable en esa sesión).
+`proposed-coverage-demo-data.sql` agrega un sponsor y un plan de ejemplo
+("AXA Assistance", pedido del usuario para poder probar) atados al tenant demo.
 
 ## Consolidación formal
 
