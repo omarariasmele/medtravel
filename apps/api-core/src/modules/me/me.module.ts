@@ -1,10 +1,17 @@
 import { Module } from '@nestjs/common';
 
+import { AIModule } from '@modules/ai/ai.module';
+
 import { MeProfileController } from './me-profile.controller';
 import { MeCoveragesController } from './me-coverages.controller';
 import { MeTripsController } from './me-trips.controller';
 import { MeClinicalController } from './me-clinical.controller';
 import { MeEmergencyController } from './me-emergency.controller';
+import { MeEmergencyCasesController } from './me-emergency-cases.controller';
+import { MeDocumentController } from './me-document.controller';
+import { MeSharesController } from './me-shares.controller';
+import { MeAssistantController } from './me-assistant.controller';
+import { MeHealthAssistantController } from './me-health-assistant.controller';
 
 /**
  * API mínima de cara al viajero (Paso 1 del brief, "ver pantallas
@@ -15,12 +22,18 @@ import { MeEmergencyController } from './me-emergency.controller';
  * permiso).
  */
 @Module({
+  imports: [AIModule],
   controllers: [
     MeProfileController,
     MeCoveragesController,
     MeTripsController,
     MeClinicalController,
     MeEmergencyController,
+    MeEmergencyCasesController,
+    MeDocumentController,
+    MeSharesController,
+    MeAssistantController,
+    MeHealthAssistantController,
   ],
 })
 export class MeModule {}
