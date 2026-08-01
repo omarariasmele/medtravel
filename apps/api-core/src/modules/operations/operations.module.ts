@@ -26,6 +26,10 @@ import { TenantAccessRequestEntity } from './entities/tenant-access-request.enti
 import { OperationsResourceController } from './operations-resource.controller';
 import { EmergencyCasesController } from './emergency-cases.controller';
 import { CaseParticipantsController } from './case-participants.controller';
+import { OperatorsRegistrationController } from './operators-registration.controller';
+import { OperatorsAccountController } from './operators-account.controller';
+import { DashboardStatsController } from './dashboard-stats.controller';
+import { AiConsumptionController } from './ai-consumption.controller';
 
 @Module({
   imports: [
@@ -59,6 +63,10 @@ import { CaseParticipantsController } from './case-participants.controller';
   controllers: [
     EmergencyCasesController,
     CaseParticipantsController,
+    OperatorsRegistrationController,
+    OperatorsAccountController,
+    DashboardStatsController,
+    AiConsumptionController,
     OperationsResourceController,
   ],
   exports: [TypeOrmModule],
