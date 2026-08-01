@@ -3,14 +3,15 @@ import { Link as RouterLink, Outlet, useLocation } from 'react-router-dom';
 import {
   AppBar,
   Box,
+  Divider,
   Drawer,
   IconButton,
   List,
   ListItemButton,
   ListItemIcon,
   ListItemText,
+  ListSubheader,
   Toolbar,
-  Typography,
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import DashboardIcon from '@mui/icons-material/Dashboard';
@@ -22,8 +23,17 @@ import LocalHospitalIcon from '@mui/icons-material/MedicalServices';
 import BadgeIcon from '@mui/icons-material/Badge';
 import HistoryIcon from '@mui/icons-material/History';
 import LogoutIcon from '@mui/icons-material/Logout';
+import SupervisorAccountIcon from '@mui/icons-material/SupervisorAccount';
+import TuneIcon from '@mui/icons-material/Tune';
+import BusinessIcon from '@mui/icons-material/Business';
+import MailOutlineIcon from '@mui/icons-material/Mail';
+import WarningIcon from '@mui/icons-material/Warning';
+import AssignmentIcon from '@mui/icons-material/Assignment';
+import CardMembershipIcon from '@mui/icons-material/CardMembership';
+import SmartToyIcon from '@mui/icons-material/SmartToy';
 
 import { useAuth } from '../auth/auth-context';
+import logoHorizontal from '../assets/brand/logo-horizontal.png';
 
 const DRAWER_WIDTH = 240;
 
@@ -38,6 +48,8 @@ const NAV_ITEMS = [
   { label: 'Dashboard', path: '/', icon: <DashboardIcon /> },
   { label: 'Usuarios / viajeros', path: '/travelers', icon: <PeopleIcon /> },
   { label: 'Coberturas', path: '/coverages', icon: <ShieldIcon /> },
+  { label: 'Pólizas', path: '/partner-records', icon: <AssignmentIcon /> },
+  { label: 'Planes de asistencia', path: '/assistance-plans', icon: <CardMembershipIcon /> },
   { label: 'Viajes', path: '/trips', icon: <FlightIcon /> },
   { label: 'Casos de asistencia', path: '/cases', icon: <EmergencyIcon /> },
   { label: 'Centros médicos', path: '/medical-centers', icon: <LocalHospitalIcon /> },
@@ -48,7 +60,9 @@ const NAV_ITEMS = [
 export function AppLayout() {
   const [open, setOpen] = useState(true);
   const location = useLocation();
-  const { logout } = useAuth();
+  const { logout, claims } = useAuth();
+
+  const showAdminSection = claims?.canManageConfig || claims?.canManageOperators;
 
   const drawerContent = (
     <List>
@@ -63,6 +77,87 @@ export function AppLayout() {
           <ListItemText primary={item.label} />
         </ListItemButton>
       ))}
+
+      {showAdminSection && (
+        <>
+          <Divider sx={{ my: 1 }} />
+          <ListSubheader>Administración</ListSubheader>
+          {claims?.canManageConfig && (
+            <ListItemButton
+              component={RouterLink}
+              to="/tenants"
+              selected={location.pathname === '/tenants'}
+            >
+              <ListItemIcon>
+                <BusinessIcon />
+              </ListItemIcon>
+              <ListItemText primary="Empresas" />
+            </ListItemButton>
+          )}
+          {claims?.canManageOperators && (
+            <ListItemButton
+              component={RouterLink}
+              to="/operators"
+              selected={location.pathname === '/operators'}
+            >
+              <ListItemIcon>
+                <SupervisorAccountIcon />
+              </ListItemIcon>
+              <ListItemText primary="Operadores" />
+            </ListItemButton>
+          )}
+          {claims?.canManageConfig && (
+            <ListItemButton
+              component={RouterLink}
+              to="/catalogs-admin"
+              selected={location.pathname === '/catalogs-admin'}
+            >
+              <ListItemIcon>
+                <TuneIcon />
+              </ListItemIcon>
+              <ListItemText primary="Catálogos / Parámetros" />
+            </ListItemButton>
+          )}
+          {claims?.canManageConfig && (
+            <ListItemButton
+              component={RouterLink}
+              to="/ai-consumption"
+              selected={location.pathname === '/ai-consumption'}
+            >
+              <ListItemIcon>
+                <SmartToyIcon />
+              </ListItemIcon>
+              <ListItemText primary="Consumo de IA" />
+            </ListItemButton>
+          )}
+          {claims?.canManageConfig && (
+            <ListItemButton
+              component={RouterLink}
+              to="/smtp-settings"
+              selected={location.pathname === '/smtp-settings'}
+            >
+              <ListItemIcon>
+                <MailOutlineIcon />
+              </ListItemIcon>
+              <ListItemText primary="Correo (SMTP)" />
+            </ListItemButton>
+          )}
+          {claims?.canManageConfig && (
+            <ListItemButton
+              component={RouterLink}
+              to="/test-consents"
+              selected={location.pathname === '/test-consents'}
+            >
+              <ListItemIcon>
+                <WarningIcon color="warning" />
+              </ListItemIcon>
+              <ListItemText primary="Consentimientos (pruebas)" />
+            </ListItemButton>
+          )}
+        </>
+      )}
+
+      <Divider sx={{ my: 1 }} />
       <ListItemButton onClick={() => logout()}>
         <ListItemIcon>
           <LogoutIcon />
@@ -99,13 +194,9 @@ export function AppLayout() {
             color="inherit"
             edge="start"
             onClick={() => setOpen(!open)}
-            sx={{ mr: 2 }}
           >
             <MenuIcon />
           </IconButton>
-          <Typography variant="h6" noWrap component="div">
-            MedTravelApp — Panel de operadores
-          </Typography>
         </Toolbar>
       </AppBar>
 
@@ -124,7 +215,10 @@ export function AppLayout() {
           },
         }}
       >
-        <Toolbar />
+        <Toolbar sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Box component="img" src={logoHorizontal} alt="MedTravelApp" sx={{ height: 36, maxWidth: '85%' }} />
+        </Toolbar>
+        <Divider />
         {drawerContent}
       </Drawer>
 

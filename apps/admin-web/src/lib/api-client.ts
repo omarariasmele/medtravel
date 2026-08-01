@@ -1,5 +1,12 @@
 import axios from 'axios';
 
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    /** Evita el auto-refresh/redirect a /login en respuestas 401 legítimas de un endpoint público (ej. reset de password con token inválido/vencido). */
+    skipAuthRefresh?: boolean;
+  }
+}
+
 /**
  * apps/api-core es la única fuente de verdad — nunca se accede a
  * Postgres directo desde el panel (API First, ver README raíz del
@@ -58,7 +65,11 @@ apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
     const original = error.config;
-    if (error.response?.status === 401 && !original._retry) {
+    if (
+      error.response?.status === 401 &&
+      !original._retry &&
+      !original.skipAuthRefresh
+    ) {
       original._retry = true;
       try {
         refreshPromise ??= refreshAccessToken();

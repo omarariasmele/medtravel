@@ -2,11 +2,12 @@ import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { useNavigate } from 'react-router-dom';
+import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import {
   Alert,
   Box,
   Button,
+  Link,
   Paper,
   TextField,
   Typography,
@@ -14,6 +15,7 @@ import {
 import axios from 'axios';
 
 import { useAuth } from '../auth/auth-context';
+import logoPrincipal from '../assets/brand/logo-principal.png';
 
 const loginSchema = z.object({
   email: z.string().email('Email inválido'),
@@ -78,10 +80,15 @@ export function LoginPage() {
       }}
     >
       <Paper sx={{ p: 4, width: 360 }} elevation={3}>
-        <Typography variant="h5" component="h1" gutterBottom>
-          MedTravelApp
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'center', mb: 2 }}>
+          <img src={logoPrincipal} alt="MedTravelApp" style={{ height: 120 }} />
+        </Box>
+        <Typography
+          variant="body2"
+          color="text.secondary"
+          align="center"
+          sx={{ mb: 3 }}
+        >
           Panel de operadores
         </Typography>
 
@@ -120,6 +127,11 @@ export function LoginPage() {
             >
               Ingresar
             </Button>
+            <Box sx={{ textAlign: 'center', mt: 2 }}>
+              <Link component={RouterLink} to="/forgot-password" variant="body2">
+                ¿Olvidaste tu contraseña?
+              </Link>
+            </Box>
           </form>
         ) : (
           <Box>
