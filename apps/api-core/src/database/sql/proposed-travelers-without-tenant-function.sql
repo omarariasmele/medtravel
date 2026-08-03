@@ -43,9 +43,9 @@ BEGIN
          EXISTS (
            SELECT 1 FROM coverage.health_coverages hc WHERE hc.person_id = p.id
          ),
-         dt.code,
+         dt.code::TEXT,
          core.decrypt_pii(ei.doc_number),
-         dc.code
+         dc.code::TEXT
   FROM core.persons p
   JOIN core.users u ON u.person_id = p.id
   LEFT JOIN core.external_identifiers ei ON ei.person_id = p.id AND ei.is_primary = TRUE
