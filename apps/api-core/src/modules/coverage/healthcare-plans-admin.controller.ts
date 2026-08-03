@@ -62,12 +62,12 @@ export class HealthcarePlansAdminController {
 
     return this.txManager.runInTransaction((queryRunner) =>
       queryRunner.query(
-        `SELECT hp.id, hp.name, hp.lifecycle_status, hp.active,
-                hp.provider_id, hpr.name AS provider_label,
-                hp.submitted_by_person_id,
-                core.decrypt_pii(p.first_name) AS submitted_by_first_name,
-                core.decrypt_pii(p.last_name) AS submitted_by_last_name,
-                hp.approved_at, hp.created_at
+        `SELECT hp.id, hp.name, hp.lifecycle_status AS "lifecycleStatus", hp.active,
+                hp.provider_id AS "providerId", hpr.name AS "providerLabel",
+                hp.submitted_by_person_id AS "submittedByPersonId",
+                core.decrypt_pii(p.first_name) AS "submittedByFirstName",
+                core.decrypt_pii(p.last_name) AS "submittedByLastName",
+                hp.approved_at AS "approvedAt", hp.created_at AS "createdAt"
          FROM coverage.healthcare_plans hp
          JOIN coverage.healthcare_providers hpr ON hpr.id = hp.provider_id
          LEFT JOIN core.persons p ON p.id = hp.submitted_by_person_id

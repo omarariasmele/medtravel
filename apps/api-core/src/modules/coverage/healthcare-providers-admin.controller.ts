@@ -57,13 +57,13 @@ export class HealthcareProvidersAdminController {
 
     return this.txManager.runInTransaction((queryRunner) =>
       queryRunner.query(
-        `SELECT hp.id, hp.code, hp.name, hp.lifecycle_status, hp.active,
-                hp.country_id, cv.label_es AS country_label,
-                hp.provider_type_id, pt.label_es AS provider_type_label,
-                hp.submitted_by_person_id,
-                core.decrypt_pii(p.first_name) AS submitted_by_first_name,
-                core.decrypt_pii(p.last_name) AS submitted_by_last_name,
-                hp.approved_at, hp.created_at
+        `SELECT hp.id, hp.code, hp.name, hp.lifecycle_status AS "lifecycleStatus", hp.active,
+                hp.country_id AS "countryId", cv.label_es AS "countryLabel",
+                hp.provider_type_id AS "providerTypeId", pt.label_es AS "providerTypeLabel",
+                hp.submitted_by_person_id AS "submittedByPersonId",
+                core.decrypt_pii(p.first_name) AS "submittedByFirstName",
+                core.decrypt_pii(p.last_name) AS "submittedByLastName",
+                hp.approved_at AS "approvedAt", hp.created_at AS "createdAt"
          FROM coverage.healthcare_providers hp
          JOIN params.catalog_values cv ON cv.id = hp.country_id
          JOIN params.catalog_values pt ON pt.id = hp.provider_type_id

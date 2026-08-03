@@ -851,6 +851,76 @@ daba `TRUE`, pero el JOIN a `core.users` igual quedaba vacío.
 **Encontrado:** el usuario registró un viajero de prueba y reportó
 "no lo veo" en la pantalla que se había armado específicamente para verlo.
 
+## 31. Prestadores y Obras Sociales aparecían siempre vacíos en admin-web — el SQL crudo devolvía columnas en snake_case, el frontend esperaba camelCase
+
+**Archivos:** [`healthcare-providers-admin.controller.ts`](src/modules/coverage/healthcare-providers-admin.controller.ts), [`healthcare-plans-admin.controller.ts`](src/modules/coverage/healthcare-plans-admin.controller.ts)
+
+No es un problema de datos ni de RLS — la base tenía las 258 obras
+sociales y 34 prepagas correctas, todas con país Argentina, confirmado
+consultando directo. El bug estaba en el `GET /coverage/admin/
+healthcare-providers` (y su equivalente de planes): al ser SQL crudo vía
+`queryRunner.query()` (no un Repository/QueryBuilder de TypeORM, que sí
+mapea a camelCase automáticamente), Postgres devolvía las columnas tal
+cual (`provider_type_id`, `country_label`, `lifecycle_status`, etc.),
+pero la interfaz TypeScript del frontend
+(`healthcare-provider-type.page.tsx`) esperaba `providerTypeId`,
+`countryLabel`, `lifecycleStatus`. El filtro por tipo
+(`providerTypeCodeById(p.providerTypeId)`) comparaba siempre contra
+`undefined`, así que las listas de Prestadores y de Obras Sociales
+quedaban vacías las dos, sin ningún error visible — ni en consola ni en
+los logs del backend, porque la query en sí ejecutaba bien.
+
+- Alias explícitos en camelCase (`AS "providerTypeId"`, `AS
+  "countryLabel"`, etc.) en ambos SELECT — mismo patrón que ya usan la
+  mayoría de las otras queries crudas del proyecto (ej.
+  `patient-summary.controller.ts`), que este archivo en particular no
+  había seguido.
+- Deliberadamente **no** se tocaron `healthcare-providers.controller.ts`/
+  `healthcare-plans.controller.ts` (lado viajero) ni
+  `me-coverages.controller.ts`: la app Flutter ya lee esos mismos campos
+  en snake_case (`p['provider_id']`, etc., ver `coverages_screen.dart`)
+  porque fue escrita contra la respuesta real — "corregirlos" ahí habría
+  roto el flujo de edición de cobertura que hoy funciona.
+
+**Encontrado:** el usuario reportó no ver ninguna obra social ni prepaga
+de Argentina en ninguna de las dos pantallas recién separadas (gap #29).
+
+## 32. El registro no pedía documento — no había forma de evitar altas duplicadas de la misma persona
+
+**Archivos:** [`auth.service.ts`](src/modules/auth/auth.service.ts), [`register.dto.ts`](src/modules/auth/dto/register.dto.ts), [`proposed-travelers-without-tenant-function.sql`](src/database/sql/proposed-travelers-without-tenant-function.sql)
+
+Pedido explícito del usuario: la pantalla "Usuarios sin cobertura" debe
+mostrar tipo y número de documento, y el sistema no debe permitir un
+alta duplicada de la misma persona — mismo email, o mismo tipo+número de
+documento **para el mismo país** (sistema internacional: dos personas de
+países distintos pueden compartir número de documento sin ser la misma
+persona). El registro (`POST /auth/register`) solo pedía nombre, apellido,
+email y contraseña — la carga de documento existía únicamente como paso
+posterior opcional (`POST /me/document`), así que no había ninguna
+verificación de identidad real al momento del alta.
+
+- `RegisterDto` gana `docTypeId`/`docNumber`/`docCountryId`, obligatorios.
+- `AuthService.register()` inserta en `core.external_identifiers` en la
+  misma transacción que `core.register_person_and_user()` — reutiliza el
+  índice ciego y el UNIQUE `(doc_type_id, issuing_country_id,
+  doc_number_idx)` que esa tabla ya tenía desde el baseline (nunca se
+  había aprovechado para esto). Se distingue el conflicto de documento
+  del de email por el nombre de la constraint (`error.constraint`), con
+  un mensaje específico para cada caso.
+- Deliberadamente **no** se tocó `core.register_person_and_user()` en sí
+  (usado también por alta de profesionales y de operadores) — el
+  documento se inserta como paso aparte dentro de la misma transacción,
+  scopeado solo al registro de viajeros.
+- `core.get_travelers_without_tenant()` (gap #30) ahora hace `LEFT JOIN`
+  a `core.external_identifiers` (por `is_primary = TRUE`) para traer
+  tipo/número/país de documento a la pantalla admin.
+- Verificado end-to-end contra el servidor real: mismo documento con
+  email distinto → 409 específico; mismo email con documento distinto →
+  409 específico; alta normal → 201.
+
+**Encontrado:** pedido directo del usuario mientras revisaba "Usuarios
+sin cobertura de asistencia al viajero".
+
 ## Consolidación formal
 
 [`010_v1.2.4_fixes.sql`](src/database/sql/010_v1.2.4_fixes.sql) junta
