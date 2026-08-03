@@ -167,7 +167,7 @@ export function ClinicalHistorySection({
         <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2, mt: 2 }}>
           <Tab label="Signos vitales" value="vitals" />
           <Tab label="Alergias" value="allergies" />
-          <Tab label="Condiciones" value="conditions" />
+          <Tab label="Comorbilidades" value="conditions" />
           <Tab label="Cirugías" value="surgeries" />
           <Tab label="Medicamentos" value="medications" />
         </Tabs>
@@ -842,7 +842,7 @@ function ConditionsTab({
           <Grid container spacing={1}>
             <Grid size={{ xs: 8 }}>
               <TextField
-                label="Condición"
+                label="Comorbilidad"
                 fullWidth
                 margin="normal"
                 value={form.conditionName}

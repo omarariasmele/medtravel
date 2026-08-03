@@ -118,7 +118,7 @@ export function SharedProfileView({ data }: { data: SharedProfileData }) {
 
       <Card sx={{ mb: 2 }}>
         <CardContent>
-          <Typography variant="subtitle1" gutterBottom>Condiciones</Typography>
+          <Typography variant="subtitle1" gutterBottom>Comorbilidades</Typography>
           {conditions.length === 0 ? (
             <Typography variant="body2" color="text.secondary">Sin condiciones registradas.</Typography>
           ) : (

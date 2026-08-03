@@ -49,7 +49,7 @@ class _HealthRecordsScreenState extends State<HealthRecordsScreen> with SingleTi
           ],
           bottom: const TabBar(tabs: [
             Tab(text: 'Alergias'),
-            Tab(text: 'Condiciones'),
+            Tab(text: 'Comorbilidades'),
             Tab(text: 'Medicamentos'),
           ]),
         ),
