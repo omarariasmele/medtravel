@@ -43,6 +43,9 @@ class AuthState extends ChangeNotifier {
     required String lastName,
     required String email,
     required String password,
+    required String docTypeId,
+    required String docNumber,
+    required String docCountryId,
     String? preferredLang,
   }) async {
     final response = await ApiClient.instance.dio.post(
@@ -52,6 +55,9 @@ class AuthState extends ChangeNotifier {
         'lastName': lastName,
         'email': email,
         'password': password,
+        'docTypeId': docTypeId,
+        'docNumber': docNumber,
+        'docCountryId': docCountryId,
         if (preferredLang != null) 'preferredLang': preferredLang,
       },
     );

@@ -24,6 +24,9 @@ interface TravelerWithoutTenant {
   email_verified: boolean;
   created_at: string;
   has_health_coverage: boolean;
+  doc_type_code: string | null;
+  doc_number: string | null;
+  doc_country_code: string | null;
 }
 
 /**
@@ -71,6 +74,7 @@ export function TravelersWithoutCoveragePage() {
               <TableRow>
                 <TableCell>Nombre</TableCell>
                 <TableCell>Email</TableCell>
+                <TableCell>Documento</TableCell>
                 <TableCell>Verificado</TableCell>
                 <TableCell>Obra social</TableCell>
                 <TableCell>Registrado</TableCell>
@@ -81,6 +85,11 @@ export function TravelersWithoutCoveragePage() {
                 <TableRow key={t.person_id} hover>
                   <TableCell>{t.first_name} {t.last_name}</TableCell>
                   <TableCell>{t.email}</TableCell>
+                  <TableCell>
+                    {t.doc_type_code
+                      ? `${t.doc_type_code} ${t.doc_number} (${t.doc_country_code})`
+                      : '—'}
+                  </TableCell>
                   <TableCell>
                     <Chip
                       size="small"

@@ -11,6 +11,8 @@
 -- daba TRUE, pero el JOIN igual devolvía 0 filas).
 -- ============================================================
 
+DROP FUNCTION IF EXISTS core.get_travelers_without_tenant();
+
 CREATE OR REPLACE FUNCTION core.get_travelers_without_tenant()
 RETURNS TABLE (
   person_id          UUID,
@@ -19,10 +21,13 @@ RETURNS TABLE (
   email              TEXT,
   email_verified     BOOLEAN,
   created_at         TIMESTAMPTZ,
-  has_health_coverage BOOLEAN
+  has_health_coverage BOOLEAN,
+  doc_type_code      TEXT,
+  doc_number         TEXT,
+  doc_country_code   TEXT
 )
 LANGUAGE plpgsql STABLE SECURITY DEFINER
-SET search_path = pg_catalog, core, coverage AS $$
+SET search_path = pg_catalog, core, coverage, params AS $$
 BEGIN
   IF NOT core.current_operator_can_manage_config() THEN
     RETURN;
@@ -37,9 +42,15 @@ BEGIN
          p.created_at,
          EXISTS (
            SELECT 1 FROM coverage.health_coverages hc WHERE hc.person_id = p.id
-         )
+         ),
+         dt.code,
+         core.decrypt_pii(ei.doc_number),
+         dc.code
   FROM core.persons p
   JOIN core.users u ON u.person_id = p.id
+  LEFT JOIN core.external_identifiers ei ON ei.person_id = p.id AND ei.is_primary = TRUE
+  LEFT JOIN params.catalog_values dt ON dt.id = ei.doc_type_id
+  LEFT JOIN params.catalog_values dc ON dc.id = ei.issuing_country_id
   WHERE NOT EXISTS (SELECT 1 FROM core.members m WHERE m.person_id = p.id)
   ORDER BY p.created_at DESC
   LIMIT 500;

@@ -78,6 +78,7 @@ export class AuthService {
    */
   async register(dto: RegisterDto): Promise<TokenPairDto> {
     const emailBlindIndex = this.computeBlindIndex(dto.email);
+    const docNumberIdx = this.computeBlindIndex(dto.docNumber);
     const passwordHash = await bcrypt.hash(dto.password, 10);
 
     let result: { person_id: string; user_id: string } | undefined;
@@ -94,13 +95,42 @@ export class AuthService {
             dto.preferredLang ?? 'es',
           ],
         );
-        return rows[0];
+        const registered = rows[0];
+
+        // Documento obligatorio al registrarse — pedido explícito del
+        // usuario para poder detectar altas duplicadas de la misma
+        // persona (mismo tipo+número+país; sistema internacional, la
+        // unicidad de documento es por país, no global). Reusa
+        // core.external_identifiers tal cual (mismo mecanismo que
+        // MeDocumentController), solo que ahora es parte del alta en
+        // vez de un paso posterior opcional.
+        await queryRunner.query(
+          `INSERT INTO core.external_identifiers
+             (person_id, doc_type_id, doc_number, doc_number_idx, issuing_country_id, is_primary)
+           VALUES ($1, $2, core.encrypt_pii($3), $4, $5, TRUE)`,
+          [
+            registered.person_id,
+            dto.docTypeId,
+            dto.docNumber,
+            docNumberIdx,
+            dto.docCountryId,
+          ],
+        );
+
+        return registered;
       });
     } catch (error) {
       if (
         error instanceof QueryFailedError &&
         (error as QueryFailedError & { code?: string }).code === '23505'
       ) {
+        const constraint = (error as QueryFailedError & { constraint?: string })
+          .constraint;
+        if (constraint?.includes('external_identifiers')) {
+          throw new ConflictException(
+            'Ya existe una cuenta registrada con ese tipo y número de documento para ese país',
+          );
+        }
         throw new ConflictException('Ya existe una cuenta con ese email');
       }
       throw error;
