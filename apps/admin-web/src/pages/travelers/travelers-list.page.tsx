@@ -15,12 +15,12 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Typography,
 } from '@mui/material';
 
 import { useAuth } from '../../auth/auth-context';
 import { apiClient } from '../../lib/api-client';
 import { labelFor, useCatalog } from '../../lib/catalog-hooks';
+import { usePageTitle } from '../../lib/page-title';
 import { useTravelersOverview } from '../../lib/travelers-overview-hooks';
 import { PaginationFooter, usePagination } from '../../lib/pagination';
 
@@ -42,10 +42,12 @@ const LANG_LABEL: Record<string, string> = { es: 'Español', en: 'English', pt: 
  * asistencia (fecha de alta/baja de la cobertura, no del registro).
  */
 export function TravelersListPage() {
+  usePageTitle('Usuarios');
   const navigate = useNavigate();
   const { claims } = useAuth();
   const [tenantFilter, setTenantFilter] = useState('');
   const [countryFilter, setCountryFilter] = useState('');
+  const [search, setSearch] = useState('');
 
   const overviewQuery = useTravelersOverview();
 
@@ -60,21 +62,29 @@ export function TravelersListPage() {
   const statusCatalog = useCatalog('MEMBER_STATUS');
   const countryCatalog = useCatalog('COUNTRY');
 
+  const normalizedSearch = search.trim().toLowerCase();
   const filteredRows = (overviewQuery.data ?? []).filter(
     (r) =>
       (!tenantFilter || r.tenantId === tenantFilter) &&
-      (!countryFilter || r.countryResidenceId === countryFilter),
+      (!countryFilter || r.countryResidenceId === countryFilter) &&
+      (!normalizedSearch ||
+        `${r.firstName} ${r.lastName}`.toLowerCase().includes(normalizedSearch) ||
+        (r.email ?? '').toLowerCase().includes(normalizedSearch) ||
+        (r.policyNumber ?? '').toLowerCase().includes(normalizedSearch)),
   );
   const { pageRows: travelerPageRows, page: travelerPage, setPage: setTravelerPage, totalCount: travelerTotalCount } =
     usePagination(filteredRows);
 
   return (
     <>
-      <Typography variant="h4" gutterBottom>
-        Usuarios / viajeros
-      </Typography>
-
       <Box sx={{ mb: 2, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+        <TextField
+          label="Buscar por nombre, email o N° de póliza"
+          size="small"
+          sx={{ minWidth: 280 }}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
         {claims?.canManageConfig && (tenantsQuery.data?.length ?? 0) > 1 && (
           <TextField
             select
@@ -122,6 +132,7 @@ export function TravelersListPage() {
             <TableHead>
               <TableRow>
                 <TableCell>Nombre</TableCell>
+                <TableCell>Email</TableCell>
                 <TableCell>País</TableCell>
                 <TableCell>Idioma</TableCell>
                 <TableCell>Empresa</TableCell>
@@ -141,6 +152,7 @@ export function TravelersListPage() {
                   sx={{ cursor: 'pointer' }}
                 >
                   <TableCell>{r.firstName} {r.lastName}</TableCell>
+                  <TableCell>{r.email ?? '—'}</TableCell>
                   <TableCell>{labelFor(countryCatalog.data, r.countryResidenceId ?? undefined)}</TableCell>
                   <TableCell>{LANG_LABEL[r.preferredLang] ?? r.preferredLang}</TableCell>
                   <TableCell>{r.tenantName ?? '—'}</TableCell>

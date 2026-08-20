@@ -22,11 +22,11 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Typography,
 } from '@mui/material';
 
 import { apiClient } from '../../lib/api-client';
 import { labelFor, useCatalog } from '../../lib/catalog-hooks';
+import { usePageTitle } from '../../lib/page-title';
 import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface Tenant {
@@ -38,6 +38,7 @@ interface Tenant {
   contactEmail?: string;
   contactPhone?: string;
   active: boolean;
+  isPlatformAdmin: boolean;
 }
 
 interface FormState {
@@ -56,6 +57,7 @@ interface EditFormState {
   contactEmail: string;
   contactPhone: string;
   active: boolean;
+  isPlatformAdmin: boolean;
 }
 
 const EMPTY_FORM: FormState = {
@@ -77,6 +79,7 @@ const EMPTY_FORM: FormState = {
  * ver que existen otras (ver proposed-tenants-rls.sql).
  */
 export function TenantsPage() {
+  usePageTitle('Empresas');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
@@ -132,6 +135,7 @@ export function TenantsPage() {
       contactEmail: tenant.contactEmail ?? '',
       contactPhone: tenant.contactPhone ?? '',
       active: tenant.active,
+      isPlatformAdmin: tenant.isPlatformAdmin,
     });
     setEditError(null);
   };
@@ -146,6 +150,7 @@ export function TenantsPage() {
         contactEmail: editForm.contactEmail || undefined,
         contactPhone: editForm.contactPhone || undefined,
         active: editForm.active,
+        isPlatformAdmin: editForm.isPlatformAdmin,
       });
       return data;
     },
@@ -159,8 +164,7 @@ export function TenantsPage() {
 
   return (
     <>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Typography variant="h4">Empresas</Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', mb: 2 }}>
         <Button variant="contained" onClick={() => setDialogOpen(true)}>
           Agregar empresa
         </Button>
@@ -184,6 +188,7 @@ export function TenantsPage() {
                 <TableCell>Razón social</TableCell>
                 <TableCell>País</TableCell>
                 <TableCell>Contacto</TableCell>
+                <TableCell>Tipo</TableCell>
                 <TableCell>Estado</TableCell>
               </TableRow>
             </TableHead>
@@ -195,6 +200,13 @@ export function TenantsPage() {
                   <TableCell>{t.legalName ?? '—'}</TableCell>
                   <TableCell>{labelFor(countryCatalog.data, t.countryId)}</TableCell>
                   <TableCell>{t.contactEmail ?? t.contactPhone ?? '—'}</TableCell>
+                  <TableCell>
+                    {t.isPlatformAdmin ? (
+                      <Chip size="small" color="secondary" label="Administrador de plataforma" />
+                    ) : (
+                      <Chip size="small" variant="outlined" label="Empresa de asistencia" />
+                    )}
+                  </TableCell>
                   <TableCell>
                     <Chip
                       size="small"
@@ -366,6 +378,17 @@ export function TenantsPage() {
                     />
                   }
                   label={editForm.active ? 'Activa' : 'Inactiva'}
+                />
+              </Grid>
+              <Grid size={{ xs: 12 }}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={editForm.isPlatformAdmin}
+                      onChange={(e) => setEditForm((f) => (f ? { ...f, isPlatformAdmin: e.target.checked } : f))}
+                    />
+                  }
+                  label="Es el administrador general de la plataforma (no una empresa de asistencia al viajero)"
                 />
               </Grid>
             </Grid>

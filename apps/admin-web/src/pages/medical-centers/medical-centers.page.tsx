@@ -20,11 +20,11 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Typography,
 } from '@mui/material';
 
 import { apiClient } from '../../lib/api-client';
 import { labelFor, useCatalog } from '../../lib/catalog-hooks';
+import { usePageTitle } from '../../lib/page-title';
 import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface HealthcareOrganization {
@@ -60,6 +60,7 @@ const EMPTY_FORM: FormState = {
 };
 
 export function MedicalCentersPage() {
+  usePageTitle('Centros médicos');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
@@ -122,8 +123,7 @@ export function MedicalCentersPage() {
 
   return (
     <>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Typography variant="h4">Centros médicos</Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', mb: 2 }}>
         <Button variant="contained" onClick={() => setDialogOpen(true)}>
           Agregar centro
         </Button>

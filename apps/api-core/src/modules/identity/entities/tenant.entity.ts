@@ -25,6 +25,10 @@ export class TenantEntity extends UuidBaseEntity {
   })
   contactEmail?: string;
 
+  /** Administrador general de la plataforma (ej. OYSGROUP), no una empresa de asistencia al viajero real — se excluye de selectores de "empresa". */
+  @Column({ name: 'is_platform_admin', type: 'boolean', default: false })
+  isPlatformAdmin: boolean;
+
   @Column({
     name: 'contact_phone',
     type: 'varchar',

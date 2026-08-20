@@ -16,6 +16,8 @@ interface PatientSummaryRow {
   birth_date: string | null;
   gender_id: string | null;
   country_residence_id: string | null;
+  photo_path: string | null;
+  health_record_last_updated_at: string | null;
 }
 
 export interface PatientSummaryView {
@@ -24,6 +26,9 @@ export interface PatientSummaryView {
   birthDate: string | null;
   genderId: string | null;
   countryResidenceId: string | null;
+  photoPath: string | null;
+  /** Pedido explícito del usuario: mostrar cuándo fue la última actualización del Historial de Salud. */
+  healthRecordLastUpdatedAt: string | null;
 }
 
 /**
@@ -66,6 +71,8 @@ export class PatientSummaryController {
       birthDate: row.birth_date,
       genderId: row.gender_id,
       countryResidenceId: row.country_residence_id,
+      photoPath: row.photo_path,
+      healthRecordLastUpdatedAt: row.health_record_last_updated_at,
     };
   }
 }

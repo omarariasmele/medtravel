@@ -5,7 +5,6 @@ import { TripDestinationEntity } from './entities/trip-destination.entity';
 import { ChatMessageEntity } from './entities/chat-message.entity';
 import { OperatorEntity } from './entities/operator.entity';
 import { OperatorRoleEntity } from './entities/operator-role.entity';
-import { CaseMedicalEventEntity } from './entities/case-medical-event.entity';
 
 /**
  * Excluidos a propósito: case-status-history/case-location-history/
@@ -37,13 +36,10 @@ import { CaseMedicalEventEntity } from './entities/case-medical-event.entity';
  * es estado efímero que actualiza el propio operador vía otro flujo, no
  * un recurso para administrar a mano.
  *
- * case-medical-events se agrega para el historial/bitácora del caso
- * (notas de cada operador interviniente, por fecha/hora) — tenía GRANT
- * pero nunca RLS propia; se le agregó case_medical_events_access (mismo
- * criterio que cases_access: tenant del caso, o el propio viajero) antes
- * de exponerla acá (ver proposed-case-medical-events-rls.sql). Es
- * append-only por diseño (solo SELECT/INSERT en el GRANT), igual que
- * case_status_history.
+ * case-medical-events salió de acá (gap #56): necesitaba completar
+ * registered_by_id server-side (quién agregó la nota, nunca se
+ * guardaba) sin confiar en lo que mande el cliente — tiene su propio
+ * CaseMedicalEventsController, mismo motivo que emergency-cases.
  */
 export const OPERATIONS_REGISTRY: Record<
   string,
@@ -54,5 +50,4 @@ export const OPERATIONS_REGISTRY: Record<
   'chat-messages': ChatMessageEntity,
   operators: OperatorEntity,
   'operator-roles': OperatorRoleEntity,
-  'case-medical-events': CaseMedicalEventEntity,
 };

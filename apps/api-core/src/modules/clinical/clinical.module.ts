@@ -6,6 +6,7 @@ import { ConditionEntity } from './entities/condition.entity';
 import { MedicationEntity } from './entities/medication.entity';
 import { SurgeryEntity } from './entities/surgery.entity';
 import { LabResultEntity } from './entities/lab-result.entity';
+import { ImplantDeviceEntity } from './entities/implant-device.entity';
 import { VitalsHistoryEntity } from './entities/vitals-history.entity';
 import { VaccineEntity } from './entities/vaccine.entity';
 import { ClinicalDocumentEntity } from './entities/clinical-document.entity';
@@ -23,9 +24,12 @@ import { EncounterSubmissionEntity } from './entities/encounter-submission.entit
 import { RecordReviewTaskEntity } from './entities/record-review-task.entity';
 import { SubmissionVisibilityPolicyEntity } from './entities/submission-visibility-policy.entity';
 import { ClinicalResourceController } from './clinical-resource.controller';
+import { ClinicalAdminEditController } from './clinical-admin-edit.controller';
 import { ProfessionalsRegistrationController } from './professionals-registration.controller';
 import { PatientSummaryController } from './patient-summary.controller';
+import { PatientPhotoController } from './patient-photo.controller';
 import { SharePreviewController } from './share-preview.controller';
+import { HealthRecordResetController } from './health-record-reset.controller';
 
 @Module({
   imports: [
@@ -35,6 +39,7 @@ import { SharePreviewController } from './share-preview.controller';
       MedicationEntity,
       SurgeryEntity,
       LabResultEntity,
+      ImplantDeviceEntity,
       VitalsHistoryEntity,
       VaccineEntity,
       ClinicalDocumentEntity,
@@ -56,8 +61,11 @@ import { SharePreviewController } from './share-preview.controller';
   controllers: [
     ProfessionalsRegistrationController,
     PatientSummaryController,
+    PatientPhotoController,
     SharePreviewController,
+    HealthRecordResetController,
     ClinicalResourceController,
+    ClinicalAdminEditController,
   ],
   exports: [TypeOrmModule],
 })

@@ -65,6 +65,49 @@ export class EmergencyCasesController {
     return this.crud.findOne(id);
   }
 
+  /**
+   * emergency_cases no tiene país/ciudad como columnas propias — vive
+   * en operations.trip_destinations vía destination_id (gap #53). El
+   * CRUD genérico no resuelve JOINs, de ahí este endpoint chico aparte.
+   */
+  /**
+   * chat_channels no está en el CRUD genérico (gap #8, nunca tuvo RLS
+   * propia) — este JOIN arranca desde emergency_cases, así que hereda
+   * su RLS real (cases_access) para autorizar antes de exponer el
+   * channelId. El chat en sí (mensajes, join/send) va por Socket.io
+   * (events.gateway.ts), esto solo resuelve QUÉ sala unir.
+   */
+  @Get(':id/chat')
+  async chat(@Param('id') id: string) {
+    const [row] = await this.txManager.runInTransaction((queryRunner) =>
+      queryRunner.query(
+        `SELECT ch.id AS "channelId"
+         FROM operations.emergency_cases ec
+         JOIN operations.chat_channels ch ON ch.case_id = ec.id
+         WHERE ec.id = $1`,
+        [id],
+      ),
+    );
+    return row ?? {};
+  }
+
+  @Get(':id/location')
+  async location(@Param('id') id: string) {
+    const [row] = await this.txManager.runInTransaction((queryRunner) =>
+      queryRunner.query(
+        `SELECT ec.incident_latitude AS latitude, ec.incident_longitude AS longitude,
+                td.city, cv.label_es AS "countryLabel", db.code AS "detectedBy"
+         FROM operations.emergency_cases ec
+         LEFT JOIN operations.trip_destinations td ON td.id = ec.destination_id
+         LEFT JOIN params.catalog_values cv ON cv.id = td.country_id
+         LEFT JOIN params.catalog_values db ON db.id = ec.destination_detected_by_id
+         WHERE ec.id = $1`,
+        [id],
+      ),
+    );
+    return row ?? {};
+  }
+
   @Post()
   create(@Body() body: Record<string, unknown>) {
     return this.crud.create(body);

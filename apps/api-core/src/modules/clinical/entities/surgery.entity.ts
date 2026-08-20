@@ -14,6 +14,10 @@ export class SurgeryEntity extends UuidBaseEntity {
   @Column({ name: 'procedure_name', type: 'text' })
   procedureName: string;
 
+  /** FK a params.catalog_values (dominio SURGERY_CATALOG) — gobierno de duplicados, ver CatalogResolutionService. */
+  @Column({ name: 'procedure_catalog_id', type: 'uuid', nullable: true })
+  procedureCatalogId?: string;
+
   @Column({ name: 'procedure_name_en', type: 'text', nullable: true })
   procedureNameEn?: string;
 
@@ -121,4 +125,8 @@ export class SurgeryEntity extends UuidBaseEntity {
 
   @Column({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
+
+  /** FK a ai.interview_questions — qué pregunta del modelo Estructurado originó esta cirugía, ver SKIP_IF_ALREADY_HAS_SQL en ai.service.ts. */
+  @Column({ name: 'source_question_id', type: 'uuid', nullable: true })
+  sourceQuestionId?: string;
 }

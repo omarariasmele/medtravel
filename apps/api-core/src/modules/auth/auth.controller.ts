@@ -1,4 +1,4 @@
-import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Headers, Post, UseGuards } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOkResponse,
@@ -21,6 +21,7 @@ import { MfaEnrollResponseDto } from './dto/mfa-enroll-response.dto';
 import { MfaVerifyDto } from './dto/mfa-verify.dto';
 import { RequestPasswordResetDto } from './dto/request-password-reset.dto';
 import { ConfirmPasswordResetDto } from './dto/confirm-password-reset.dto';
+import { VerifyEmailDto } from './dto/verify-email.dto';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -33,8 +34,11 @@ export class AuthController {
     summary: 'Alta propia de un viajero (core.persons + core.users)',
   })
   @ApiOkResponse({ type: TokenPairDto })
-  register(@Body() dto: RegisterDto): Promise<TokenPairDto> {
-    return this.authService.register(dto);
+  register(
+    @Body() dto: RegisterDto,
+    @Headers('x-device-id') deviceFingerprint?: string,
+  ): Promise<TokenPairDto> {
+    return this.authService.register(dto, deviceFingerprint);
   }
 
   /**
@@ -47,8 +51,12 @@ export class AuthController {
   @Post('login')
   @ApiOperation({ summary: 'Autentica un core.users por email + password' })
   @ApiOkResponse({ type: TokenPairDto })
-  login(@Body() dto: LoginDto): Promise<TokenPairDto | MfaRequiredResponseDto> {
-    return this.authService.login(dto);
+  login(
+    @Body() dto: LoginDto,
+    @Headers('x-client-app') clientApp?: string,
+    @Headers('x-device-id') deviceFingerprint?: string,
+  ): Promise<TokenPairDto | MfaRequiredResponseDto> {
+    return this.authService.login(dto, clientApp, deviceFingerprint);
   }
 
   @Post('refresh')
@@ -129,5 +137,29 @@ export class AuthController {
     @Body() dto: ConfirmPasswordResetDto,
   ): Promise<{ ok: boolean }> {
     return this.authService.resetPassword(dto);
+  }
+
+  @Post('verify-email')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Confirma el código de 6 dígitos enviado al registrarse',
+  })
+  verifyEmail(
+    @CurrentContext() context: RequestContextData,
+    @Body() dto: VerifyEmailDto,
+  ): Promise<{ ok: boolean }> {
+    return this.authService.verifyEmail(context.userId!, dto.code);
+  }
+
+  @Throttle({ default: { ttl: 60_000, limit: 3 } })
+  @Post('resend-verification-email')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Reenvía el código de verificación de email' })
+  resendVerificationEmail(
+    @CurrentContext() context: RequestContextData,
+  ): Promise<{ ok: boolean }> {
+    return this.authService.resendVerificationCode(context.userId!);
   }
 }

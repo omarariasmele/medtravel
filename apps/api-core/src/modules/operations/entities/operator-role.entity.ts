@@ -58,6 +58,9 @@ export class OperatorRoleEntity extends UuidBaseEntity {
   @Column({ name: 'can_manage_config', type: 'boolean', default: false })
   canManageConfig: boolean;
 
+  @Column({ name: 'can_edit_clinical_data', type: 'boolean', default: false })
+  canEditClinicalData: boolean;
+
   @Column({ name: 'module_access', type: 'text', array: true, nullable: true })
   moduleAccess?: string[];
 

@@ -10,10 +10,10 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  Typography,
 } from '@mui/material';
 
 import { apiClient } from '../../lib/api-client';
+import { usePageTitle } from '../../lib/page-title';
 import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface AuditEvent {
@@ -41,6 +41,7 @@ const OPERATION_COLOR: Record<AuditEvent['operation'], 'success' | 'info' | 'err
 };
 
 export function AuditLogPage() {
+  usePageTitle('Auditoría de accesos');
   const auditQuery = useQuery({
     queryKey: ['audit-events'],
     queryFn: async () => {
@@ -71,10 +72,6 @@ export function AuditLogPage() {
 
   return (
     <>
-      <Typography variant="h4" gutterBottom>
-        Auditoría de accesos
-      </Typography>
-
       {auditQuery.isLoading && <CircularProgress />}
       {auditQuery.isError && (
         <Alert severity="error">No se pudo cargar el registro de auditoría.</Alert>

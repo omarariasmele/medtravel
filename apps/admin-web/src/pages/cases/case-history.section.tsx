@@ -21,7 +21,14 @@ interface CaseMedicalEvent {
   eventTypeId: string;
   description: string;
   performedBy?: string;
+  registeredById?: string;
   eventAt: string;
+}
+
+interface Operator {
+  id: string;
+  firstName: string;
+  lastName: string;
 }
 
 /**
@@ -37,9 +44,11 @@ interface CaseMedicalEvent {
 export function CaseHistorySection({
   caseId,
   memberId,
+  readOnly,
 }: {
   caseId: string;
   memberId: string;
+  readOnly?: boolean;
 }) {
   const [description, setDescription] = useState('');
   const [eventTypeId, setEventTypeId] = useState('');
@@ -47,6 +56,20 @@ export function CaseHistorySection({
   const queryClient = useQueryClient();
 
   const eventTypeCatalog = useCatalog('MEDICAL_EVENT_TYPE');
+
+  const operatorsQuery = useQuery({
+    queryKey: ['operations', 'operators'],
+    queryFn: async () => {
+      const { data } = await apiClient.get<Operator[]>('/operations/operators');
+      return data;
+    },
+  });
+
+  const operatorLabel = (registeredById?: string) => {
+    if (!registeredById) return null;
+    const op = operatorsQuery.data?.find((o) => o.id === registeredById);
+    return op ? `${op.firstName} ${op.lastName}` : null;
+  };
 
   const listQuery = useQuery({
     queryKey: ['operations', 'case-medical-events', caseId],
@@ -97,6 +120,7 @@ export function CaseHistorySection({
 
         {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
+        {!readOnly && (
         <Box sx={{ display: 'flex', gap: 1, mb: 2, alignItems: 'flex-start' }}>
           <TextField
             select
@@ -126,6 +150,7 @@ export function CaseHistorySection({
             Agregar
           </Button>
         </Box>
+        )}
 
         {listQuery.isLoading && <CircularProgress size={24} />}
         {sorted.length === 0 && (
@@ -139,6 +164,8 @@ export function CaseHistorySection({
             <Typography variant="caption" color="text.secondary" component="div">
               {new Date(e.eventAt).toLocaleString('es-AR')}{' '}
               <Chip size="small" label={labelFor(eventTypeCatalog.data, e.eventTypeId)} sx={{ ml: 1 }} />
+              {' · '}
+              {operatorLabel(e.registeredById) ?? 'Operador desconocido'}
               {e.performedBy && ` · ${e.performedBy}`}
             </Typography>
             <Typography variant="body2">{e.description}</Typography>

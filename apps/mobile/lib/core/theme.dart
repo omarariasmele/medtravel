@@ -19,6 +19,14 @@ ThemeData buildAppTheme() {
       backgroundColor: primary,
       foregroundColor: Colors.white,
     ),
+    // Sin esto, el TabBar dentro del AppBar (ver "Ficha médica") usa el
+    // color de texto por defecto de Material 3 (oscuro) — invisible
+    // sobre el fondo verde del AppBar.
+    tabBarTheme: const TabBarThemeData(
+      labelColor: Colors.white,
+      unselectedLabelColor: Colors.white70,
+      indicatorColor: Colors.white,
+    ),
     inputDecorationTheme: const InputDecorationTheme(
       border: OutlineInputBorder(),
     ),

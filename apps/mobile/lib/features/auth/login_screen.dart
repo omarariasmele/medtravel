@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/auth_state.dart';
+import '../../core/error_message.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -16,6 +17,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _passwordController = TextEditingController();
   bool _loading = false;
   String? _error;
+  bool _obscurePassword = true;
 
   Future<void> _submit() async {
     setState(() {
@@ -28,8 +30,8 @@ class _LoginScreenState extends State<LoginScreen> {
             _passwordController.text,
           );
       // go_router redirige solo (ver router.dart) al detectar isAuthenticated.
-    } catch (_) {
-      setState(() => _error = 'Email o contraseña incorrectos.');
+    } catch (e) {
+      setState(() => _error = dioErrorMessage(e, 'Email o contraseña incorrectos.'));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -48,13 +50,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Icon(Icons.health_and_safety, size: 56, color: Theme.of(context).colorScheme.primary),
-                  const SizedBox(height: 8),
-                  Text(
-                    'MedTravelApp',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.headlineMedium,
-                  ),
+                  Image.asset('assets/images/logo-principal.png', height: 160),
                   const SizedBox(height: 24),
                   if (_error != null) ...[
                     Text(_error!, style: const TextStyle(color: Colors.red)),
@@ -68,8 +64,14 @@ class _LoginScreenState extends State<LoginScreen> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: _passwordController,
-                    obscureText: true,
-                    decoration: const InputDecoration(labelText: 'Contraseña'),
+                    obscureText: _obscurePassword,
+                    decoration: InputDecoration(
+                      labelText: 'Contraseña',
+                      suffixIcon: IconButton(
+                        icon: Icon(_obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+                        onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                      ),
+                    ),
                     onSubmitted: (_) => _submit(),
                   ),
                   const SizedBox(height: 20),
@@ -83,6 +85,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   TextButton(
                     onPressed: () => context.push('/register'),
                     child: const Text('¿No tenés cuenta? Registrate'),
+                  ),
+                  TextButton(
+                    onPressed: () => context.push('/forgot-password'),
+                    child: const Text('¿Olvidaste tu contraseña?'),
                   ),
                 ],
               ),

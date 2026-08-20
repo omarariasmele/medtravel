@@ -20,6 +20,8 @@ import { MemberContactEntity } from './entities/member-contact.entity';
 import { IdentityResourceController } from './identity-resource.controller';
 import { TravelersOverviewController } from './travelers-overview.controller';
 import { TravelersWithoutTenantController } from './travelers-without-tenant.controller';
+import { PersonPhoneController } from './person-phone.controller';
+import { PersonSessionController } from './person-session.controller';
 
 @Module({
   imports: [
@@ -45,6 +47,8 @@ import { TravelersWithoutTenantController } from './travelers-without-tenant.con
   controllers: [
     TravelersOverviewController,
     TravelersWithoutTenantController,
+    PersonPhoneController,
+    PersonSessionController,
     IdentityResourceController,
   ],
   exports: [TypeOrmModule],

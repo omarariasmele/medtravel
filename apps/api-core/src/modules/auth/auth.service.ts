@@ -76,23 +76,29 @@ export class AuthService {
    * core.members: pertenecer a un tenant es una relación aparte
    * (enrollment/importación), no parte del alta de la persona.
    */
-  async register(dto: RegisterDto): Promise<TokenPairDto> {
+  async register(dto: RegisterDto, deviceFingerprint?: string): Promise<TokenPairDto> {
     const emailBlindIndex = this.computeBlindIndex(dto.email);
     const docNumberIdx = this.computeBlindIndex(dto.docNumber);
+    const phoneBlindIndex = dto.phone
+      ? this.computeBlindIndex(dto.phone)
+      : null;
     const passwordHash = await bcrypt.hash(dto.password, 10);
 
     let result: { person_id: string; user_id: string } | undefined;
     try {
       result = await this.txManager.runInTransaction(async (queryRunner) => {
         const rows = await queryRunner.query(
-          `SELECT * FROM core.register_person_and_user($1, $2, $3, $4, $5, $6)`,
+          `SELECT * FROM core.register_person_and_user($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
           [
             dto.firstName,
             dto.lastName,
             dto.email,
             emailBlindIndex,
             passwordHash,
+            dto.docCountryId,
             dto.preferredLang ?? 'es',
+            dto.phone ?? null,
+            phoneBlindIndex,
           ],
         );
         const registered = rows[0];
@@ -136,14 +142,104 @@ export class AuthService {
       throw error;
     }
 
-    return this.issueTokenPair({
-      userId: result!.user_id,
-      personId: result!.person_id,
-      email: dto.email,
-    });
+    await this.sendVerificationCode(result!.user_id, dto.email);
+
+    return this.issueTokenPair(
+      {
+        userId: result!.user_id,
+        personId: result!.person_id,
+        email: dto.email,
+      },
+      undefined,
+      deviceFingerprint,
+    );
   }
 
-  async login(dto: LoginDto): Promise<TokenPairDto | MfaRequiredResponseDto> {
+  /**
+   * Código de 6 dígitos (no un link — la app del viajero es mobile-only,
+   * sin página pública donde aterrizar un link de verificación). No
+   * propaga el error si el envío falla (SMTP caído, etc.): el registro
+   * ya se completó y el viajero puede seguir usando la app; solo pierde
+   * la posibilidad de verificar hasta pedir "Reenviar código".
+   */
+  private async sendVerificationCode(
+    userId: string,
+    email: string,
+  ): Promise<void> {
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const codeHash = this.hashToken(code);
+    const ttlMinutes = await getOperationalLimit(
+      this.txManager,
+      'EMAIL_VERIFICATION_CODE_TTL_MINUTES',
+      30,
+    );
+
+    await this.txManager.runInTransaction(
+      (queryRunner) =>
+        queryRunner.query(
+          `INSERT INTO core.email_verification_codes (user_id, code_hash, expires_at)
+           VALUES ($1, $2, NOW() + ($3 || ' minutes')::INTERVAL)`,
+          [userId, codeHash, ttlMinutes],
+        ),
+      { userId },
+    );
+
+    try {
+      await this.mailService.send(
+        email,
+        'Verificá tu email en MedTravelApp / Verify your MedTravelApp email',
+        `<p>Tu código de verificación es: <strong style="font-size:20px; letter-spacing:2px;">${code}</strong></p>
+         <p>Ingresalo en la app para confirmar tu email. Vence en ${ttlMinutes} minutos.</p>
+         <hr style="border:none; border-top:1px solid #e6e8e7; margin:20px 0;" />
+         <p>Your verification code is: <strong style="font-size:20px; letter-spacing:2px;">${code}</strong></p>
+         <p>Enter it in the app to confirm your email. It expires in ${ttlMinutes} minutes.</p>`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `No se pudo enviar el código de verificación de email: ${(error as Error).message}`,
+      );
+    }
+  }
+
+  async verifyEmail(userId: string, code: string): Promise<{ ok: boolean }> {
+    const codeHash = this.hashToken(code);
+    const verified = await this.txManager.runInTransaction(
+      async (queryRunner) => {
+        const rows = await queryRunner.query(
+          `SELECT core.consume_email_verification_code($1, $2) AS ok`,
+          [userId, codeHash],
+        );
+        return rows[0]?.ok as boolean;
+      },
+      { userId },
+    );
+
+    if (!verified) {
+      throw new BadRequestException('Código inválido o vencido');
+    }
+    return { ok: true };
+  }
+
+  async resendVerificationCode(userId: string): Promise<{ ok: boolean }> {
+    const email = await this.txManager.runInTransaction(async (queryRunner) => {
+      const rows = await queryRunner.query(
+        `SELECT core.get_user_email($1) AS email`,
+        [userId],
+      );
+      return rows[0]?.email as string | undefined;
+    });
+    if (!email) {
+      throw new BadRequestException('No se encontró el usuario');
+    }
+    await this.sendVerificationCode(userId, email);
+    return { ok: true };
+  }
+
+  async login(
+    dto: LoginDto,
+    clientApp?: string,
+    deviceFingerprint?: string,
+  ): Promise<TokenPairDto | MfaRequiredResponseDto> {
     const emailBlindIndex = this.computeBlindIndex(dto.email);
 
     const credentials = await this.txManager.runInTransaction<
@@ -233,27 +329,113 @@ export class AuthService {
           can_manage_operators: boolean;
           can_close_cases: boolean;
           can_access_medical: boolean;
+          can_edit_clinical_data: boolean;
         }
       | undefined
     >(async (queryRunner) => {
       const rows = await queryRunner.query(
-        `SELECT tenant_id, can_manage_config, can_manage_operators, can_close_cases, can_access_medical
+        `SELECT tenant_id, can_manage_config, can_manage_operators, can_close_cases, can_access_medical, can_edit_clinical_data
          FROM operations.get_operator_login_context($1)`,
         [credentials.user_id],
       );
       return rows[0];
     });
 
-    return this.issueTokenPair({
-      userId: credentials.user_id,
-      personId: credentials.person_id,
-      tenantId: operatorContext?.tenant_id ?? undefined,
-      canManageConfig: operatorContext?.can_manage_config,
-      canManageOperators: operatorContext?.can_manage_operators,
-      canCloseCases: operatorContext?.can_close_cases,
-      canAccessMedical: operatorContext?.can_access_medical,
-      email: dto.email,
-    });
+    // Operadores/staff y viajeros son poblaciones separadas — la app
+    // móvil es solo para viajeros. Sin esto, cualquier cuenta de
+    // operador (incluido un super admin) podía loguearse en la app y
+    // quedar navegando como si fuera un viajero, sin ningún dato de
+    // paciente real detrás.
+    if (clientApp === 'mobile' && operatorContext) {
+      throw new UnauthorizedException(
+        'Esta cuenta es de staff/operador — ingresá desde el panel de administración, no desde la app.',
+      );
+    }
+
+    // Bug real reportado en vivo: un viajero (ej. Stefano, sin fila en
+    // operations.operators) podía loguearse en admin-web igual que un
+    // operador — el chequeo de arriba solo bloqueaba el sentido
+    // contrario (operador entrando por mobile). admin-web ahora manda
+    // X-Client-App: 'admin-web' en cada request (ver api-client.ts) —
+    // salvo el auto-registro de profesionales/instituciones
+    // (professional-registration.page.tsx), que usa publicApiClient
+    // A PROPÓSITO sin este header, porque esa cuenta tampoco tiene
+    // contexto de operador todavía y no debe bloquearse acá.
+    if (clientApp === 'admin-web' && !operatorContext) {
+      throw new UnauthorizedException(
+        'Esta cuenta no tiene permisos de operador — no podés ingresar al panel de administración.',
+      );
+    }
+
+    // Pedido explícito del usuario: "la app se puede utilizar en dos
+    // telefonos en simultaneo con el mismo usuario, esto no deberia
+    // pasar". Rechaza el login nuevo (no cierra el anterior en
+    // silencio) — el viajero ve un mensaje claro y tiene que cerrar
+    // sesión en el otro equipo primero. Un operador puede destrabarlo
+    // desde admin-web si algo falla (sesión que quedó colgada sin
+    // logout explícito) — ver OperatorsAccountController/
+    // traveler-detail.page.tsx "Cerrar sesión activa".
+    if (clientApp === 'mobile') {
+      // Bug real reportado en vivo: "si el usuario se conectó del mismo
+      // dispositivo, no debería decir que hay otra sesión abierta" — el
+      // bloqueo comparaba SOLO por usuario, nunca por dispositivo (la
+      // columna device_fingerprint existía pero nunca se llenaba). Ahora
+      // el celular manda un id persistente (X-Device-Id, ver
+      // device_id_service.dart) — si reconecta desde el MISMO
+      // dispositivo, se revocan sus sesiones viejas (no deja basura
+      // acumulada) y se lo deja pasar sin bloqueo. El bloqueo real queda
+      // solo para cuando la sesión activa es de un device_fingerprint
+      // DISTINTO (o cuando el cliente todavía no manda el header, para
+      // no aflojar la protección con apps viejas).
+      const hasOtherDeviceSession = await this.txManager.runInTransaction(
+        async (queryRunner) => {
+          if (deviceFingerprint) {
+            // device_fingerprint IS NULL cubre las sesiones creadas
+            // ANTES de este cambio (ningún login viejo lo guardaba) —
+            // sin esto, una sesión legítima previa del mismo usuario
+            // queda bloqueando para siempre porque nunca hay nada
+            // contra qué compararla. Solo pasa una vez por sesión vieja
+            // (las nuevas ya siempre traen fingerprint real).
+            await queryRunner.query(
+              `UPDATE core.security_sessions
+               SET is_active = FALSE, revoked_at = NOW()
+               WHERE user_id = $1 AND is_active = TRUE AND revoked_at IS NULL
+                 AND (device_fingerprint = $2 OR device_fingerprint IS NULL)`,
+              [credentials.user_id, deviceFingerprint],
+            );
+          }
+          const rows = await queryRunner.query(
+            `SELECT 1 FROM core.security_sessions
+             WHERE user_id = $1 AND is_active = TRUE AND revoked_at IS NULL AND expires_at > NOW()
+             LIMIT 1`,
+            [credentials.user_id],
+          );
+          return rows.length > 0;
+        },
+        { userId: credentials.user_id },
+      );
+      if (hasOtherDeviceSession) {
+        throw new UnauthorizedException(
+          'Ya hay una sesión activa con este usuario en otro dispositivo. Cerrá sesión ahí primero — si no podés, pedile a un operador que la cierre desde el panel de administración.',
+        );
+      }
+    }
+
+    return this.issueTokenPair(
+      {
+        userId: credentials.user_id,
+        personId: credentials.person_id,
+        tenantId: operatorContext?.tenant_id ?? undefined,
+        canManageConfig: operatorContext?.can_manage_config,
+        canManageOperators: operatorContext?.can_manage_operators,
+        canCloseCases: operatorContext?.can_close_cases,
+        canAccessMedical: operatorContext?.can_access_medical,
+        canEditClinicalData: operatorContext?.can_edit_clinical_data,
+        email: dto.email,
+      },
+      undefined,
+      deviceFingerprint,
+    );
   }
 
   /**
@@ -375,6 +557,7 @@ export class AuthService {
         canManageOperators: payload.canManageOperators,
         canCloseCases: payload.canCloseCases,
         canAccessMedical: payload.canAccessMedical,
+        canEditClinicalData: payload.canEditClinicalData,
         email: payload.email,
       },
       session.id,
@@ -446,10 +629,10 @@ export class AuthService {
         await this.mailService.send(
           dto.email,
           'Restablecer tu contraseña de MedTravelApp / Reset your MedTravelApp password',
-          `<p>Hacé clic <a href="${resetUrl}">acá</a> para restablecer tu contraseña.</p>
+          `<p>Hacé clic <a href="${resetUrl}">acá</a> para restablecer la contraseña de la cuenta <strong>${dto.email}</strong>.</p>
            <p>Este link vence en ${ttlMinutes} minutos. Si no lo pediste vos, ignorá este correo.</p>
            <hr style="border:none; border-top:1px solid #e6e8e7; margin:20px 0;" />
-           <p>Click <a href="${resetUrl}">here</a> to reset your password.</p>
+           <p>Click <a href="${resetUrl}">here</a> to reset the password for account <strong>${dto.email}</strong>.</p>
            <p>This link expires in ${ttlMinutes} minutes. If you didn't request this, please ignore this email.</p>`,
         );
       } catch (error) {
@@ -578,9 +761,11 @@ export class AuthService {
       canManageOperators?: boolean;
       canCloseCases?: boolean;
       canAccessMedical?: boolean;
+      canEditClinicalData?: boolean;
       email?: string;
     },
     existingSessionId?: string,
+    deviceFingerprint?: string,
   ): Promise<TokenPairDto> {
     const sessionId = existingSessionId ?? randomUUID();
 
@@ -592,6 +777,7 @@ export class AuthService {
       canManageOperators: claims.canManageOperators,
       canCloseCases: claims.canCloseCases,
       canAccessMedical: claims.canAccessMedical,
+      canEditClinicalData: claims.canEditClinicalData,
       email: claims.email,
       sessionId,
     };
@@ -625,16 +811,21 @@ export class AuthService {
             ],
           );
         } else {
+          // device_fingerprint (X-Device-Id del celular, ver
+          // device_id_service.dart) se guarda acá para poder distinguir
+          // "mismo dispositivo reconectando" de "otro dispositivo en
+          // paralelo" en el próximo login — ver el chequeo de arriba.
           await queryRunner.query(
             `INSERT INTO core.security_sessions
-               (id, user_id, session_token_hash, refresh_token_hash, expires_at)
-             VALUES ($1, $2, $3, $4, NOW() + ($5 || ' seconds')::INTERVAL)`,
+               (id, user_id, session_token_hash, refresh_token_hash, expires_at, device_fingerprint)
+             VALUES ($1, $2, $3, $4, NOW() + ($5 || ' seconds')::INTERVAL, $6)`,
             [
               sessionId,
               claims.userId,
               sessionTokenHash,
               refreshTokenHash,
               refreshTtlSeconds,
+              deviceFingerprint ?? null,
             ],
           );
         }

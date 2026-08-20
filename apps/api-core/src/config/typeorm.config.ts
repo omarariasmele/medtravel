@@ -25,6 +25,9 @@ import { RetentionPolicyEntity } from '@modules/params/entities/retention-policy
 import { ConsentPurposeEntity } from '@modules/params/entities/consent-purpose.entity';
 import { JurisdictionRuleEntity } from '@modules/params/entities/jurisdiction-rule.entity';
 
+import { InterviewQuestionEntity } from '@modules/ai/entities/interview-question.entity';
+import { DestinationHealthInfoEntity } from '@modules/ai/entities/destination-health-info.entity';
+
 import { DataAuditEventEntity } from '@modules/audit/entities/data-audit-event.entity';
 import { BreakGlassGrantEntity } from '@modules/audit/entities/break-glass-grant.entity';
 import { DataArchiveRecordEntity } from '@modules/audit/entities/data-archive-record.entity';
@@ -69,6 +72,7 @@ import { ConditionEntity } from '@modules/clinical/entities/condition.entity';
 import { MedicationEntity } from '@modules/clinical/entities/medication.entity';
 import { SurgeryEntity } from '@modules/clinical/entities/surgery.entity';
 import { LabResultEntity } from '@modules/clinical/entities/lab-result.entity';
+import { ImplantDeviceEntity } from '@modules/clinical/entities/implant-device.entity';
 import { VitalsHistoryEntity } from '@modules/clinical/entities/vitals-history.entity';
 import { VaccineEntity } from '@modules/clinical/entities/vaccine.entity';
 import { ClinicalDocumentEntity } from '@modules/clinical/entities/clinical-document.entity';
@@ -164,6 +168,9 @@ export const buildTypeOrmOptions = (
     RetentionPolicyEntity,
     ConsentPurposeEntity,
     JurisdictionRuleEntity,
+    // ai
+    InterviewQuestionEntity,
+    DestinationHealthInfoEntity,
     // audit
     DataAuditEventEntity,
     BreakGlassGrantEntity,
@@ -209,6 +216,7 @@ export const buildTypeOrmOptions = (
     MedicationEntity,
     SurgeryEntity,
     LabResultEntity,
+    ImplantDeviceEntity,
     VitalsHistoryEntity,
     VaccineEntity,
     ClinicalDocumentEntity,

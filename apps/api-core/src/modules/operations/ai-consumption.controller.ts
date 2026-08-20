@@ -32,6 +32,16 @@ interface DailyTrendRow {
   message_count: string;
 }
 
+interface ModelComparisonRow {
+  intake_model: string;
+  conversations: string;
+  messages: string;
+  tokens_input: string;
+  tokens_output: string;
+  cost_usd: string;
+  avg_cost_per_conversation: string;
+}
+
 /**
  * Dashboard de consumo/costo de IA (plataforma completa, no por
  * tenant — el gasto de OpenAI es un costo único de la operación, no
@@ -92,6 +102,27 @@ export class AiConsumptionController {
       day: r.day,
       costUsd: Number(r.cost_usd),
       messageCount: Number(r.message_count),
+    }));
+  }
+
+  /**
+   * Pedido explícito del usuario: comparar costo real entre el modelo
+   * Clásico y el Estructurado (ver AIService.structuredIntakeChat) para
+   * decidir cuál conviene después de probar ambos en una demo.
+   */
+  @Get('model-comparison')
+  async modelComparison(@Query('days') days?: string) {
+    const rows: ModelComparisonRow[] = await this.txManager.runInTransaction((queryRunner) =>
+      queryRunner.query(`SELECT * FROM ai.get_intake_model_comparison($1)`, [Number(days) || 30]),
+    );
+    return rows.map((r) => ({
+      intakeModel: r.intake_model,
+      conversations: Number(r.conversations),
+      messages: Number(r.messages),
+      tokensInput: Number(r.tokens_input),
+      tokensOutput: Number(r.tokens_output),
+      costUsd: Number(r.cost_usd),
+      avgCostPerConversation: Number(r.avg_cost_per_conversation),
     }));
   }
 }

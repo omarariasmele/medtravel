@@ -20,7 +20,7 @@ import {
  * de alta operadores nuevos.
  */
 export function createPermissionGuard(
-  permission: 'canManageConfig' | 'canManageOperators',
+  permission: 'canManageConfig' | 'canManageOperators' | 'canEditClinicalData',
 ): Type<CanActivate> {
   @Injectable()
   class PermissionGuard implements CanActivate {
@@ -39,3 +39,11 @@ export function createPermissionGuard(
 
 export const ConfigAccessGuard = createPermissionGuard('canManageConfig');
 export const ManageOperatorsGuard = createPermissionGuard('canManageOperators');
+/**
+ * Pedido explícito del usuario: corregir/borrar (baja lógica) un
+ * antecedente clínico del viajero desde la web solo lo puede hacer un
+ * operador puntualmente autorizado — no cualquiera con un caso
+ * abierto (que hoy ya podría vía clinical.has_clinical_access, nunca
+ * se había construido una pantalla que lo usara).
+ */
+export const ClinicalEditGuard = createPermissionGuard('canEditClinicalData');

@@ -6,6 +6,7 @@ import LocalHospitalIcon from '@mui/icons-material/LocalHospital';
 
 import { useAuth } from '../auth/auth-context';
 import { apiClient } from '../lib/api-client';
+import { usePageTitle } from '../lib/page-title';
 
 interface Tenant {
   id: string;
@@ -67,6 +68,7 @@ function StatsCard({ s }: { s: DashboardStats }) {
 }
 
 export function DashboardPage() {
+  usePageTitle('Dashboard operativo');
   const { claims } = useAuth();
 
   const tenantQuery = useQuery({
@@ -99,14 +101,26 @@ export function DashboardPage() {
     },
   });
 
-  const platformStats = (statsQuery.data ?? []).filter((s) => s.isPlatformTenant);
   const companyStats = (statsQuery.data ?? []).filter((s) => !s.isPlatformTenant);
+
+  /**
+   * OYSGROUP no tiene viajeros/casos propios (nunca debería tenerlos —
+   * es el administrador de la plataforma, no una empresa de asistencia
+   * real, ver gap #47/#48). Pedido explícito del usuario: su tarjeta
+   * muestra el TOTAL de todas las empresas de asistencia reales, no un
+   * conteo propio que siempre daría 0.
+   */
+  const platformStats = (statsQuery.data ?? [])
+    .filter((s) => s.isPlatformTenant)
+    .map((s) => ({
+      ...s,
+      travelerCount: companyStats.reduce((sum, c) => sum + c.travelerCount, 0),
+      tripCount: companyStats.reduce((sum, c) => sum + c.tripCount, 0),
+      openCaseCount: companyStats.reduce((sum, c) => sum + c.openCaseCount, 0),
+    }));
 
   return (
     <>
-      <Typography variant="h4" gutterBottom>
-        Dashboard operativo
-      </Typography>
       <Grid container spacing={2} sx={{ mb: 3 }}>
         <Grid size={{ xs: 12, sm: 6, md: 4 }}>
           <Card>
@@ -142,7 +156,8 @@ export function DashboardPage() {
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
             OYSGROUP administra el sistema — no es una empresa de asistencia al
-            viajero, por eso se muestra separada del resto.
+            viajero, por eso se muestra separada del resto. Los números son el
+            total de todas las empresas de asistencia reales.
           </Typography>
           <Grid container spacing={2} sx={{ mb: 3 }}>
             {platformStats.map((s) => (

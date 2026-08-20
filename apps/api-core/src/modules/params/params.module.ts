@@ -30,6 +30,12 @@ import { CatalogsController } from './catalogs.controller';
 import { ParamsAdminResourceController } from './params-admin-resource.controller';
 import { SmtpSettingsService } from './smtp-settings.service';
 import { SmtpSettingsController } from './smtp-settings.controller';
+import { AppSettingsService } from './app-settings.service';
+import { AppSettingsController } from './app-settings.controller';
+import { CatalogResolutionService } from './catalog-resolution.service';
+import { CatalogValuesController } from './catalog-values.controller';
+import { CatalogMergeService } from './catalog-merge.service';
+import { CatalogMergeController } from './catalog-merge.controller';
 
 @Module({
   imports: [
@@ -65,10 +71,19 @@ import { SmtpSettingsController } from './smtp-settings.controller';
   // si se registra primero, y nunca llegaría al controller dedicado.
   controllers: [
     CatalogsController,
+    CatalogValuesController,
+    CatalogMergeController,
     SmtpSettingsController,
+    AppSettingsController,
     ParamsAdminResourceController,
   ],
-  providers: [CatalogsService, SmtpSettingsService],
-  exports: [TypeOrmModule],
+  providers: [
+    CatalogsService,
+    CatalogResolutionService,
+    CatalogMergeService,
+    SmtpSettingsService,
+    AppSettingsService,
+  ],
+  exports: [TypeOrmModule, CatalogResolutionService],
 })
 export class ParamsModule {}

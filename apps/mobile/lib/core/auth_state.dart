@@ -11,10 +11,32 @@ import 'jwt.dart';
 class AuthState extends ChangeNotifier {
   String? _personId;
   bool _isLoading = true;
+  // Arranca en true a propósito: mientras no sabemos el estado real
+  // (todavía no llegó la respuesta de /me/profile), no queremos
+  // bloquear al viajero por las dudas — se corrige solo apenas
+  // refreshEmailVerified() resuelve.
+  bool _emailVerified = true;
 
   bool get isAuthenticated => _personId != null;
   String? get personId => _personId;
   bool get isLoading => _isLoading;
+  bool get emailVerified => _emailVerified;
+
+  /// Pedido explícito del usuario: "la app hasta que no este validado
+  /// el mail no deberia permitir su uso" — el router (ver router.dart)
+  /// redirige a /verify-email mientras esto sea false, así que hay que
+  /// mantenerlo al día después de login/registro y de cualquier cambio
+  /// de email desde el perfil.
+  Future<void> refreshEmailVerified() async {
+    try {
+      final response = await ApiClient.instance.dio.get('/me/profile');
+      _emailVerified = response.data['email_verified'] as bool? ?? true;
+    } catch (_) {
+      // Si falla la carga (sin conexión, etc.) no se bloquea al
+      // viajero por un problema de red — se reintenta la próxima vez.
+    }
+    notifyListeners();
+  }
 
   Future<void> bootstrap() async {
     final token = await ApiClient.instance.getAccessToken();
@@ -28,6 +50,7 @@ class AuthState extends ChangeNotifier {
     }
     _isLoading = false;
     notifyListeners();
+    if (_personId != null) await refreshEmailVerified();
   }
 
   Future<void> login(String email, String password) async {
@@ -47,6 +70,7 @@ class AuthState extends ChangeNotifier {
     required String docNumber,
     required String docCountryId,
     String? preferredLang,
+    String? phone,
   }) async {
     final response = await ApiClient.instance.dio.post(
       '/auth/register',
@@ -59,6 +83,7 @@ class AuthState extends ChangeNotifier {
         'docNumber': docNumber,
         'docCountryId': docCountryId,
         if (preferredLang != null) 'preferredLang': preferredLang,
+        if (phone != null && phone.isNotEmpty) 'phone': phone,
       },
     );
     await _applyTokens(response.data);
@@ -72,11 +97,13 @@ class AuthState extends ChangeNotifier {
     final payload = decodeJwtPayload(data['accessToken'] as String);
     _personId = payload['personId'] as String?;
     notifyListeners();
+    await refreshEmailVerified();
   }
 
   Future<void> logout() async {
     await ApiClient.instance.clearTokens();
     _personId = null;
+    _emailVerified = true;
     notifyListeners();
   }
 }

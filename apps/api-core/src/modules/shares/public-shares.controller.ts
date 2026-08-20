@@ -6,13 +6,17 @@ import {
   Param,
   Post,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { Request } from 'express';
+import { Request, Response } from 'express';
+import { join } from 'path';
 
 import { TenantTransactionManager } from '@common/database/tenant-transaction.manager';
+
+const AVATARS_DIR = join(process.cwd(), 'uploads', 'avatars');
 
 import {
   EmergencyShareTokenGuard,
@@ -43,22 +47,77 @@ export class PublicSharesController {
   @UseGuards(EmergencyShareTokenGuard)
   @Get(':token')
   async read(@Req() request: ShareRequest) {
-    const { personId, scope, expiresAt, canSubmitNote } = request.shareContext;
+    const { personId, scope, expiresAt, canSubmitNote, translatedProfile, translatedLanguage } =
+      request.shareContext;
 
-    const profile = await this.txManager.runInTransaction(
-      async (queryRunner) => {
-        await queryRunner.query(
-          `SELECT set_config('app.emergency_token_active', 'true', true)`,
-        );
-        await queryRunner.query(
-          `SELECT set_config('app.emergency_token_person_id', $1, true)`,
-          [personId],
-        );
-        return buildSharedProfile(queryRunner, personId, scope);
-      },
-    );
+    // Bug real reportado en vivo: acá antes se releía translated_profile
+    // con un SELECT normal contra emergency.tokens, pero la única RLS
+    // policy de esa tabla (tokens_titular) exige app.current_person_id/
+    // current_tenant_id — GUCs que NUNCA están seteadas en este flujo
+    // público/anónimo (el médico no tiene sesión). El SELECT devolvía 0
+    // filas siempre, en silencio, y el link caía al español pese a que
+    // la traducción sí se había guardado bien al generarlo. Ahora se
+    // toma directo de shareContext: emergency.redeem_share_token() ya
+    // es SECURITY DEFINER y ya leía la fila completa del token para
+    // validarlo, así que devolver también estas dos columnas ahí evita
+    // un segundo query que RLS bloquea.
+    const profile = await this.txManager.runInTransaction(async (queryRunner) => {
+      await queryRunner.query(
+        `SELECT set_config('app.emergency_token_active', 'true', true)`,
+      );
+      await queryRunner.query(
+        `SELECT set_config('app.emergency_token_person_id', $1, true)`,
+        [personId],
+      );
+      return buildSharedProfile(queryRunner, personId, scope);
+    });
 
-    return { ...profile, expiresAt, canSubmitNote };
+    // `language` le dice al frontend en qué idioma mostrar el resto de
+    // la pantalla (títulos, labels de catálogo como género/grupo
+    // sanguíneo) — ver shared-profile-view.tsx.
+    return {
+      ...profile,
+      ...(translatedProfile ?? {}),
+      expiresAt,
+      canSubmitNote,
+      language: translatedLanguage ?? 'es',
+    };
+  }
+
+  /**
+   * Foto de perfil del viajero para el médico que entra por QR/link —
+   * mismo mecanismo de las dos GUCs que read() (activa el camino #2 de
+   * clinical.has_clinical_access), nunca un directorio estático público.
+   */
+  @Throttle({ default: { ttl: 60_000, limit: 20 } })
+  @UseGuards(EmergencyShareTokenGuard)
+  @Get(':token/photo')
+  async getPhoto(
+    @Req() request: ShareRequest,
+    @Res() res: Response,
+  ): Promise<void> {
+    const { personId } = request.shareContext;
+
+    const row = await this.txManager.runInTransaction(async (queryRunner) => {
+      await queryRunner.query(
+        `SELECT set_config('app.emergency_token_active', 'true', true)`,
+      );
+      await queryRunner.query(
+        `SELECT set_config('app.emergency_token_person_id', $1, true)`,
+        [personId],
+      );
+      const [summary] = await queryRunner.query(
+        `SELECT * FROM clinical.get_patient_summary($1)`,
+        [personId],
+      );
+      return summary;
+    });
+
+    if (!row?.photo_path) {
+      throw new NotFoundException('Sin foto de perfil');
+    }
+
+    res.sendFile(row.photo_path, { root: AVATARS_DIR });
   }
 
   /**

@@ -38,4 +38,13 @@ export class CreateEmergencyCaseDto {
   @IsOptional()
   @IsNumber()
   locationAccuracy?: number;
+
+  /** FK a params.catalog_values (dominio COUNTRY) — resuelto en el cliente (viaje activo, GPS geocodificado en el dispositivo, o ingresado a mano). */
+  @IsOptional()
+  @IsUUID()
+  countryId?: string;
+
+  @IsOptional()
+  @IsString()
+  city?: string;
 }

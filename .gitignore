@@ -7,6 +7,10 @@ dist
 apps/*/coverage/
 .DS_Store
 
+# Archivos subidos por usuarios (fotos de perfil, etc.) — nunca a git,
+# viven solo en disco del servidor.
+apps/api-core/uploads/
+
 # Puede contener credenciales reales (ej. SQLTools guarda la password en
 # texto plano en settings.json) — nunca subir esto a git.
 .vscode/
@@ -14,3 +18,15 @@ apps/*/coverage/
 # Artefacto local de extensiones de SQL (SQLTools, etc.) — no es parte
 # del proyecto, puede quedar en cualquier carpeta del workspace.
 *.session.sql
+
+# Password del keystore de firma de la app (generado esta sesión,
+# entregado al usuario por fuera) — key.properties y *.jks ya están
+# cubiertos por apps/mobile/android/.gitignore, pero este archivo vive
+# un nivel más arriba y no caía bajo esa regla.
+*-DO-NOT-COMMIT*
+
+# Salida de build de Gradle — el .gitignore de apps/mobile/android/ no
+# la estaba cubriendo del todo (se filtraba al menos un reporte HTML
+# de Gradle en un `git add -A` de prueba).
+apps/mobile/android/build/
+apps/mobile/build/

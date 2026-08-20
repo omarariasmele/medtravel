@@ -9,7 +9,7 @@ import { getOperationalLimit } from '@common/database/operational-limits.helper'
 import { CurrentContext } from '@common/request-context/current-context.decorator';
 import { RequestContextData } from '@common/request-context/request-context.types';
 
-import { resolveMemberId } from './me-member.helper';
+import { resolveShareOwner } from './me-member.helper';
 import { GenerateQrDto } from './dto/generate-qr.dto';
 
 @ApiTags('me')
@@ -46,7 +46,7 @@ export class MeEmergencyController {
     const accessUrl = `${baseUrl}/emergency/${tokenValue}`;
 
     return this.txManager.runInTransaction(async (queryRunner) => {
-      const memberId = await resolveMemberId(
+      const owner = await resolveShareOwner(
         queryRunner,
         context.personId!,
         dto.memberId,
@@ -54,15 +54,15 @@ export class MeEmergencyController {
 
       const rows = await queryRunner.query(
         `INSERT INTO emergency.tokens
-           (member_id, token_type_id, token_value, token_hash, access_url,
+           (member_id, person_id, token_type_id, token_value, token_hash, access_url,
             expires_at, status_id)
          VALUES (
-           $1, params.catalog_id('TOKEN_TYPE', 'DYNAMIC_QR'), $2, $3, $4,
-           NOW() + ($5 || ' seconds')::INTERVAL,
+           $1, $2, params.catalog_id('TOKEN_TYPE', 'DYNAMIC_QR'), $3, $4, $5,
+           NOW() + ($6 || ' seconds')::INTERVAL,
            params.catalog_id('TOKEN_STATUS', 'ACTIVE')
          )
          RETURNING id, access_url, expires_at`,
-        [memberId, tokenValue, tokenHash, accessUrl, ttlSeconds],
+        [owner.memberId, owner.personId, tokenValue, tokenHash, accessUrl, ttlSeconds],
       );
       return rows[0];
     });

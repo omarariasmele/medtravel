@@ -34,6 +34,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       canManageOperators: payload.canManageOperators ?? false,
       canCloseCases: payload.canCloseCases ?? false,
       canAccessMedical: payload.canAccessMedical ?? false,
+      canEditClinicalData: payload.canEditClinicalData ?? false,
     };
   }
 }

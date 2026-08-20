@@ -21,6 +21,8 @@ export interface JwtPayload {
   canManageOperators?: boolean;
   canCloseCases?: boolean;
   canAccessMedical?: boolean;
+  /** Pedido explícito del usuario: solo operadores puntualmente autorizados pueden corregir/borrar antecedentes clínicos del viajero, no cualquiera con acceso al caso. */
+  canEditClinicalData?: boolean;
   /** Email en texto plano, solo para mostrar "conectado como X" en la UI — no es un GUC. */
   email?: string;
 }

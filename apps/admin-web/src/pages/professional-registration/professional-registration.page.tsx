@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import {
@@ -18,6 +18,7 @@ import {
 import { publicApiClient } from '../../lib/public-api-client';
 import { useCatalog } from '../../lib/catalog-hooks';
 import { setTokens } from '../../lib/api-client';
+import { apiErrorMessage } from '../../lib/api-error';
 
 /**
  * Alta pública de médico/institución — llega acá desde el link de
@@ -27,14 +28,30 @@ import { setTokens } from '../../lib/api-client';
  * definición, un profesional nuevo no tiene cuenta todavía) — usa
  * publicApiClient, no apiClient.
  */
+/** preferred_lang es un CHAR(5) libre en core.users, no un FK a catálogo — alcanza con las opciones más comunes acá. */
+const LANGUAGE_OPTIONS = [
+  { code: 'es', label: 'Español' },
+  { code: 'en', label: 'English' },
+  { code: 'pt', label: 'Português' },
+  { code: 'fr', label: 'Français' },
+];
+
 export function ProfessionalRegistrationPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const claimToken = searchParams.get('claimToken');
+  // Pedido explícito del usuario: no volver a pedir lo que el médico ya
+  // tipeó en "Dejar nota de la atención" — public-share.page.tsx manda
+  // estos mismos datos como query params al tocar "Registrarme".
+  const prefillName = searchParams.get('name') ?? '';
+  const prefillEmail = searchParams.get('email') ?? '';
+  const prefillSpecialty = searchParams.get('specialty') ?? '';
+  const prefillInstitution = searchParams.get('institution') ?? '';
+  const [prefillFirstName, ...prefillLastNameParts] = prefillName.trim().split(/\s+/);
 
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [email, setEmail] = useState('');
+  const [firstName, setFirstName] = useState(prefillName ? prefillFirstName : '');
+  const [lastName, setLastName] = useState(prefillLastNameParts.join(' '));
+  const [email, setEmail] = useState(prefillEmail);
   const [password, setPassword] = useState('');
   const [docTypeId, setDocTypeId] = useState('');
   const [docNumber, setDocNumber] = useState('');
@@ -43,14 +60,36 @@ export function ProfessionalRegistrationPage() {
   const [stateProvince, setStateProvince] = useState('');
   const [city, setCity] = useState('');
   const [licenseNumber, setLicenseNumber] = useState('');
-  const [institution, setInstitution] = useState('');
+  const [institution, setInstitution] = useState(prefillInstitution);
   const [isInstitution, setIsInstitution] = useState(false);
   const [taxId, setTaxId] = useState('');
+  const [specialtyId, setSpecialtyId] = useState('');
+  const [phone, setPhone] = useState('');
+  const [preferredLang, setPreferredLang] = useState('es');
   const [claimResult, setClaimResult] = useState<{ certified: boolean } | null>(null);
 
   const docTypeCatalog = useCatalog('DOCUMENT_TYPE');
   const countryCatalog = useCatalog('COUNTRY');
   const genderCatalog = useCatalog('GENDER');
+  const specialtyCatalog = useCatalog('MEDICAL_SPECIALTY');
+
+  // La especialidad que el médico tipeó en la nota es texto libre — acá
+  // se intenta matchear contra el catálogo (best-effort, una sola vez
+  // que carga, sin distinguir acentos porque nadie tipea tildes en un
+  // campo libre de forma consistente); si no matchea nada, el select
+  // queda vacío pero el resto de lo precargado (nombre/email/
+  // institución) sigue sirviendo igual.
+  useEffect(() => {
+    if (!prefillSpecialty || specialtyId || !specialtyCatalog.data) return;
+    const strip = (s: string) => s.trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const normalized = strip(prefillSpecialty);
+    const match = specialtyCatalog.data.find((s) => {
+      const label = strip(s.labelEs);
+      return label === normalized || label.includes(normalized) || normalized.includes(label);
+    });
+    if (match) setSpecialtyId(match.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [specialtyCatalog.data]);
 
   const registerMutation = useMutation({
     mutationFn: async () => {
@@ -69,6 +108,9 @@ export function ProfessionalRegistrationPage() {
         institution: institution || undefined,
         isInstitution,
         taxId: isInstitution && taxId ? taxId : undefined,
+        specialtyId: specialtyId || undefined,
+        phone: phone || undefined,
+        preferredLang,
       });
 
       const { data: loginData } = await publicApiClient.post('/auth/login', {
@@ -96,7 +138,7 @@ export function ProfessionalRegistrationPage() {
         <Alert severity="success">
           Cuenta creada y nota reclamada correctamente.{' '}
           {claimResult.certified
-            ? 'Como tu identidad ya está verificada, quedó certificada directamente en la historia clínica.'
+            ? 'Como tu identidad ya está verificada, quedó certificada directamente en el Historial de Salud.'
             : 'Quedó pendiente de confirmación del viajero (nivel de confianza todavía no verificado).'}
         </Alert>
       </Container>
@@ -115,7 +157,10 @@ export function ProfessionalRegistrationPage() {
       )}
       {registerMutation.isError && (
         <Alert severity="error" sx={{ mb: 2 }}>
-          No se pudo completar el registro. Verificá los datos (puede que el email o documento ya estén registrados).
+          {apiErrorMessage(
+            registerMutation.error,
+            'No se pudo completar el registro. Verificá los datos (puede que el email o documento ya estén registrados).',
+          )}
         </Alert>
       )}
 
@@ -130,7 +175,20 @@ export function ProfessionalRegistrationPage() {
           <TextField label="Email" type="email" fullWidth margin="normal" value={email} onChange={(e) => setEmail(e.target.value)} />
         </Grid>
         <Grid size={{ xs: 12 }}>
-          <TextField label="Contraseña" type="password" fullWidth margin="normal" value={password} onChange={(e) => setPassword(e.target.value)} />
+          <TextField
+            label="Contraseña"
+            type="password"
+            fullWidth
+            margin="normal"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            error={password.length > 0 && password.length < 8}
+            helperText={
+              password.length > 0 && password.length < 8
+                ? `Le faltan ${8 - password.length} caracteres`
+                : 'Mínimo 8 caracteres'
+            }
+          />
         </Grid>
         <Grid size={{ xs: 6 }}>
           <TextField select label="Tipo de documento" fullWidth margin="normal" value={docTypeId} onChange={(e) => setDocTypeId(e.target.value)}>
@@ -165,6 +223,23 @@ export function ProfessionalRegistrationPage() {
         <Grid size={{ xs: 12 }}>
           <TextField label="N° de matrícula" fullWidth margin="normal" value={licenseNumber} onChange={(e) => setLicenseNumber(e.target.value)} />
         </Grid>
+        <Grid size={{ xs: 6 }}>
+          <TextField select label="Especialidad (opcional)" fullWidth margin="normal" value={specialtyId} onChange={(e) => setSpecialtyId(e.target.value)}>
+            {(specialtyCatalog.data ?? []).map((o) => (
+              <MenuItem key={o.id} value={o.id}>{o.labelEs}</MenuItem>
+            ))}
+          </TextField>
+        </Grid>
+        <Grid size={{ xs: 6 }}>
+          <TextField select label="Idioma" fullWidth margin="normal" value={preferredLang} onChange={(e) => setPreferredLang(e.target.value)}>
+            {LANGUAGE_OPTIONS.map((o) => (
+              <MenuItem key={o.code} value={o.code}>{o.label}</MenuItem>
+            ))}
+          </TextField>
+        </Grid>
+        <Grid size={{ xs: 12 }}>
+          <TextField label="Celular (opcional)" fullWidth margin="normal" value={phone} onChange={(e) => setPhone(e.target.value)} />
+        </Grid>
         <Grid size={{ xs: 12 }}>
           <TextField label="Institución (opcional)" fullWidth margin="normal" value={institution} onChange={(e) => setInstitution(e.target.value)} />
         </Grid>
@@ -186,7 +261,7 @@ export function ProfessionalRegistrationPage() {
           variant="contained"
           fullWidth
           disabled={
-            !firstName || !lastName || !email || !password || !docTypeId || !docNumber || !countryId ||
+            !firstName || !lastName || !email || password.length < 8 || !docTypeId || !docNumber || !countryId ||
             registerMutation.isPending
           }
           onClick={() => registerMutation.mutate()}

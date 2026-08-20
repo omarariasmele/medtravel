@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { AxiosError } from 'axios';
 import {
   Alert,
+  Avatar,
   Box,
   Button,
   Card,
@@ -28,7 +30,9 @@ import {
 
 import { apiClient } from '../../lib/api-client';
 import { labelFor, useCatalog } from '../../lib/catalog-hooks';
+import { usePageTitle } from '../../lib/page-title';
 import { ClinicalHistorySection } from '../cases/clinical-history.section';
+import { useAuth } from '../../auth/auth-context';
 
 interface Member {
   id: string;
@@ -44,6 +48,15 @@ interface Person {
   id: string;
   firstName: string;
   lastName: string;
+  photoPath?: string | null;
+}
+
+interface EmergencyContact {
+  id: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  relationshipTypeId: string;
 }
 
 interface Tenant {
@@ -71,13 +84,29 @@ interface CoverageSponsor {
   name: string;
 }
 
+interface EmergencyCaseRow {
+  id: string;
+  caseNumber: string;
+  statusId: string;
+  priorityId: string;
+  initialDescription?: string;
+  createdAt: string;
+}
+
+interface TripRow {
+  id: string;
+  tripName?: string;
+  tripStart: string;
+  tripEnd: string;
+  statusId: string;
+}
+
 interface HealthCoverage {
   id: string;
   coverageName: string;
   coverageTypeId: string;
   providerName: string;
   providerId?: string;
-  policyNumber?: string;
   memberNumber?: string;
   validFrom?: string;
   validUntil?: string;
@@ -122,7 +151,6 @@ interface HealthCoverageFormState {
   coverageName: string;
   coverageTypeId: string;
   providerName: string;
-  policyNumber: string;
   memberNumber: string;
   validFrom: string;
   validUntil: string;
@@ -133,7 +161,6 @@ const EMPTY_HC_FORM: HealthCoverageFormState = {
   coverageName: '',
   coverageTypeId: '',
   providerName: '',
-  policyNumber: '',
   memberNumber: '',
   validFrom: '',
   validUntil: '',
@@ -164,14 +191,42 @@ export function TravelerDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { claims } = useAuth();
+
+  // Pedido explícito del usuario: para poder probar de cero repetidas
+  // veces (chat Clásico/Estructurado, formularios manuales), necesita
+  // poder borrar TODOS los antecedentes de salud de un viajero con un
+  // botón — acción irreversible, por eso pide escribir "BORRAR" para
+  // confirmar y solo se ve con permisos de configuración.
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetConfirmText, setResetConfirmText] = useState('');
+  const resetMutation = useMutation({
+    mutationFn: async () => {
+      const { data } = await apiClient.delete(
+        `/clinical/persons/${personQuery.data!.id}/health-record`,
+      );
+      return data;
+    },
+    onSuccess: () => {
+      window.location.reload();
+    },
+  });
 
   const [enrollmentOpen, setEnrollmentOpen] = useState(false);
   const [enrollmentForm, setEnrollmentForm] = useState<EnrollmentFormState>(EMPTY_ENROLLMENT_FORM);
   const [enrollmentError, setEnrollmentError] = useState<string | null>(null);
+  /**
+   * Pedido explícito del usuario: si una póliza se cargó con datos
+   * equivocados, tiene que poder corregirse — antes solo existía "Agregar",
+   * sin ninguna forma de editar lo ya guardado. null = alta nueva, con id =
+   * editando esa fila (mismo dialog/form, la mutation elige POST o PATCH).
+   */
+  const [editingEnrollmentId, setEditingEnrollmentId] = useState<string | null>(null);
 
   const [hcOpen, setHcOpen] = useState(false);
   const [hcForm, setHcForm] = useState<HealthCoverageFormState>(EMPTY_HC_FORM);
   const [hcError, setHcError] = useState<string | null>(null);
+  const [editingHcId, setEditingHcId] = useState<string | null>(null);
 
   const memberQuery = useQuery({
     queryKey: ['identity', 'members', id],
@@ -192,6 +247,123 @@ export function TravelerDetailPage() {
     },
     enabled: !!memberQuery.data?.personId,
   });
+
+  /**
+   * Teléfono y contactos de emergencia son datos de contacto, no
+   * historia clínica — no requieren has_clinical_access, solo el mismo
+   * criterio de "operador de este tenant" que ya autoriza ver nombre/
+   * apellido (gap #13/persons_tenant_member_select). Devuelven vacío en
+   * vez de error si el operador no tiene ese acceso o si el viajero no
+   * cargó nada — no se distingue el motivo (mismo criterio anti-
+   * enumeración del resto de la app).
+   */
+  const emailQuery = useQuery({
+    queryKey: ['identity', 'persons', personQuery.data?.id, 'email'],
+    queryFn: async () => {
+      const { data } = await apiClient.get<{ email: string }>(
+        `/identity/persons/${personQuery.data!.id}/email`,
+      );
+      return data;
+    },
+    enabled: !!personQuery.data?.id,
+    retry: false,
+  });
+
+  const phoneQuery = useQuery({
+    queryKey: ['identity', 'persons', personQuery.data?.id, 'phone'],
+    queryFn: async () => {
+      const { data } = await apiClient.get<{ phone: string | null; phoneVerified: boolean }>(
+        `/identity/persons/${personQuery.data!.id}/phone`,
+      );
+      return data;
+    },
+    enabled: !!personQuery.data?.id,
+    retry: false,
+  });
+
+  const documentQuery = useQuery({
+    queryKey: ['identity', 'persons', personQuery.data?.id, 'document'],
+    queryFn: async () => {
+      const { data } = await apiClient.get<{
+        docTypeId: string;
+        docNumber: string;
+        docCountryId: string | null;
+      }>(`/identity/persons/${personQuery.data!.id}/document`);
+      return data;
+    },
+    enabled: !!personQuery.data?.id,
+    retry: false,
+  });
+
+  const documentTypeCatalog = useCatalog('DOCUMENT_TYPE');
+  const countryCatalog = useCatalog('COUNTRY');
+
+  const contactsQuery = useQuery({
+    queryKey: ['identity', 'member-contacts', personQuery.data?.id],
+    queryFn: async () => {
+      const { data } = await apiClient.get<EmergencyContact[]>('/identity/member-contacts', {
+        params: { personId: personQuery.data!.id },
+      });
+      return data;
+    },
+    enabled: !!personQuery.data?.id,
+  });
+
+  const relationshipTypeCatalog = useCatalog('RELATIONSHIP_TYPE');
+
+  /**
+   * Pedido explícito del usuario al agregar sesión única por viajero en
+   * la app móvil: "necesitamos una alternativa desde el entorno web
+   * por si algo falla" — si el viajero perdió el teléfono o lo
+   * desinstaló sin cerrar sesión, queda sin poder loguearse en otro
+   * equipo hasta que expire sola. Este botón la cierra a mano.
+   */
+  const sessionQuery = useQuery({
+    queryKey: ['identity', 'persons', personQuery.data?.id, 'session'],
+    queryFn: async () => {
+      const { data } = await apiClient.get<{
+        hasActiveSession: boolean;
+        sessionStartedAt: string | null;
+        lastActivityAt: string | null;
+      }>(`/identity/persons/${personQuery.data!.id}/session`);
+      return data;
+    },
+    enabled: !!personQuery.data?.id,
+    retry: false,
+  });
+
+  const revokeSessionMutation = useMutation({
+    mutationFn: async () => {
+      const { data } = await apiClient.post(
+        `/identity/persons/${personQuery.data!.id}/session/revoke`,
+      );
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['identity', 'persons', personQuery.data?.id, 'session'],
+      });
+    },
+  });
+
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!personQuery.data?.photoPath) {
+      setPhotoUrl(null);
+      return;
+    }
+    let objectUrl: string | null = null;
+    apiClient
+      .get(`/identity/persons/${personQuery.data.id}/photo`, { responseType: 'blob' })
+      .then(({ data }) => {
+        objectUrl = URL.createObjectURL(data);
+        setPhotoUrl(objectUrl);
+      })
+      .catch(() => setPhotoUrl(null));
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [personQuery.data?.id, personQuery.data?.photoPath]);
 
   const tenantQuery = useQuery({
     queryKey: ['identity', 'tenants', memberQuery.data?.tenantId],
@@ -258,10 +430,41 @@ export function TravelerDetailPage() {
   const planNameById = new Map((plansQuery.data ?? []).map((p) => [p.id, p.name]));
   const sponsorNameById = new Map((sponsorsQuery.data ?? []).map((s) => [s.id, s.name]));
 
-  const createEnrollmentMutation = useMutation({
+  /**
+   * Pedido explícito del usuario: desde la ficha del viajero se debe
+   * poder ver cuántos casos de asistencia tuvo y entrar a cada uno, y
+   * qué viajes cargó — no solo la cobertura/plan.
+   */
+  const casesQuery = useQuery({
+    queryKey: ['operations', 'emergency-cases', 'member', id],
+    queryFn: async () => {
+      const { data } = await apiClient.get<EmergencyCaseRow[]>('/operations/emergency-cases', {
+        params: { memberId: id },
+      });
+      return data;
+    },
+    enabled: !!id,
+  });
+
+  const tripsQuery = useQuery({
+    queryKey: ['operations', 'trips', 'member', id],
+    queryFn: async () => {
+      const { data } = await apiClient.get<TripRow[]>('/operations/trips', {
+        params: { memberId: id },
+      });
+      return data;
+    },
+    enabled: !!id,
+  });
+
+  const caseStatusCatalog = useCatalog('CASE_STATUS');
+  const casePriorityCatalog = useCatalog('CASE_PRIORITY');
+  const tripStatusCatalog = useCatalog('TRIP_STATUS');
+
+  const saveEnrollmentMutation = useMutation({
     mutationFn: async () => {
       const active = enrollmentStatusCatalog.data?.find((s) => s.code === 'ACTIVE');
-      const { data } = await apiClient.post('/coverage/travel-assistance-enrollments', {
+      const payload = {
         memberId: id,
         tenantId: memberQuery.data!.tenantId,
         planId: enrollmentForm.planId,
@@ -270,7 +473,10 @@ export function TravelerDetailPage() {
         validFrom: enrollmentForm.validFrom,
         validUntil: enrollmentForm.validUntil,
         statusId: active?.id,
-      });
+      };
+      const { data } = editingEnrollmentId
+        ? await apiClient.patch(`/coverage/travel-assistance-enrollments/${editingEnrollmentId}`, payload)
+        : await apiClient.post('/coverage/travel-assistance-enrollments', payload);
       return data;
     },
     onSuccess: () => {
@@ -278,25 +484,28 @@ export function TravelerDetailPage() {
       setEnrollmentOpen(false);
       setEnrollmentForm(EMPTY_ENROLLMENT_FORM);
       setEnrollmentError(null);
+      setEditingEnrollmentId(null);
     },
     onError: () => setEnrollmentError('No se pudo guardar el plan de asistencia.'),
   });
 
-  const createHcMutation = useMutation({
+  const saveHcMutation = useMutation({
     mutationFn: async () => {
       const active = healthCoverageStatusCatalog.data?.find((s) => s.code === 'ACTIVE');
-      const { data } = await apiClient.post('/coverage/health-coverages', {
+      const payload = {
         personId: personQuery.data?.id,
         coverageName: hcForm.coverageName,
         coverageTypeId: hcForm.coverageTypeId,
         providerName: hcForm.providerName,
-        policyNumber: hcForm.policyNumber || undefined,
         memberNumber: hcForm.memberNumber || undefined,
         validFrom: hcForm.validFrom || undefined,
         validUntil: hcForm.validUntil || undefined,
         isPrimary: hcForm.isPrimary,
         statusId: active?.id,
-      });
+      };
+      const { data } = editingHcId
+        ? await apiClient.patch(`/coverage/health-coverages/${editingHcId}`, payload)
+        : await apiClient.post('/coverage/health-coverages', payload);
       return data;
     },
     onSuccess: () => {
@@ -304,9 +513,40 @@ export function TravelerDetailPage() {
       setHcOpen(false);
       setHcForm(EMPTY_HC_FORM);
       setHcError(null);
+      setEditingHcId(null);
     },
     onError: () => setHcError('No se pudo guardar la cobertura.'),
   });
+
+  const openEditEnrollment = (e: Enrollment) => {
+    setEditingEnrollmentId(e.id);
+    setEnrollmentForm({
+      planId: e.planId,
+      sponsorId: e.sponsorId ?? '',
+      policyNumber: e.policyNumber,
+      validFrom: e.validFrom,
+      validUntil: e.validUntil,
+    });
+    setEnrollmentError(null);
+    setEnrollmentOpen(true);
+  };
+
+  const openEditHc = (hc: HealthCoverage) => {
+    setEditingHcId(hc.id);
+    setHcForm({
+      coverageName: hc.coverageName,
+      coverageTypeId: hc.coverageTypeId,
+      providerName: hc.providerName,
+      memberNumber: hc.memberNumber ?? '',
+      validFrom: hc.validFrom ?? '',
+      validUntil: hc.validUntil ?? '',
+      isPrimary: hc.isPrimary,
+    });
+    setHcError(null);
+    setHcOpen(true);
+  };
+
+  usePageTitle(personQuery.data ? `${personQuery.data.firstName} ${personQuery.data.lastName}` : 'Viajero');
 
   if (memberQuery.isLoading) return <CircularProgress />;
   if (memberQuery.isError || !memberQuery.data) {
@@ -321,9 +561,63 @@ export function TravelerDetailPage() {
       <Button onClick={() => navigate('/travelers')} sx={{ mb: 2 }}>
         ← Volver a viajeros
       </Button>
-      <Typography variant="h4" gutterBottom>
-        {person ? `${person.firstName} ${person.lastName}` : 'Viajero'}
-      </Typography>
+
+      <Card sx={{ mb: 2 }}>
+        <CardContent sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <Avatar src={photoUrl ?? undefined} sx={{ width: 56, height: 56 }}>
+            {person ? person.firstName.charAt(0) : '?'}
+          </Avatar>
+          <Box sx={{ flexGrow: 1 }}>
+            <Typography variant="h6">
+              {person ? `${person.firstName} ${person.lastName}` : 'Viajero'}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {emailQuery.data?.email ?? '—'}
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography variant="body2" color="text.secondary">
+                {phoneQuery.data?.phone ?? 'Sin teléfono cargado'}
+              </Typography>
+              {phoneQuery.data?.phone && (
+                <Chip
+                  size="small"
+                  color={phoneQuery.data.phoneVerified ? 'success' : 'default'}
+                  label={phoneQuery.data.phoneVerified ? 'Verificado' : 'No verificado'}
+                />
+              )}
+            </Box>
+            <Typography variant="body2" color="text.secondary">
+              {documentQuery.data
+                ? `${labelFor(documentTypeCatalog.data, documentQuery.data.docTypeId)} ${documentQuery.data.docNumber}${
+                    documentQuery.data.docCountryId
+                      ? ` (${labelFor(countryCatalog.data, documentQuery.data.docCountryId)})`
+                      : ''
+                  }`
+                : 'Sin documento cargado'}
+            </Typography>
+          </Box>
+          {sessionQuery.data?.hasActiveSession && (
+            <Box sx={{ textAlign: 'right' }}>
+              <Chip size="small" color="info" label="Sesión activa en la app" sx={{ mb: 0.5 }} />
+              <br />
+              <Button
+                size="small"
+                variant="outlined"
+                color="warning"
+                disabled={revokeSessionMutation.isPending}
+                onClick={() => revokeSessionMutation.mutate()}
+              >
+                Cerrar sesión activa
+              </Button>
+              {revokeSessionMutation.isSuccess && (
+                <Typography variant="caption" color="success.main" sx={{ display: 'block', mt: 0.5 }}>
+                  Cerrada — ya puede loguearse de nuevo
+                </Typography>
+              )}
+            </Box>
+          )}
+        </CardContent>
+      </Card>
 
       <Card sx={{ mb: 2 }}>
         <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
@@ -354,7 +648,16 @@ export function TravelerDetailPage() {
             <Typography variant="h6">
               Plan de asistencia al viajero
             </Typography>
-            <Button size="small" variant="outlined" onClick={() => setEnrollmentOpen(true)}>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => {
+                setEditingEnrollmentId(null);
+                setEnrollmentForm(EMPTY_ENROLLMENT_FORM);
+                setEnrollmentError(null);
+                setEnrollmentOpen(true);
+              }}
+            >
               Agregar plan
             </Button>
           </Box>
@@ -376,7 +679,7 @@ export function TravelerDetailPage() {
               </TableHead>
               <TableBody>
                 {enrollmentsQuery.data.map((e) => (
-                  <TableRow key={e.id}>
+                  <TableRow key={e.id} hover onClick={() => openEditEnrollment(e)} sx={{ cursor: 'pointer' }}>
                     <TableCell>
                       <strong>{e.sponsorId ? sponsorNameById.get(e.sponsorId) ?? '—' : '—'}</strong>
                     </TableCell>
@@ -397,11 +700,105 @@ export function TravelerDetailPage() {
 
       <Card sx={{ mb: 2 }}>
         <CardContent>
+          <Typography variant="h6" sx={{ mb: 1 }}>
+            Casos de asistencia ({casesQuery.data?.length ?? 0})
+          </Typography>
+          {casesQuery.isLoading && <CircularProgress size={24} />}
+          {(casesQuery.data?.length ?? 0) === 0 && !casesQuery.isLoading && (
+            <Alert severity="info">Sin casos de asistencia registrados.</Alert>
+          )}
+          {casesQuery.data && casesQuery.data.length > 0 && (
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>N° de caso</TableCell>
+                  <TableCell>Estado</TableCell>
+                  <TableCell>Prioridad</TableCell>
+                  <TableCell>Descripción inicial</TableCell>
+                  <TableCell>Creado</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {casesQuery.data
+                  .slice()
+                  .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+                  .map((c) => (
+                    <TableRow
+                      key={c.id}
+                      hover
+                      onClick={() => navigate(`/cases/${c.id}`)}
+                      sx={{ cursor: 'pointer' }}
+                    >
+                      <TableCell>{c.caseNumber}</TableCell>
+                      <TableCell>
+                        <Chip size="small" label={labelFor(caseStatusCatalog.data, c.statusId)} />
+                      </TableCell>
+                      <TableCell>{labelFor(casePriorityCatalog.data, c.priorityId)}</TableCell>
+                      <TableCell>{c.initialDescription ?? '—'}</TableCell>
+                      <TableCell>{new Date(c.createdAt).toLocaleString('es-AR')}</TableCell>
+                    </TableRow>
+                  ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card sx={{ mb: 2 }}>
+        <CardContent>
+          <Typography variant="h6" sx={{ mb: 1 }}>
+            Viajes ({tripsQuery.data?.length ?? 0})
+          </Typography>
+          {tripsQuery.isLoading && <CircularProgress size={24} />}
+          {(tripsQuery.data?.length ?? 0) === 0 && !tripsQuery.isLoading && (
+            <Alert severity="info">Sin viajes cargados.</Alert>
+          )}
+          {tripsQuery.data && tripsQuery.data.length > 0 && (
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Nombre del viaje</TableCell>
+                  <TableCell>Inicio</TableCell>
+                  <TableCell>Fin</TableCell>
+                  <TableCell>Estado</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {tripsQuery.data
+                  .slice()
+                  .sort((a, b) => new Date(b.tripStart).getTime() - new Date(a.tripStart).getTime())
+                  .map((t) => (
+                    <TableRow key={t.id}>
+                      <TableCell>{t.tripName ?? '—'}</TableCell>
+                      <TableCell>{new Date(t.tripStart).toLocaleDateString('es-AR')}</TableCell>
+                      <TableCell>{new Date(t.tripEnd).toLocaleDateString('es-AR')}</TableCell>
+                      <TableCell>
+                        <Chip size="small" label={labelFor(tripStatusCatalog.data, t.statusId)} />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card sx={{ mb: 2 }}>
+        <CardContent>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
             <Typography variant="h6">
               Seguro médico / obra social
             </Typography>
-            <Button size="small" variant="outlined" onClick={() => setHcOpen(true)}>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => {
+                setEditingHcId(null);
+                setHcForm(EMPTY_HC_FORM);
+                setHcError(null);
+                setHcOpen(true);
+              }}
+            >
               Agregar cobertura
             </Button>
           </Box>
@@ -426,7 +823,6 @@ export function TravelerDetailPage() {
                   <TableCell>Tipo</TableCell>
                   <TableCell>Cobertura</TableCell>
                   <TableCell>Prestador</TableCell>
-                  <TableCell>N° de póliza / asociado</TableCell>
                   <TableCell>N° de afiliado</TableCell>
                   <TableCell>Alta</TableCell>
                   <TableCell>Baja</TableCell>
@@ -435,7 +831,7 @@ export function TravelerDetailPage() {
               </TableHead>
               <TableBody>
                 {healthCoveragesQuery.data.map((hc) => (
-                  <TableRow key={hc.id}>
+                  <TableRow key={hc.id} hover onClick={() => openEditHc(hc)} sx={{ cursor: 'pointer' }}>
                     <TableCell>{labelFor(healthCoverageTypeCatalog.data, hc.coverageTypeId)}</TableCell>
                     <TableCell>
                       {hc.coverageName} {hc.isPrimary && <Chip size="small" color="primary" label="Principal" />}
@@ -444,7 +840,6 @@ export function TravelerDetailPage() {
                       )}
                     </TableCell>
                     <TableCell>{hc.providerName}</TableCell>
-                    <TableCell>{hc.policyNumber ?? '—'}</TableCell>
                     <TableCell>{hc.memberNumber ?? '—'}</TableCell>
                     <TableCell>{hc.validFrom ?? '—'}</TableCell>
                     <TableCell>{hc.validUntil ?? '—'}</TableCell>
@@ -459,10 +854,128 @@ export function TravelerDetailPage() {
         </CardContent>
       </Card>
 
+      <Card sx={{ mb: 2 }}>
+        <CardContent>
+          <Typography variant="h6" sx={{ mb: 1 }}>
+            Contactos de emergencia
+          </Typography>
+          {contactsQuery.isLoading && <CircularProgress size={24} />}
+          {(contactsQuery.data?.length ?? 0) === 0 && !contactsQuery.isLoading && (
+            <Alert severity="info">El viajero no cargó ningún contacto de emergencia.</Alert>
+          )}
+          {contactsQuery.data && contactsQuery.data.length > 0 && (
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Nombre</TableCell>
+                  <TableCell>Parentesco</TableCell>
+                  <TableCell>Teléfono</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {contactsQuery.data.map((c) => (
+                  <TableRow key={c.id}>
+                    <TableCell>{c.firstName} {c.lastName}</TableCell>
+                    <TableCell>{labelFor(relationshipTypeCatalog.data, c.relationshipTypeId)}</TableCell>
+                    <TableCell>{c.phone}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
       {person && <ClinicalHistorySection personId={person.id} />}
 
-      <Dialog open={enrollmentOpen} onClose={() => setEnrollmentOpen(false)} fullWidth maxWidth="sm">
-        <DialogTitle>Agregar plan de asistencia al viajero</DialogTitle>
+      {claims?.canManageConfig && person && (
+        <Card sx={{ mt: 2, borderColor: 'error.main', borderWidth: 1, borderStyle: 'solid' }}>
+          <CardContent>
+            <Typography variant="subtitle1" color="error" gutterBottom>
+              Zona de pruebas
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Borra TODAS las condiciones, alergias, medicamentos, cirugías e implantes de este viajero, y el
+              historial de charlas con el asistente de IA — para poder probar la carga desde cero. No se puede
+              deshacer.
+            </Typography>
+            <Button variant="outlined" color="error" onClick={() => setResetOpen(true)}>
+              Borrar antecedentes de salud
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      <Dialog
+        open={resetOpen}
+        onClose={() => {
+          setResetOpen(false);
+          setResetConfirmText('');
+        }}
+      >
+        <DialogTitle color="error">¿Borrar todos los antecedentes de salud?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            Se van a borrar de forma permanente todas las condiciones, alergias, medicamentos, cirugías e
+            implantes de {person?.firstName} {person?.lastName}, además del historial de charlas con el
+            asistente de IA. Esta acción no se puede deshacer.
+          </Typography>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            Escribí <strong>BORRAR</strong> para confirmar.
+          </Typography>
+          <TextField
+            fullWidth
+            size="small"
+            value={resetConfirmText}
+            onChange={(e) => setResetConfirmText(e.target.value)}
+            autoFocus
+          />
+          {resetMutation.isError && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              No se pudo borrar el historial de salud
+              {resetMutation.error instanceof AxiosError
+                ? ` (${resetMutation.error.response?.status ?? 'sin respuesta del servidor'}${
+                    resetMutation.error.response?.data?.message
+                      ? `: ${resetMutation.error.response.data.message}`
+                      : ''
+                  })`
+                : ''}
+              .
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              setResetOpen(false);
+              setResetConfirmText('');
+            }}
+          >
+            Cancelar
+          </Button>
+          <Button
+            color="error"
+            variant="contained"
+            disabled={resetConfirmText !== 'BORRAR' || resetMutation.isPending}
+            onClick={() => resetMutation.mutate()}
+          >
+            Borrar definitivamente
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={enrollmentOpen}
+        onClose={() => {
+          setEnrollmentOpen(false);
+          setEditingEnrollmentId(null);
+        }}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>
+          {editingEnrollmentId ? 'Editar plan de asistencia al viajero' : 'Agregar plan de asistencia al viajero'}
+        </DialogTitle>
         <DialogContent>
           {enrollmentError && <Alert severity="error" sx={{ mb: 2 }}>{enrollmentError}</Alert>}
           <Grid container spacing={1}>
@@ -528,7 +1041,14 @@ export function TravelerDetailPage() {
           </Grid>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setEnrollmentOpen(false)}>Cancelar</Button>
+          <Button
+            onClick={() => {
+              setEnrollmentOpen(false);
+              setEditingEnrollmentId(null);
+            }}
+          >
+            Cancelar
+          </Button>
           <Button
             variant="contained"
             disabled={
@@ -536,17 +1056,25 @@ export function TravelerDetailPage() {
               !enrollmentForm.policyNumber ||
               !enrollmentForm.validFrom ||
               !enrollmentForm.validUntil ||
-              createEnrollmentMutation.isPending
+              saveEnrollmentMutation.isPending
             }
-            onClick={() => createEnrollmentMutation.mutate()}
+            onClick={() => saveEnrollmentMutation.mutate()}
           >
             Guardar
           </Button>
         </DialogActions>
       </Dialog>
 
-      <Dialog open={hcOpen} onClose={() => setHcOpen(false)} fullWidth maxWidth="sm">
-        <DialogTitle>Agregar seguro médico / obra social</DialogTitle>
+      <Dialog
+        open={hcOpen}
+        onClose={() => {
+          setHcOpen(false);
+          setEditingHcId(null);
+        }}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>{editingHcId ? 'Editar seguro médico / obra social' : 'Agregar seguro médico / obra social'}</DialogTitle>
         <DialogContent>
           {hcError && <Alert severity="error" sx={{ mb: 2 }}>{hcError}</Alert>}
           <Grid container spacing={1}>
@@ -583,15 +1111,6 @@ export function TravelerDetailPage() {
                 value={hcForm.providerName}
                 onChange={(e) => setHcForm((f) => ({ ...f, providerName: e.target.value }))}
                 helperText="Ej. OSDE, Swiss Medical, Galeno"
-              />
-            </Grid>
-            <Grid size={{ xs: 6 }}>
-              <TextField
-                label="N° de póliza / asociado"
-                fullWidth
-                margin="normal"
-                value={hcForm.policyNumber}
-                onChange={(e) => setHcForm((f) => ({ ...f, policyNumber: e.target.value }))}
               />
             </Grid>
             <Grid size={{ xs: 6 }}>
@@ -639,16 +1158,23 @@ export function TravelerDetailPage() {
           </Grid>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setHcOpen(false)}>Cancelar</Button>
+          <Button
+            onClick={() => {
+              setHcOpen(false);
+              setEditingHcId(null);
+            }}
+          >
+            Cancelar
+          </Button>
           <Button
             variant="contained"
             disabled={
               !hcForm.coverageTypeId ||
               !hcForm.coverageName ||
               !hcForm.providerName ||
-              createHcMutation.isPending
+              saveHcMutation.isPending
             }
-            onClick={() => createHcMutation.mutate()}
+            onClick={() => saveHcMutation.mutate()}
           >
             Guardar
           </Button>

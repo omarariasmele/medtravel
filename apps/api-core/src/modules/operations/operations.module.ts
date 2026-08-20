@@ -25,6 +25,7 @@ import { TenantAnalyticsCacheEntity } from './entities/tenant-analytics-cache.en
 import { TenantAccessRequestEntity } from './entities/tenant-access-request.entity';
 import { OperationsResourceController } from './operations-resource.controller';
 import { EmergencyCasesController } from './emergency-cases.controller';
+import { CaseMedicalEventsController } from './case-medical-events.controller';
 import { CaseParticipantsController } from './case-participants.controller';
 import { OperatorsRegistrationController } from './operators-registration.controller';
 import { OperatorsAccountController } from './operators-account.controller';
@@ -62,6 +63,7 @@ import { AiConsumptionController } from './ai-consumption.controller';
   // interceptaría operations/emergency-cases antes de llegar acá.
   controllers: [
     EmergencyCasesController,
+    CaseMedicalEventsController,
     CaseParticipantsController,
     OperatorsRegistrationController,
     OperatorsAccountController,

@@ -66,4 +66,13 @@ export class RegisterProfessionalDto {
   @IsOptional()
   @IsString()
   taxId?: string;
+
+  /** El profesional ES un core.users (ver comment del controller) — reusa core.users.phone/preferred_lang, no columnas nuevas en healthcare_professionals. */
+  @IsOptional()
+  @IsString()
+  phone?: string;
+
+  @IsOptional()
+  @IsString()
+  preferredLang?: string;
 }

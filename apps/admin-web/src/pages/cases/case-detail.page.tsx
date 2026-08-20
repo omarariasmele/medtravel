@@ -20,9 +20,11 @@ import {
 import { apiClient } from '../../lib/api-client';
 import { useAuth } from '../../auth/auth-context';
 import { useCatalog, labelFor } from '../../lib/catalog-hooks';
+import { usePageTitle } from '../../lib/page-title';
 import { useTravelersOverview } from '../../lib/travelers-overview-hooks';
 import { ClinicalHistorySection } from './clinical-history.section';
 import { CaseHistorySection } from './case-history.section';
+import { CaseChatSection } from './case-chat.section';
 
 /** Códigos (CASE_STATUS) que requieren pasar por el diálogo de cierre. */
 const CLOSING_STATUS_CODES = ['RESOLVED', 'CLOSED'];
@@ -109,6 +111,21 @@ export function CaseDetailPage() {
     },
   });
 
+  const locationQuery = useQuery({
+    queryKey: ['operations', 'emergency-case-location', id],
+    queryFn: async () => {
+      const { data } = await apiClient.get<{
+        latitude: number | null;
+        longitude: number | null;
+        city: string | null;
+        countryLabel: string | null;
+        detectedBy: string | null;
+      }>(`/operations/emergency-cases/${id}/location`);
+      return data;
+    },
+    enabled: !!id,
+  });
+
   const assignedOperatorLabel = (() => {
     if (!caseQuery.data?.assignedOperatorId) return 'Sin asignar';
     const op = operatorsQuery.data?.find(
@@ -132,21 +149,23 @@ export function CaseDetailPage() {
     onError: () => setSaveError('No se pudo guardar el cambio.'),
   });
 
+  usePageTitle(caseQuery.data ? `Caso ${caseQuery.data.caseNumber}` : 'Caso');
+
   if (caseQuery.isLoading) return <CircularProgress />;
   if (caseQuery.isError || !caseQuery.data) {
     return <Alert severity="error">No se encontró el caso solicitado.</Alert>;
   }
 
   const c = caseQuery.data;
+  const currentStatusCode = statusCatalog.data?.find((s) => s.id === c.statusId)?.code;
+  /** Pedido explícito del usuario: cerrado/cancelado es solo consulta, no se modifica nada más. */
+  const isReadOnly = currentStatusCode === 'CLOSED' || currentStatusCode === 'CANCELLED';
 
   return (
     <>
       <Button onClick={() => navigate('/cases')} sx={{ mb: 2 }}>
         ← Volver a casos
       </Button>
-      <Typography variant="h4" gutterBottom>
-        Caso {c.caseNumber}
-      </Typography>
       <Typography variant="h6" color="text.secondary" gutterBottom>
         {traveler
           ? `${traveler.firstName} ${traveler.lastName} — ${labelFor(countryCatalog.data, traveler.countryResidenceId ?? undefined)}${traveler.policyNumber ? ` — Póliza ${traveler.policyNumber}` : ''}${traveler.tenantName ? ` (${traveler.tenantName})` : ''}`
@@ -159,6 +178,12 @@ export function CaseDetailPage() {
         </Alert>
       )}
 
+      {isReadOnly && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Este caso está {currentStatusCode === 'CANCELLED' ? 'cancelado' : 'cerrado'} — solo consulta, no se pueden hacer más cambios.
+        </Alert>
+      )}
+
       <Card>
         <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
           <Grid container spacing={1} sx={{ alignItems: 'center' }}>
@@ -168,6 +193,7 @@ export function CaseDetailPage() {
                 label="Estado"
                 size="small"
                 fullWidth
+                disabled={isReadOnly}
                 value={c.statusId}
                 onChange={(e) => {
                   const nextStatusId = e.target.value;
@@ -203,6 +229,7 @@ export function CaseDetailPage() {
                 label="Prioridad"
                 size="small"
                 fullWidth
+                disabled={isReadOnly}
                 value={c.priorityId}
                 onChange={(e) =>
                   updateMutation.mutate({ priorityId: e.target.value })
@@ -241,6 +268,33 @@ export function CaseDetailPage() {
               </Typography>
               <Typography variant="body2">{c.patientSymptoms || '—'}</Typography>
             </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                Ubicación
+              </Typography>
+              {locationQuery.data?.countryLabel || locationQuery.data?.city ? (
+                <Typography variant="body2">
+                  {[locationQuery.data.city, locationQuery.data.countryLabel].filter(Boolean).join(', ')}
+                  {locationQuery.data.detectedBy === 'GPS' && ' (por GPS)'}
+                  {locationQuery.data.detectedBy === 'MANUAL' && ' (ingresado a mano)'}
+                  {locationQuery.data.detectedBy === 'TRIP' && ' (viaje cargado)'}
+                  {locationQuery.data.latitude != null && locationQuery.data.longitude != null && (
+                    <>
+                      {' · '}
+                      <a
+                        href={`https://maps.google.com/?q=${locationQuery.data.latitude},${locationQuery.data.longitude}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Ver en el mapa
+                      </a>
+                    </>
+                  )}
+                </Typography>
+              ) : (
+                <Typography variant="body2">—</Typography>
+              )}
+            </Grid>
             {c.resolvedAt && (
               <>
                 <Grid size={{ xs: 12, sm: 6 }}>
@@ -274,7 +328,9 @@ export function CaseDetailPage() {
         />
       )}
 
-      <CaseHistorySection caseId={c.id} memberId={c.memberId} />
+      <CaseHistorySection caseId={c.id} memberId={c.memberId} readOnly={isReadOnly} />
+
+      <CaseChatSection caseId={c.id} readOnly={isReadOnly} />
 
       <Dialog open={!!closeDialog} onClose={() => setCloseDialog(null)} fullWidth maxWidth="sm">
         <DialogTitle>Cerrar caso</DialogTitle>

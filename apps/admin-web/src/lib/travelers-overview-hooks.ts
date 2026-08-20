@@ -9,6 +9,7 @@ export interface TravelerOverviewRow {
   personId: string;
   firstName: string;
   lastName: string;
+  email: string | null;
   countryResidenceId: string | null;
   preferredLang: string;
   tenantName: string | null;
@@ -26,6 +27,7 @@ interface TravelerOverviewRowSnake {
   person_id: string;
   first_name: string;
   last_name: string;
+  email: string | null;
   country_residence_id: string | null;
   preferred_lang: string;
   tenant_name: string | null;
@@ -58,6 +60,7 @@ export function useTravelersOverview() {
           personId: r.person_id,
           firstName: r.first_name,
           lastName: r.last_name,
+          email: r.email,
           countryResidenceId: r.country_residence_id,
           preferredLang: r.preferred_lang,
           tenantName: r.tenant_name,

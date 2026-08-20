@@ -55,6 +55,8 @@ export class CatalogsService {
         code: value.code,
         labelEs: value.labelEs,
         labelEn: value.labelEn,
+        labelPt: value.labelPt,
+        labelFr: value.labelFr,
         displayOrder: value.displayOrder,
         isDefault: value.isDefault,
         metadata: value.metadata,

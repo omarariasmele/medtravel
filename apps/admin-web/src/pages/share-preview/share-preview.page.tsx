@@ -1,6 +1,14 @@
+import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { Alert, Box, CircularProgress, Container, Typography } from '@mui/material';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import {
+  Alert,
+  Box,
+  Button,
+  CircularProgress,
+  Container,
+  Typography,
+} from '@mui/material';
 
 import { apiClient } from '../../lib/api-client';
 import { SharedProfileView, type SharedProfileData } from '../../components/shared-profile-view';
@@ -28,10 +36,51 @@ export function SharePreviewPage() {
     retry: false,
   });
 
+  /**
+   * Pedido explícito del usuario ("Funcional de verdad — Recomendado"):
+   * esta vista previa no debe ser solo visual — tiene que poder generar
+   * por detrás un link real de compartir (mismo mecanismo que
+   * me/shares/doctor-invite, ver clinical/share-preview/:personId/
+   * generate-link) para poder probar el flujo completo, incluida
+   * "Dejar nota de la atención", sin salir de admin-web (el link real
+   * también es una ruta de esta misma app, solo que fuera de
+   * AppLayout — se abre en una pestaña nueva del mismo origen).
+   */
+  const generateLink = useMutation({
+    mutationFn: async () => {
+      const { data } = await apiClient.post<{ accessUrl: string; expiresAt: string }>(
+        `/clinical/share-preview/${personId}/generate-link`,
+      );
+      return data;
+    },
+    onSuccess: (data) => {
+      window.open(data.accessUrl, '_blank', 'noopener');
+    },
+  });
+
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!query.data?.person?.photoPath || !personId) {
+      setPhotoUrl(null);
+      return;
+    }
+    let objectUrl: string | null = null;
+    apiClient
+      .get(`/clinical/patient-photo/${personId}`, { responseType: 'blob' })
+      .then(({ data }) => {
+        objectUrl = URL.createObjectURL(data);
+        setPhotoUrl(objectUrl);
+      })
+      .catch(() => setPhotoUrl(null));
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [personId, query.data?.person?.photoPath]);
+
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
       <ShareWindowHeader />
-      <Container maxWidth="sm" sx={{ pb: 6 }}>
+      <Container maxWidth="md" sx={{ pb: 6, px: { xs: 2, sm: 3 } }}>
         {query.isLoading && (
           <Box sx={{ textAlign: 'center', mt: 6 }}>
             <CircularProgress />
@@ -54,7 +103,26 @@ export function SharePreviewPage() {
               Esta es exactamente la información que vería un médico que entra por el QR/link de compartir
               del viajero.
             </Alert>
-            <SharedProfileView data={query.data} />
+            <Box sx={{ mb: 2 }}>
+              <Button
+                variant="contained"
+                onClick={() => generateLink.mutate()}
+                disabled={generateLink.isPending}
+              >
+                Probar flujo completo (incluida "Dejar nota de la atención")
+              </Button>
+              {generateLink.isError && (
+                <Alert severity="error" sx={{ mt: 1 }}>
+                  No se pudo generar el link de prueba.
+                </Alert>
+              )}
+              {generateLink.isSuccess && (
+                <Alert severity="success" sx={{ mt: 1 }}>
+                  Se abrió una pestaña nueva con un link real y funcional (vence en pocas horas).
+                </Alert>
+              )}
+            </Box>
+            <SharedProfileView data={query.data} photoUrl={photoUrl} />
           </>
         )}
       </Container>

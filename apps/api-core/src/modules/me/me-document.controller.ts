@@ -2,6 +2,7 @@ import {
   Body,
   ConflictException,
   Controller,
+  Get,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -41,6 +42,35 @@ export class MeDocumentController {
     return createHmac('sha256', key)
       .update(value.trim().toLowerCase())
       .digest('hex');
+  }
+
+  /**
+   * Nunca se había expuesto: el viajero cargaba su documento (POST) pero
+   * la app nunca lo volvía a mostrar al reabrir "Mi perfil" — el estado
+   * local de la pantalla se perdía apenas se cerraba, aunque el dato
+   * seguía guardado. external_identifiers no tiene RLS (relrowsecurity
+   * false), pero acá no hace falta ningún bypass: el WHERE person_id =
+   * context.personId ya lo limita a lo propio.
+   */
+  @Get()
+  async get(@CurrentContext() context: RequestContextData) {
+    const [row] = await this.txManager.runInTransaction((queryRunner) =>
+      queryRunner.query(
+        `SELECT doc_type_id, core.decrypt_pii(doc_number) AS doc_number, issuing_country_id
+         FROM core.external_identifiers
+         WHERE person_id = $1 AND is_primary = TRUE
+         LIMIT 1`,
+        [context.personId],
+      ),
+    );
+
+    return row
+      ? {
+          docTypeId: row.doc_type_id,
+          docNumber: row.doc_number,
+          docCountryId: row.issuing_country_id,
+        }
+      : null;
   }
 
   @Post()

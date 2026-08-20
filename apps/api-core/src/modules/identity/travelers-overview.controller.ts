@@ -32,6 +32,7 @@ export class TravelersOverviewController {
                 p.id AS person_id,
                 core.decrypt_pii(p.first_name) AS first_name,
                 core.decrypt_pii(p.last_name) AS last_name,
+                core.get_person_email_for_operator(p.id) AS email,
                 p.country_residence_id, p.preferred_lang,
                 t.name AS tenant_name,
                 tae.policy_number, tae.valid_from, tae.valid_until, tae.status_authority,

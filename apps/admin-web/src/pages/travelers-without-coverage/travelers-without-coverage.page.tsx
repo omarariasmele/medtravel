@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import {
   Alert,
   Chip,
@@ -10,11 +11,11 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  Typography,
 } from '@mui/material';
 
 import { apiClient } from '../../lib/api-client';
 import { PaginationFooter, usePagination } from '../../lib/pagination';
+import { usePageTitle } from '../../lib/page-title';
 
 interface TravelerWithoutTenant {
   person_id: string;
@@ -38,6 +39,9 @@ interface TravelerWithoutTenant {
  * encontrarse en ningún lado del panel.
  */
 export function TravelersWithoutCoveragePage() {
+  usePageTitle('Usuarios sin cobertura de asistencia al viajero');
+  const navigate = useNavigate();
+
   const query = useQuery({
     queryKey: ['identity', 'travelers-without-tenant'],
     queryFn: async () => {
@@ -52,13 +56,10 @@ export function TravelersWithoutCoveragePage() {
 
   return (
     <>
-      <Typography variant="h4" gutterBottom>
-        Usuarios sin cobertura de asistencia al viajero
-      </Typography>
       <Alert severity="info" sx={{ mb: 2 }}>
         Se registraron en la app pero todavía no quedaron afiliados a ninguna empresa de
         asistencia al viajero (ni declararon ni les cargaron una póliza). Pueden igual
-        tener su obra social/prepaga personal cargada — columna "Obra social".
+        tener su prestador/prepaga personal cargado — columna "Prestadores prepagas".
       </Alert>
 
       {query.isLoading && <CircularProgress />}
@@ -76,13 +77,18 @@ export function TravelersWithoutCoveragePage() {
                 <TableCell>Email</TableCell>
                 <TableCell>Documento</TableCell>
                 <TableCell>Verificado</TableCell>
-                <TableCell>Obra social</TableCell>
+                <TableCell>Prestadores prepagas</TableCell>
                 <TableCell>Registrado</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {pageRows.map((t) => (
-                <TableRow key={t.person_id} hover>
+                <TableRow
+                  key={t.person_id}
+                  hover
+                  sx={{ cursor: 'pointer' }}
+                  onClick={() => navigate(`/travelers-without-coverage/${t.person_id}`)}
+                >
                   <TableCell>{t.first_name} {t.last_name}</TableCell>
                   <TableCell>{t.email}</TableCell>
                   <TableCell>

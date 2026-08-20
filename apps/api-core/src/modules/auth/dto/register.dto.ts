@@ -38,4 +38,8 @@ export class RegisterDto {
   /** País emisor del documento (params.catalog_values, dominio COUNTRY) — sistema internacional, la unicidad de documento es por país. */
   @IsUUID()
   docCountryId: string;
+
+  @IsOptional()
+  @IsString()
+  phone?: string;
 }

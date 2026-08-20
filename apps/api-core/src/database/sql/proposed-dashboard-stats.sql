@@ -35,9 +35,17 @@ BEGIN
     (SELECT count(*) FROM core.members m
        WHERE m.tenant_id = t.id
          AND m.status_id = params.catalog_id('MEMBER_STATUS', 'ACTIVE')),
+    -- Bug real reportado en vivo: contaba TODOS los viajes alguna vez
+    -- cargados, sin importar la fecha — con la intención original de
+    -- este dashboard (ver comentario del archivo: "viajes... ABIERTOS")
+    -- tiene que ser solo los que todavía no terminaron (mismo criterio
+    -- que "Planificados" en la app móvil, trips_screen.dart). status_id
+    -- (TRIP_STATUS) no sirve para esto todavía: hoy todos los viajes
+    -- quedan en PLANNED para siempre, nada lo transiciona a completado.
     (SELECT count(*) FROM operations.trips tr
        JOIN core.members m2 ON m2.id = tr.member_id
-       WHERE m2.tenant_id = t.id),
+       WHERE m2.tenant_id = t.id
+         AND tr.trip_end >= CURRENT_DATE),
     (SELECT count(*) FROM operations.emergency_cases ec
        WHERE ec.tenant_id = t.id
          AND ec.status_id NOT IN (

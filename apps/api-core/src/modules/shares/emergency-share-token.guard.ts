@@ -10,11 +10,13 @@ import { TenantTransactionManager } from '@common/database/tenant-transaction.ma
 
 export interface ShareContext {
   shareTokenId: string;
-  memberId: string;
+  memberId: string | null;
   personId: string;
   scope: string[];
   expiresAt: string;
   canSubmitNote: boolean;
+  translatedProfile: Record<string, unknown> | null;
+  translatedLanguage: string | null;
 }
 
 export interface ShareRequest extends Request {
@@ -24,11 +26,13 @@ export interface ShareRequest extends Request {
 interface RedeemRow {
   ok: boolean;
   share_token_id: string;
-  member_id: string;
+  member_id: string | null;
   person_id: string;
   scope: string[];
   expires_at: string;
   can_submit_note: boolean;
+  translated_profile: Record<string, unknown> | null;
+  translated_language: string | null;
 }
 
 /**
@@ -67,6 +71,8 @@ export class EmergencyShareTokenGuard implements CanActivate {
       scope: result.scope,
       expiresAt: result.expires_at,
       canSubmitNote: result.can_submit_note,
+      translatedProfile: result.translated_profile,
+      translatedLanguage: result.translated_language,
     };
 
     return true;

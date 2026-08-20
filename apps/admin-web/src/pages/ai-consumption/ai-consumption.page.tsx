@@ -19,6 +19,7 @@ import {
 } from '@mui/material';
 
 import { apiClient } from '../../lib/api-client';
+import { usePageTitle } from '../../lib/page-title';
 import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface Summary {
@@ -48,6 +49,21 @@ interface DailyTrendPoint {
   costUsd: number;
   messageCount: number;
 }
+
+interface ModelComparison {
+  intakeModel: 'CLASSIC' | 'STRUCTURED';
+  conversations: number;
+  messages: number;
+  tokensInput: number;
+  tokensOutput: number;
+  costUsd: number;
+  avgCostPerConversation: number;
+}
+
+const MODEL_LABEL: Record<ModelComparison['intakeModel'], string> = {
+  CLASSIC: 'Clásico (conversacional)',
+  STRUCTURED: 'Estructurado (tabla, beta)',
+};
 
 const usd = (n: number) => `USD ${n.toFixed(4)}`;
 
@@ -135,6 +151,7 @@ function DailyTrendChart({ points }: { points: DailyTrendPoint[] }) {
  * plataforma, no por empresa.
  */
 export function AiConsumptionPage() {
+  usePageTitle('Consumo de IA');
   const summaryQuery = useQuery({
     queryKey: ['operations', 'ai-consumption', 'summary'],
     queryFn: async () => {
@@ -160,6 +177,14 @@ export function AiConsumptionPage() {
     },
   });
 
+  const modelComparisonQuery = useQuery({
+    queryKey: ['operations', 'ai-consumption', 'model-comparison'],
+    queryFn: async () => {
+      const { data } = await apiClient.get<ModelComparison[]>('/operations/ai-consumption/model-comparison?days=30');
+      return data;
+    },
+  });
+
   const s = summaryQuery.data;
 
   const { pageRows: topUsersPageRows, page: topUsersPage, setPage: setTopUsersPage, totalCount: topUsersTotalCount } =
@@ -167,10 +192,6 @@ export function AiConsumptionPage() {
 
   return (
     <>
-      <Typography variant="h4" gutterBottom>
-        Consumo de IA
-      </Typography>
-
       {summaryQuery.isLoading && <CircularProgress size={24} />}
       {summaryQuery.isError && <Alert severity="error">No se pudo cargar el resumen de consumo.</Alert>}
 
@@ -238,6 +259,44 @@ export function AiConsumptionPage() {
             </Grid>
           </Grid>
         </>
+      )}
+
+      <Typography variant="h6" gutterBottom>
+        Modelo Clásico vs. Estructurado (últimos 30 días)
+      </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        Comparación de costo real entre los dos modelos de carga de Ficha de Salud —
+        el número concreto para decidir cuál conviene después de probar ambos.
+      </Typography>
+      {modelComparisonQuery.isLoading && <CircularProgress size={24} />}
+      {modelComparisonQuery.data && modelComparisonQuery.data.length === 0 && (
+        <Alert severity="info" sx={{ mb: 3 }}>Todavía no se usó ninguno de los dos modelos.</Alert>
+      )}
+      {modelComparisonQuery.data && modelComparisonQuery.data.length > 0 && (
+        <TableContainer component={Paper} sx={{ mb: 3 }}>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Modelo</TableCell>
+                <TableCell align="right">Conversaciones</TableCell>
+                <TableCell align="right">Mensajes</TableCell>
+                <TableCell align="right">Costo total</TableCell>
+                <TableCell align="right">Costo promedio por conversación</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {modelComparisonQuery.data.map((m) => (
+                <TableRow key={m.intakeModel}>
+                  <TableCell>{MODEL_LABEL[m.intakeModel]}</TableCell>
+                  <TableCell align="right">{m.conversations}</TableCell>
+                  <TableCell align="right">{m.messages}</TableCell>
+                  <TableCell align="right">{usd(m.costUsd)}</TableCell>
+                  <TableCell align="right">{usd(m.avgCostPerConversation)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
       )}
 
       <Typography variant="h6" gutterBottom>

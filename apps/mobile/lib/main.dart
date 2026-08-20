@@ -1,11 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'core/api_client.dart';
 import 'core/auth_state.dart';
 import 'core/theme.dart';
 import 'router.dart';
 
-void main() {
+/// Pedido explícito del usuario: poder usar la app local (USB + `adb
+/// reverse`) o desde afuera (dominio público) sin reconstruir el APK
+/// cada vez — se detecta sola antes de mostrar cualquier pantalla (ver
+/// ApiClient.autoDetectBaseUrl).
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await ApiClient.instance.autoDetectBaseUrl();
   runApp(const MedTravelApp());
 }
 

@@ -17,6 +17,10 @@ export class ConditionEntity extends UuidBaseEntity {
   @Column({ name: 'condition_name', type: 'text' })
   conditionName: string;
 
+  /** FK a params.catalog_values (dominio CONDITION_CATALOG) — gobierno de duplicados + flag isAlertWorthy, ver CatalogResolutionService. */
+  @Column({ name: 'condition_catalog_id', type: 'uuid', nullable: true })
+  conditionCatalogId?: string;
+
   @Column({ name: 'condition_name_en', type: 'text', nullable: true })
   conditionNameEn?: string;
 
@@ -102,4 +106,8 @@ export class ConditionEntity extends UuidBaseEntity {
 
   @Column({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
+
+  /** FK a ai.interview_questions — qué pregunta del modelo Estructurado originó este antecedente (null si vino del Clásico o de un formulario manual), ver SKIP_IF_ALREADY_HAS_SQL en ai.service.ts. */
+  @Column({ name: 'source_question_id', type: 'uuid', nullable: true })
+  sourceQuestionId?: string;
 }

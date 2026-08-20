@@ -15,11 +15,11 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Typography,
 } from '@mui/material';
 import WarningIcon from '@mui/icons-material/Warning';
 
 import { apiClient } from '../../lib/api-client';
+import { usePageTitle } from '../../lib/page-title';
 
 interface Member {
   id: string;
@@ -66,6 +66,11 @@ interface MemberDataConsent {
  * antes de producción.
  */
 export function TestConsentsPage() {
+  usePageTitle(
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+      <WarningIcon color="warning" fontSize="small" /> Consentimientos (solo pruebas)
+    </Box>,
+  );
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
 
@@ -156,10 +161,6 @@ export function TestConsentsPage() {
 
   return (
     <>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-        <WarningIcon color="warning" />
-        <Typography variant="h4">Consentimientos (solo pruebas)</Typography>
-      </Box>
       <Alert severity="warning" sx={{ mb: 3 }}>
         Pantalla temporal para acelerar pruebas — le permite a un superadmin
         otorgar/revocar consentimiento en nombre de un viajero de prueba, algo

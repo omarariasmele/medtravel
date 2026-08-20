@@ -26,3 +26,20 @@ export function mapPgError(error: unknown): never {
   }
   throw error;
 }
+
+/**
+ * Para lotes donde un conflicto individual (ej. un duplicado) no debe
+ * abortar el resto del lote — ver AIService.confirmAllProposals. Solo
+ * trata como "conflicto esperado, se puede saltear" el unique_violation
+ * (los triggers de duplicados de clinical.* lo usan a propósito, ver
+ * proposed-prevent-duplicate-clinical-entries.sql); cualquier otro
+ * código devuelve null para que el caller lo relance — ahí sí puede ser
+ * un bug real que no hay que ocultar.
+ */
+export function isSkippableConflict(error: unknown): string | null {
+  if (error instanceof QueryFailedError) {
+    const code = (error as QueryFailedError & { code?: string }).code;
+    if (code === '23505') return error.message;
+  }
+  return null;
+}

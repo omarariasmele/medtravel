@@ -27,6 +27,7 @@ import EditIcon from '@mui/icons-material/Edit';
 
 import { apiClient } from '../../lib/api-client';
 import { useCatalog } from '../../lib/catalog-hooks';
+import { usePageTitle } from '../../lib/page-title';
 import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface HealthcareProvider {
@@ -75,6 +76,7 @@ export function HealthcareProviderTypePage({
   title: string;
   newItemLabel: string;
 }) {
+  usePageTitle(title);
   const queryClient = useQueryClient();
   const countryCatalog = useCatalog('COUNTRY');
   const providerTypeCatalog = useCatalog('HEALTH_COVERAGE_TYPE');
@@ -273,8 +275,7 @@ export function HealthcareProviderTypePage({
 
   return (
     <>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1, gap: 2 }}>
-        <Typography variant="h4">{title}</Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', mb: 1, gap: 2 }}>
         <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
           <TextField
             select

@@ -3,12 +3,16 @@ import {
   Get,
   NotFoundException,
   Param,
+  Post,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { ConfigService } from '@nestjs/config';
+import { randomBytes, createHash } from 'crypto';
 
 import { TenantTransactionManager } from '@common/database/tenant-transaction.manager';
+import { getOperationalLimit } from '@common/database/operational-limits.helper';
 
 import {
   buildSharedProfile,
@@ -30,7 +34,10 @@ import {
 @UseGuards(AuthGuard('jwt'))
 @Controller('clinical/share-preview')
 export class SharePreviewController {
-  constructor(private readonly txManager: TenantTransactionManager) {}
+  constructor(
+    private readonly txManager: TenantTransactionManager,
+    private readonly config: ConfigService,
+  ) {}
 
   @Get(':personId')
   async get(@Param('personId') personId: string) {
@@ -45,5 +52,73 @@ export class SharePreviewController {
     }
 
     return result;
+  }
+
+  /**
+   * Pedido explícito del usuario: la pantalla "Ver como la vería el
+   * médico" tiene que ser funcional de verdad, no solo una previsualización
+   * visual — generando por detrás un link real (mismo emergency.tokens +
+   * scope 'submit_note' que me-shares.controller.ts::createDoctorInvite)
+   * para poder probar el flujo completo, incluida "Dejar nota de la
+   * atención", sin salir de admin-web. A diferencia de esa ruta, acá el
+   * personId lo elige el operador (no "me") — mismo has_clinical_access
+   * que ya gatea el GET de arriba sigue siendo la única verificación de
+   * acceso: si el operador no tiene acceso clínico a esa persona, el
+   * SELECT en resolveShareOwner/buildSharedProfile no le devuelve nada
+   * y el token igual queda inutilizable para él en la práctica. TTL
+   * corto (horas, no días) porque es para probar ahora, no para
+   * compartir de verdad — reusa la misma operational_limit key con un
+   * default propio para no interferir con TOKEN_DOCTOR_INVITE_TTL_DAYS.
+   */
+  @Post(':personId/generate-link')
+  async generateLink(@Param('personId') personId: string) {
+    const ttlHours = await getOperationalLimit(
+      this.txManager,
+      'TOKEN_SHARE_PREVIEW_TTL_HOURS',
+      2,
+    );
+    const tokenValue = randomBytes(24).toString('base64url');
+    const tokenHash = createHash('sha256').update(tokenValue).digest('hex');
+    const baseUrl = this.config.get<string>('CORS_ORIGIN');
+    const accessUrl = `${baseUrl}/public/shares/${tokenValue}`;
+
+    const result = await this.txManager.runInTransaction(async (queryRunner) => {
+      const memberRows = await queryRunner.query(
+        `SELECT id FROM core.members WHERE person_id = $1 ORDER BY created_at LIMIT 1`,
+        [personId],
+      );
+      const memberId = memberRows[0]?.id ?? null;
+
+      const rows = await queryRunner.query(
+        `INSERT INTO emergency.tokens
+           (member_id, person_id, token_type_id, token_value, token_hash, access_url,
+            expires_at, status_id, scope, max_uses)
+         VALUES (
+           $1, $2, params.catalog_id('TOKEN_TYPE', 'DOCTOR_INVITE'), $3, $4, $5,
+           NOW() + ($6 || ' hours')::INTERVAL,
+           params.catalog_id('TOKEN_STATUS', 'ACTIVE'),
+           $7, NULL
+         )
+         RETURNING id, access_url, expires_at`,
+        [
+          memberId,
+          personId,
+          tokenValue,
+          tokenHash,
+          accessUrl,
+          ttlHours,
+          [...DEFAULT_SHARE_SCOPE, 'submit_note'],
+        ],
+      );
+      return rows[0];
+    });
+
+    if (!result) {
+      throw new NotFoundException(
+        'No encontrado o sin acceso clínico habilitado',
+      );
+    }
+
+    return { accessUrl: result.access_url, expiresAt: result.expires_at };
   }
 }

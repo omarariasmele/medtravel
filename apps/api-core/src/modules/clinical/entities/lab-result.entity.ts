@@ -22,6 +22,10 @@ export class LabResultEntity extends UuidBaseEntity {
   @Column({ name: 'lab_name', type: 'text', nullable: true })
   labName?: string;
 
+  /** FK a params.catalog_values (dominio LAB_STUDY_TYPE) — BLOOD/URINE/IMAGING/OTHER. */
+  @Column({ name: 'study_type_id', type: 'uuid' })
+  studyTypeId: string;
+
   @Column({ name: 'requested_by', type: 'text', nullable: true })
   requestedBy?: string;
 

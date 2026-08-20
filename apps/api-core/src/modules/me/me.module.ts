@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 
 import { AIModule } from '@modules/ai/ai.module';
+import { AuthModule } from '@modules/auth/auth.module';
+import { MailModule } from '@modules/mail/mail.module';
 
 import { MeProfileController } from './me-profile.controller';
 import { MeCoveragesController } from './me-coverages.controller';
@@ -9,6 +11,7 @@ import { MeClinicalController } from './me-clinical.controller';
 import { MeEmergencyController } from './me-emergency.controller';
 import { MeEmergencyCasesController } from './me-emergency-cases.controller';
 import { MeDocumentController } from './me-document.controller';
+import { MeEmergencyContactsController } from './me-emergency-contacts.controller';
 import { MeSharesController } from './me-shares.controller';
 import { MeAssistantController } from './me-assistant.controller';
 import { MeHealthAssistantController } from './me-health-assistant.controller';
@@ -22,7 +25,7 @@ import { MeHealthAssistantController } from './me-health-assistant.controller';
  * permiso).
  */
 @Module({
-  imports: [AIModule],
+  imports: [AIModule, AuthModule, MailModule],
   controllers: [
     MeProfileController,
     MeCoveragesController,
@@ -31,6 +34,7 @@ import { MeHealthAssistantController } from './me-health-assistant.controller';
     MeEmergencyController,
     MeEmergencyCasesController,
     MeDocumentController,
+    MeEmergencyContactsController,
     MeSharesController,
     MeAssistantController,
     MeHealthAssistantController,

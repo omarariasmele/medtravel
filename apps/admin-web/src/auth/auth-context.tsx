@@ -22,6 +22,9 @@ interface JwtClaims {
   canManageConfig?: boolean;
   canManageOperators?: boolean;
   canCloseCases?: boolean;
+  canAccessMedical?: boolean;
+  /** Pedido explícito del usuario: solo operadores puntualmente autorizados pueden corregir/borrar antecedentes clínicos. */
+  canEditClinicalData?: boolean;
   email?: string;
 }
 

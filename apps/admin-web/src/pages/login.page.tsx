@@ -7,11 +7,15 @@ import {
   Alert,
   Box,
   Button,
+  IconButton,
+  InputAdornment,
   Link,
   Paper,
   TextField,
   Typography,
 } from '@mui/material';
+import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
+import VisibilityOffOutlinedIcon from '@mui/icons-material/VisibilityOffOutlined';
 import axios from 'axios';
 
 import { useAuth } from '../auth/auth-context';
@@ -33,6 +37,7 @@ export function LoginPage() {
   const [pendingCredentials, setPendingCredentials] = useState<LoginForm | null>(
     null,
   );
+  const [showPassword, setShowPassword] = useState(false);
 
   const {
     register,
@@ -111,12 +116,27 @@ export function LoginPage() {
             />
             <TextField
               label="Contraseña"
-              type="password"
+              type={showPassword ? 'text' : 'password'}
               fullWidth
               margin="normal"
               {...register('password')}
               error={!!errors.password}
               helperText={errors.password?.message}
+              slotProps={{
+                input: {
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton
+                        onClick={() => setShowPassword((v) => !v)}
+                        edge="end"
+                        tabIndex={-1}
+                      >
+                        {showPassword ? <VisibilityOffOutlinedIcon /> : <VisibilityOutlinedIcon />}
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                },
+              }}
             />
             <Button
               type="submit"

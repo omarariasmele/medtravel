@@ -15,12 +15,12 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Typography,
 } from '@mui/material';
 
 import { useAuth } from '../../auth/auth-context';
 import { apiClient } from '../../lib/api-client';
 import { labelFor, useCatalog } from '../../lib/catalog-hooks';
+import { usePageTitle } from '../../lib/page-title';
 import { useTravelersOverview } from '../../lib/travelers-overview-hooks';
 import { PaginationFooter, usePagination } from '../../lib/pagination';
 
@@ -43,10 +43,12 @@ interface Tenant {
 }
 
 export function CasesListPage() {
+  usePageTitle('Casos de asistencia');
   const navigate = useNavigate();
   const { claims } = useAuth();
   const [tenantFilter, setTenantFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [search, setSearch] = useState('');
 
   const casesQuery = useQuery({
     queryKey: ['emergency-cases'],
@@ -75,21 +77,32 @@ export function CasesListPage() {
   const priorityCatalog = useCatalog('CASE_PRIORITY');
   const countryCatalog = useCatalog('COUNTRY');
 
-  const filteredCases = (casesQuery.data ?? []).filter(
-    (c) =>
-      (!tenantFilter || c.tenantId === tenantFilter) &&
-      (!statusFilter || c.statusId === statusFilter),
-  );
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredCases = (casesQuery.data ?? []).filter((c) => {
+    if (tenantFilter && c.tenantId !== tenantFilter) return false;
+    if (statusFilter && c.statusId !== statusFilter) return false;
+    if (!normalizedSearch) return true;
+    const traveler = overviewByMemberId.get(c.memberId);
+    const travelerName = traveler ? `${traveler.firstName} ${traveler.lastName}` : '';
+    return (
+      c.caseNumber.toLowerCase().includes(normalizedSearch) ||
+      travelerName.toLowerCase().includes(normalizedSearch) ||
+      (traveler?.policyNumber ?? '').toLowerCase().includes(normalizedSearch)
+    );
+  });
   const { pageRows: casePageRows, page: casePage, setPage: setCasePage, totalCount: caseTotalCount } =
     usePagination(filteredCases);
 
   return (
     <>
-      <Typography variant="h4" gutterBottom>
-        Casos de asistencia
-      </Typography>
-
       <Box sx={{ mb: 2, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+        <TextField
+          label="Buscar por viajero, N° de póliza o N° de caso"
+          size="small"
+          sx={{ minWidth: 300 }}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
         {claims?.canManageConfig && (tenantsQuery.data?.length ?? 0) > 1 && (
           <TextField
             select

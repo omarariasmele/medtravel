@@ -31,6 +31,7 @@ import UploadFileIcon from '@mui/icons-material/UploadFile';
 import { apiClient } from '../../lib/api-client';
 import { useAuth } from '../../auth/auth-context';
 import { useCatalog } from '../../lib/catalog-hooks';
+import { usePageTitle } from '../../lib/page-title';
 import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface PartnerRecord {
@@ -63,15 +64,18 @@ interface DeclaredPolicy {
 interface Tenant {
   id: string;
   name: string;
+  isPlatformAdmin?: boolean;
 }
 
 interface AssistancePlan {
   id: string;
+  code: string;
   name: string;
   tenantId: string;
 }
 
 interface FormState {
+  tenantId: string;
   partnerRefId: string;
   rawName: string;
   rawDocType: string;
@@ -84,6 +88,7 @@ interface FormState {
 }
 
 const EMPTY_FORM: FormState = {
+  tenantId: '',
   partnerRefId: '',
   rawName: '',
   rawDocType: '',
@@ -97,6 +102,7 @@ const EMPTY_FORM: FormState = {
 
 const STATUS_COLOR: Record<string, 'success' | 'warning' | 'error' | 'default'> = {
   MATCHED: 'success',
+  MATCHED_NO_PLAN: 'warning',
   NO_MATCH: 'warning',
   ERROR: 'error',
   PENDING: 'default',
@@ -104,6 +110,7 @@ const STATUS_COLOR: Record<string, 'success' | 'warning' | 'error' | 'default'> 
 
 const STATUS_LABEL: Record<string, string> = {
   MATCHED: 'Emparejado',
+  MATCHED_NO_PLAN: 'Emparejado, falta plan',
   NO_MATCH: 'Esperando al viajero',
   ERROR: 'Error',
   PENDING: 'Pendiente',
@@ -119,17 +126,22 @@ const STATUS_LABEL: Record<string, string> = {
  * todavía no se registró en la app con ese documento.
  */
 export function PartnerRecordsPage() {
+  usePageTitle('Pólizas');
   const { claims } = useAuth();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [pasteText, setPasteText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [tenantFilter, setTenantFilter] = useState('');
+  const [search, setSearch] = useState('');
   const [approveTarget, setApproveTarget] = useState<DeclaredPolicy | null>(null);
   const [approveForm, setApproveForm] = useState({ planId: '', validFrom: '', validUntil: '' });
   const [approveError, setApproveError] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [helpAnchor, setHelpAnchor] = useState<HTMLElement | null>(null);
+  const [assignPlanTarget, setAssignPlanTarget] = useState<PartnerRecord | null>(null);
+  const [assignPlanCode, setAssignPlanCode] = useState('');
+  const [assignPlanError, setAssignPlanError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
 
@@ -162,15 +174,50 @@ export function PartnerRecordsPage() {
   });
 
   const tenantNameById = new Map((tenantsQuery.data ?? []).map((t) => [t.id, t.name]));
+  // OYSGROUP es el administrador general de la plataforma, no una
+  // empresa de asistencia al viajero real — no se ofrece como opción
+  // de filtro (pero sigue resolviendo su nombre en tenantNameById si
+  // alguna fila vieja quedó cargada bajo ese tenant).
+  const realTenants = (tenantsQuery.data ?? []).filter((t) => !t.isPlatformAdmin);
 
+  const normalizedSearch = search.trim().toLowerCase();
   const filteredRecords = (recordsQuery.data ?? []).filter(
-    (r) => !tenantFilter || r.tenant_id === tenantFilter,
+    (r) =>
+      (!tenantFilter || r.tenant_id === tenantFilter) &&
+      (!normalizedSearch || r.policy_number.toLowerCase().includes(normalizedSearch)),
   );
   const filteredDeclared = (declaredQuery.data ?? []).filter(
     (d) => !tenantFilter || d.tenant_id === tenantFilter,
   );
   const { pageRows: recordPageRows, page: recordPage, setPage: setRecordPage, totalCount: recordTotalCount } =
     usePagination(filteredRecords);
+
+  /**
+   * Un superadmin de plataforma no tiene "su propia" empresa de
+   * asistencia (gap #44) — puede elegir explícitamente para cuál
+   * empresa está cargando esta póliza. Un operador normal siempre usa
+   * la suya, sin selector (coverage/partner-records.controller.ts
+   * ignora cualquier tenantId que mande un no-superadmin).
+   */
+  const effectiveTenantId = claims?.canManageConfig ? form.tenantId || undefined : claims?.tenantId;
+
+  /**
+   * Planes de la empresa elegida (o la propia, si no es superadmin) —
+   * antes era un TextField libre ("debe existir en Catálogos"), que
+   * era fácil de tipear mal o dejar vacío — causa real de que una
+   * póliza quedara "Emparejada" pero sin plan de asistencia asociado.
+   */
+  const myPlansQuery = useQuery({
+    queryKey: ['coverage', 'assistance-plans', effectiveTenantId],
+    queryFn: async () => {
+      const { data } = await apiClient.get<AssistancePlan[]>(
+        '/coverage/assistance-plans',
+        { params: { tenantId: effectiveTenantId } },
+      );
+      return data;
+    },
+    enabled: !!effectiveTenantId,
+  });
 
   const plansQuery = useQuery({
     queryKey: ['coverage', 'assistance-plans', approveTarget?.tenant_id],
@@ -182,6 +229,37 @@ export function PartnerRecordsPage() {
       return data;
     },
     enabled: !!approveTarget,
+  });
+
+  /** Planes de la empresa DUEÑA de la póliza que se está editando (gap #45) — no la del operador logueado. */
+  const recordPlansQuery = useQuery({
+    queryKey: ['coverage', 'assistance-plans', assignPlanTarget?.tenant_id],
+    queryFn: async () => {
+      const { data } = await apiClient.get<AssistancePlan[]>(
+        '/coverage/assistance-plans',
+        { params: { tenantId: assignPlanTarget!.tenant_id } },
+      );
+      return data;
+    },
+    enabled: !!assignPlanTarget,
+  });
+
+  const assignPlanMutation = useMutation({
+    mutationFn: async () => {
+      if (!assignPlanTarget) return;
+      const { data } = await apiClient.patch(
+        `/coverage/partner-member-records/${assignPlanTarget.id}/plan`,
+        { planCode: assignPlanCode },
+      );
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['coverage', 'partner-member-records'] });
+      setAssignPlanTarget(null);
+      setAssignPlanCode('');
+      setAssignPlanError(null);
+    },
+    onError: () => setAssignPlanError('No se pudo asignar el plan.'),
   });
 
   const approveMutation = useMutation({
@@ -253,7 +331,9 @@ export function PartnerRecordsPage() {
               validUntil: form.validUntil,
             },
           ];
-      const { data } = await apiClient.post('/coverage/partner-member-records', rows);
+      const { data } = await apiClient.post('/coverage/partner-member-records', rows, {
+        params: claims?.canManageConfig && form.tenantId ? { tenantId: form.tenantId } : undefined,
+      });
       return data;
     },
     onSuccess: () => {
@@ -322,13 +402,13 @@ export function PartnerRecordsPage() {
   }
 
   const canSubmit =
-    pasteText.trim().length > 0 ||
-    (!!form.partnerRefId && !!form.policyNumber && !!form.validFrom && !!form.validUntil);
+    (!claims?.canManageConfig || !!form.tenantId) &&
+    (pasteText.trim().length > 0 ||
+      (!!form.partnerRefId && !!form.policyNumber && !!form.validFrom && !!form.validUntil));
 
   return (
     <>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Typography variant="h4">Pólizas</Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', mb: 2 }}>
         <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
           <Button variant="contained" onClick={() => setDialogOpen(true)}>
             Cargar póliza
@@ -389,8 +469,15 @@ export function PartnerRecordsPage() {
         </Alert>
       )}
 
-      {claims?.canManageConfig && (tenantsQuery.data?.length ?? 0) > 1 && (
-        <Box sx={{ mb: 2 }}>
+      <Box sx={{ mb: 2, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+        <TextField
+          label="Buscar por N° de póliza"
+          size="small"
+          sx={{ minWidth: 260 }}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        {claims?.canManageConfig && (tenantsQuery.data?.length ?? 0) > 1 && (
           <TextField
             select
             label="Filtrar por empresa"
@@ -404,8 +491,8 @@ export function PartnerRecordsPage() {
               <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>
             ))}
           </TextField>
-        </Box>
-      )}
+        )}
+      </Box>
 
       <Alert severity="info" sx={{ mb: 2 }}>
         Al cargar una póliza, el sistema busca automáticamente si el viajero
@@ -480,6 +567,7 @@ export function PartnerRecordsPage() {
                 <TableCell>Plan</TableCell>
                 <TableCell>Vigencia</TableCell>
                 <TableCell>Estado</TableCell>
+                <TableCell></TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -507,6 +595,20 @@ export function PartnerRecordsPage() {
                       label={STATUS_LABEL[r.import_status] ?? r.import_status}
                     />
                   </TableCell>
+                  <TableCell>
+                    {r.import_status === 'MATCHED_NO_PLAN' && (
+                      <Button
+                        size="small"
+                        onClick={() => {
+                          setAssignPlanTarget(r);
+                          setAssignPlanCode('');
+                          setAssignPlanError(null);
+                        }}
+                      >
+                        Asignar plan
+                      </Button>
+                    )}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -524,6 +626,50 @@ export function PartnerRecordsPage() {
             </Alert>
           )}
           <Grid container spacing={1}>
+            {claims?.canManageConfig && (
+              <Grid size={{ xs: 12 }}>
+                <TextField
+                  select
+                  label="Empresa de asistencia al viajero"
+                  fullWidth
+                  margin="normal"
+                  value={form.tenantId}
+                  onChange={(e) => setForm((f) => ({ ...f, tenantId: e.target.value, planCode: '' }))}
+                  helperText="Como superadmin no tenés una empresa propia — elegí para cuál es esta póliza"
+                  disabled={!!pasteText.trim()}
+                >
+                  {realTenants.map((t) => (
+                    <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>
+                  ))}
+                </TextField>
+              </Grid>
+            )}
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField
+                select
+                label="Plan"
+                fullWidth
+                margin="normal"
+                value={form.planCode}
+                onChange={(e) => setForm((f) => ({ ...f, planCode: e.target.value }))}
+                helperText="Sin esto, la póliza queda emparejada pero sin plan de asistencia asociado"
+                disabled={!!pasteText.trim() || (!!claims?.canManageConfig && !form.tenantId)}
+              >
+                {(myPlansQuery.data ?? []).map((p) => (
+                  <MenuItem key={p.id} value={p.code}>{p.name}</MenuItem>
+                ))}
+              </TextField>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField
+                label="N° de póliza"
+                fullWidth
+                margin="normal"
+                value={form.policyNumber}
+                onChange={setField('policyNumber')}
+                disabled={!!pasteText.trim()}
+              />
+            </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 label="Referencia interna"
@@ -586,27 +732,6 @@ export function PartnerRecordsPage() {
                 ))}
               </TextField>
             </Grid>
-            <Grid size={{ xs: 12, sm: 6 }}>
-              <TextField
-                label="N° de póliza"
-                fullWidth
-                margin="normal"
-                value={form.policyNumber}
-                onChange={setField('policyNumber')}
-                disabled={!!pasteText.trim()}
-              />
-            </Grid>
-            <Grid size={{ xs: 12, sm: 6 }}>
-              <TextField
-                label="Código de plan"
-                fullWidth
-                margin="normal"
-                value={form.planCode}
-                onChange={setField('planCode')}
-                helperText="Debe existir en Catálogos / Parámetros"
-                disabled={!!pasteText.trim()}
-              />
-            </Grid>
             <Grid size={{ xs: 6 }}>
               <TextField
                 label="Vigencia desde"
@@ -653,6 +778,46 @@ export function PartnerRecordsPage() {
             onClick={() => createMutation.mutate()}
           >
             Cargar
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={!!assignPlanTarget} onClose={() => setAssignPlanTarget(null)} fullWidth maxWidth="sm">
+        <DialogTitle>
+          Asignar plan{assignPlanTarget ? ` — ${assignPlanTarget.raw_name ?? assignPlanTarget.partner_ref_id}` : ''}
+        </DialogTitle>
+        <DialogContent>
+          {assignPlanError && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {assignPlanError}
+            </Alert>
+          )}
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Esta póliza ya está emparejada con el viajero correcto, pero no tiene plan de
+            asistencia asociado — sin esto no aparece en su ficha. Elegí el plan real de{' '}
+            {assignPlanTarget ? tenantNameById.get(assignPlanTarget.tenant_id) ?? 'la empresa' : 'la empresa'}.
+          </Typography>
+          <TextField
+            select
+            label="Plan"
+            fullWidth
+            margin="normal"
+            value={assignPlanCode}
+            onChange={(e) => setAssignPlanCode(e.target.value)}
+          >
+            {(recordPlansQuery.data ?? []).map((p) => (
+              <MenuItem key={p.id} value={p.code}>{p.name}</MenuItem>
+            ))}
+          </TextField>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAssignPlanTarget(null)}>Cancelar</Button>
+          <Button
+            variant="contained"
+            disabled={!assignPlanCode || assignPlanMutation.isPending}
+            onClick={() => assignPlanMutation.mutate()}
+          >
+            Asignar
           </Button>
         </DialogActions>
       </Dialog>

@@ -25,6 +25,10 @@ export class AllergyEntity extends UuidBaseEntity {
   @Column({ name: 'allergen_name', type: 'text' })
   allergenName: string;
 
+  /** FK a params.catalog_values (dominio ALLERGEN) — gobierno de duplicados, ver CatalogResolutionService. */
+  @Column({ name: 'allergen_catalog_id', type: 'uuid', nullable: true })
+  allergenCatalogId?: string;
+
   /** FK a params.catalog_values (dominio ALLERGEN_TYPE). */
   @Column({ name: 'allergen_type_id', type: 'uuid' })
   allergenTypeId: string;

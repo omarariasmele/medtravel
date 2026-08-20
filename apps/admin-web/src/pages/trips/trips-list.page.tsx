@@ -20,12 +20,12 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Typography,
 } from '@mui/material';
 
 import { useAuth } from '../../auth/auth-context';
 import { apiClient } from '../../lib/api-client';
 import { labelFor, useCatalog } from '../../lib/catalog-hooks';
+import { usePageTitle } from '../../lib/page-title';
 import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface Trip {
@@ -65,11 +65,18 @@ interface FormState {
 const EMPTY_FORM: FormState = { memberId: '', tripName: '', tripStart: '', tripEnd: '' };
 
 export function TripsListPage() {
+  usePageTitle('Viajes');
   const { claims } = useAuth();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
   const [tenantFilter, setTenantFilter] = useState('');
+  const [search, setSearch] = useState('');
+  // Pedido explícito del usuario: "se debe poder filtrar por viajes
+  // abiertos y cerrados o todos, de entrada la consulta tiene que venir
+  // con viajes abiertos" — mismo criterio que "Mis viajes" en la app
+  // móvil (trips_screen.dart), arranca en Planificados.
+  const [statusFilter, setStatusFilter] = useState<'PLANNED' | 'COMPLETED' | ''>('PLANNED');
   const queryClient = useQueryClient();
 
   const tripsQuery = useQuery({
@@ -141,23 +148,47 @@ export function TripsListPage() {
     return person ? `${person.firstName} ${person.lastName}` : '—';
   };
 
+  const statusCodeById = new Map((statusCatalog.data ?? []).map((s) => [s.id, s.code]));
+
+  const normalizedSearch = search.trim().toLowerCase();
   const filteredTrips = (tripsQuery.data ?? []).filter(
-    (t) => !tenantFilter || tenantIdByMemberId.get(t.memberId) === tenantFilter,
+    (t) =>
+      (!tenantFilter || tenantIdByMemberId.get(t.memberId) === tenantFilter) &&
+      (!normalizedSearch || memberLabel(t.memberId).toLowerCase().includes(normalizedSearch)) &&
+      (!statusFilter || statusCodeById.get(t.statusId) === statusFilter),
   );
   const { pageRows: tripPageRows, page: tripPage, setPage: setTripPage, totalCount: tripTotalCount } =
     usePagination(filteredTrips);
 
   return (
     <>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Typography variant="h4">Viajes</Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', mb: 2 }}>
         <Button variant="contained" onClick={() => setDialogOpen(true)}>
           Agregar viaje
         </Button>
       </Box>
 
-      {claims?.canManageConfig && (tenantsQuery.data?.length ?? 0) > 1 && (
-        <Box sx={{ mb: 2 }}>
+      <Box sx={{ mb: 2, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+        <TextField
+          label="Buscar por viajero"
+          size="small"
+          sx={{ minWidth: 260 }}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <TextField
+          select
+          label="Estado"
+          size="small"
+          sx={{ minWidth: 200 }}
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value as 'PLANNED' | 'COMPLETED' | '')}
+        >
+          <MenuItem value="PLANNED">Planificados</MenuItem>
+          <MenuItem value="COMPLETED">Cumplidos</MenuItem>
+          <MenuItem value="">Todos</MenuItem>
+        </TextField>
+        {claims?.canManageConfig && (tenantsQuery.data?.length ?? 0) > 1 && (
           <TextField
             select
             label="Filtrar por empresa"
@@ -171,8 +202,8 @@ export function TripsListPage() {
               <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>
             ))}
           </TextField>
-        </Box>
-      )}
+        )}
+      </Box>
 
       {tripsQuery.isLoading && <CircularProgress />}
       {tripsQuery.isError && <Alert severity="error">No se pudieron cargar los viajes.</Alert>}

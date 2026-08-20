@@ -19,6 +19,10 @@ export class MedicationEntity extends UuidBaseEntity {
   @Column({ name: 'generic_name', type: 'text' })
   genericName: string;
 
+  /** FK a params.catalog_values (dominio MEDICATION) — gobierno de duplicados, ver CatalogResolutionService. */
+  @Column({ name: 'medication_catalog_id', type: 'uuid', nullable: true })
+  medicationCatalogId?: string;
+
   @Column({ name: 'brand_name', type: 'text', nullable: true })
   brandName?: string;
 

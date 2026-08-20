@@ -19,6 +19,7 @@ import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import axios from 'axios';
 
 import { apiClient } from '../../lib/api-client';
+import { usePageTitle } from '../../lib/page-title';
 
 interface SmtpSettingsView {
   id: string;
@@ -73,6 +74,7 @@ function errorMessage(err: unknown, fallback: string): string {
  * mismo, nunca un valor ya guardado.
  */
 export function SmtpSettingsPage() {
+  usePageTitle('Configuración de correo (SMTP)');
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -172,9 +174,6 @@ export function SmtpSettingsPage() {
 
   return (
     <>
-      <Typography variant="h4" gutterBottom>
-        Configuración de correo (SMTP)
-      </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
         Servidor usado para enviar el mail de recupero de contraseña y otras
         notificaciones. Por seguridad, la contraseña guardada nunca se muestra:

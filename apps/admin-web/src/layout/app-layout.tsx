@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Link as RouterLink, Outlet, useLocation } from 'react-router-dom';
 import {
   AppBar,
@@ -12,11 +12,11 @@ import {
   ListItemText,
   ListSubheader,
   Toolbar,
+  Typography,
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import PeopleIcon from '@mui/icons-material/People';
-import ShieldIcon from '@mui/icons-material/Shield';
 import FlightIcon from '@mui/icons-material/Flight';
 import EmergencyIcon from '@mui/icons-material/LocalHospital';
 import LocalHospitalIcon from '@mui/icons-material/MedicalServices';
@@ -33,9 +33,20 @@ import CardMembershipIcon from '@mui/icons-material/CardMembership';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import PersonOffIcon from '@mui/icons-material/PersonOff';
 import LocalPharmacyIcon from '@mui/icons-material/LocalPharmacy';
+import SettingsIcon from '@mui/icons-material/Settings';
+import PsychologyIcon from '@mui/icons-material/Psychology';
 import VolunteerActivismIcon from '@mui/icons-material/VolunteerActivism';
+import MonitorHeartIcon from '@mui/icons-material/MonitorHeart';
+import ScienceIcon from '@mui/icons-material/Science';
+import MemoryIcon from '@mui/icons-material/Memory';
+import HealingIcon from '@mui/icons-material/Healing';
+import MedicationIcon from '@mui/icons-material/Medication';
+import ReportProblemIcon from '@mui/icons-material/ReportProblem';
+import ChecklistIcon from '@mui/icons-material/Checklist';
+import PublicIcon from '@mui/icons-material/Public';
 
 import { useAuth } from '../auth/auth-context';
+import { PageTitleContext } from '../lib/page-title';
 import logoHorizontal from '../assets/brand/logo-horizontal.png';
 
 const DRAWER_WIDTH = 240;
@@ -49,10 +60,8 @@ const DRAWER_WIDTH = 240;
  */
 const NAV_ITEMS = [
   { label: 'Dashboard', path: '/', icon: <DashboardIcon /> },
-  { label: 'Usuarios / viajeros', path: '/travelers', icon: <PeopleIcon /> },
-  { label: 'Coberturas', path: '/coverages', icon: <ShieldIcon /> },
+  { label: 'Usuarios', path: '/travelers', icon: <PeopleIcon /> },
   { label: 'Pólizas', path: '/partner-records', icon: <AssignmentIcon /> },
-  { label: 'Planes de asistencia', path: '/assistance-plans', icon: <CardMembershipIcon /> },
   { label: 'Viajes', path: '/trips', icon: <FlightIcon /> },
   { label: 'Casos de asistencia', path: '/cases', icon: <EmergencyIcon /> },
   { label: 'Centros médicos', path: '/medical-centers', icon: <LocalHospitalIcon /> },
@@ -60,8 +69,25 @@ const NAV_ITEMS = [
   { label: 'Auditoría de accesos', path: '/audit', icon: <HistoryIcon /> },
 ];
 
+/**
+ * Pedido explícito del usuario: acceso rápido a los catálogos que se
+ * actualizan seguido (Enfermedades, Estudios, Tipos de Implantes,
+ * Cirugías) sin tener que entrar a Catálogos/Parámetros y buscar el
+ * dominio en el selector — cada link deep-linkea a esa misma pantalla
+ * con ?domain= precargado.
+ */
+const SYSTEM_TABLES = [
+  { label: 'Enfermedades', domain: 'CONDITION_CATALOG', icon: <MonitorHeartIcon /> },
+  { label: 'Medicamentos', domain: 'MEDICATION', icon: <MedicationIcon /> },
+  { label: 'Alérgenos', domain: 'ALLERGEN', icon: <ReportProblemIcon /> },
+  { label: 'Indicadores de estudios', domain: 'LAB_INDICATOR', icon: <ScienceIcon /> },
+  { label: 'Tipos de implantes', domain: 'IMPLANT_TYPE', icon: <MemoryIcon /> },
+  { label: 'Cirugías', domain: 'SURGERY_CATALOG', icon: <HealingIcon /> },
+];
+
 export function AppLayout() {
   const [open, setOpen] = useState(true);
+  const [pageTitle, setPageTitle] = useState<ReactNode>(null);
   const location = useLocation();
   const { logout, claims } = useAuth();
 
@@ -84,6 +110,20 @@ export function AppLayout() {
       {showAdminSection && (
         <>
           <Divider sx={{ my: 1 }} />
+          <ListSubheader>Tablas Sistema</ListSubheader>
+          {SYSTEM_TABLES.map((t) => (
+            <ListItemButton
+              key={t.domain}
+              component={RouterLink}
+              to={`/catalogs-admin?domain=${t.domain}`}
+              selected={location.pathname === '/catalogs-admin' && location.search === `?domain=${t.domain}`}
+            >
+              <ListItemIcon>{t.icon}</ListItemIcon>
+              <ListItemText primary={t.label} />
+            </ListItemButton>
+          ))}
+
+          <Divider sx={{ my: 1 }} />
           <ListSubheader>Administración</ListSubheader>
           {claims?.canManageConfig && (
             <ListItemButton
@@ -95,6 +135,18 @@ export function AppLayout() {
                 <BusinessIcon />
               </ListItemIcon>
               <ListItemText primary="Empresas" />
+            </ListItemButton>
+          )}
+          {claims?.canManageConfig && (
+            <ListItemButton
+              component={RouterLink}
+              to="/assistance-plans"
+              selected={location.pathname === '/assistance-plans'}
+            >
+              <ListItemIcon>
+                <CardMembershipIcon />
+              </ListItemIcon>
+              <ListItemText primary="Planes de asistencia" />
             </ListItemButton>
           )}
           {claims?.canManageOperators && (
@@ -143,6 +195,54 @@ export function AppLayout() {
                 <MailOutlineIcon />
               </ListItemIcon>
               <ListItemText primary="Correo (SMTP)" />
+            </ListItemButton>
+          )}
+          {claims?.canManageConfig && (
+            <ListItemButton
+              component={RouterLink}
+              to="/app-settings"
+              selected={location.pathname === '/app-settings'}
+            >
+              <ListItemIcon>
+                <SettingsIcon />
+              </ListItemIcon>
+              <ListItemText primary="Parámetros de la app" />
+            </ListItemButton>
+          )}
+          {claims?.canManageConfig && (
+            <ListItemButton
+              component={RouterLink}
+              to="/knowledge-base"
+              selected={location.pathname === '/knowledge-base'}
+            >
+              <ListItemIcon>
+                <PsychologyIcon />
+              </ListItemIcon>
+              <ListItemText primary="Base de conocimiento (IA)" />
+            </ListItemButton>
+          )}
+          {claims?.canManageConfig && (
+            <ListItemButton
+              component={RouterLink}
+              to="/interview-questions"
+              selected={location.pathname === '/interview-questions'}
+            >
+              <ListItemIcon>
+                <ChecklistIcon />
+              </ListItemIcon>
+              <ListItemText primary="Preguntas del asistente (beta)" />
+            </ListItemButton>
+          )}
+          {claims?.canManageConfig && (
+            <ListItemButton
+              component={RouterLink}
+              to="/destination-health-info"
+              selected={location.pathname === '/destination-health-info'}
+            >
+              <ListItemIcon>
+                <PublicIcon />
+              </ListItemIcon>
+              <ListItemText primary="Info de destinos (salud/seguridad)" />
             </ListItemButton>
           )}
           {claims?.canManageConfig && (
@@ -229,15 +329,27 @@ export function AppLayout() {
         }}
       >
         <Toolbar sx={{ display: 'flex', justifyContent: 'space-between' }}>
-          <IconButton
-            color="inherit"
-            edge="start"
-            onClick={() => setOpen(!open)}
-          >
-            <MenuIcon />
-          </IconButton>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, minWidth: 0 }}>
+            <IconButton
+              color="inherit"
+              edge="start"
+              onClick={() => setOpen(!open)}
+            >
+              <MenuIcon />
+            </IconButton>
+            {pageTitle && (
+              <Typography
+                variant="h6"
+                component="h1"
+                noWrap
+                sx={{ color: '#fff', fontWeight: 500 }}
+              >
+                {pageTitle}
+              </Typography>
+            )}
+          </Box>
           {claims?.email && (
-            <Box sx={{ fontSize: 14, opacity: 0.9 }}>{claims.email}</Box>
+            <Box sx={{ fontSize: 14, opacity: 0.9, flexShrink: 0 }}>{claims.email}</Box>
           )}
         </Toolbar>
       </AppBar>
@@ -274,7 +386,9 @@ export function AppLayout() {
         }}
       >
         <Toolbar />
-        <Outlet />
+        <PageTitleContext.Provider value={setPageTitle}>
+          <Outlet />
+        </PageTitleContext.Provider>
       </Box>
     </Box>
   );

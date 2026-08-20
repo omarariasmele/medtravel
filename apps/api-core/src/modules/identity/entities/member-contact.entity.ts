@@ -6,12 +6,16 @@ import { MemberEntity } from './member.entity';
 
 @Entity({ schema: 'core', name: 'member_contacts' })
 export class MemberContactEntity extends UuidBaseEntity {
-  @Column({ name: 'member_id', type: 'uuid' })
-  memberId: string;
+  @Column({ name: 'member_id', type: 'uuid', nullable: true })
+  memberId?: string;
 
   @ManyToOne(() => MemberEntity)
   @JoinColumn({ name: 'member_id' })
   member?: MemberEntity;
+
+  /** Alternativa a member_id (gap #37) — viajero sin core.members cargando sus propios contactos. */
+  @Column({ name: 'person_id', type: 'uuid', nullable: true })
+  personId?: string;
 
   @Column({ name: 'linked_member_id', type: 'uuid', nullable: true })
   linkedMemberId?: string;

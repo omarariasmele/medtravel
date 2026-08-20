@@ -1,11 +1,15 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   ForbiddenException,
   Get,
+  NotFoundException,
   Param,
   ParseArrayPipe,
+  Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -19,6 +23,7 @@ import { TenantTransactionManager } from '@common/database/tenant-transaction.ma
 
 import { CreatePartnerRecordDto } from './dto/create-partner-record.dto';
 import { ApproveDeclaredPolicyDto } from './dto/approve-declared-policy.dto';
+import { AssignPlanDto } from './dto/assign-plan.dto';
 
 interface AuthenticatedRequest extends Request {
   user: {
@@ -30,9 +35,15 @@ interface AuthenticatedRequest extends Request {
 
 /**
  * Carga de pólizas por parte de la empresa de seguros/asistencia al
- * viajero — siempre para SU PROPIO tenant (nunca recibe un tenantId por
- * body, evita que una empresa cargue pólizas a nombre de otra). Después
- * de cada INSERT dispara core.try_match_partner_record() para ver si el
+ * viajero — para SU PROPIO tenant siempre, salvo que sea un superadmin
+ * de plataforma (canManageConfig), que puede indicar explícitamente
+ * ?tenantId= para cargar en nombre de una empresa real (necesario
+ * porque el superadmin no tiene "su propia" empresa de asistencia —
+ * gap #44, pedido del usuario tras ver que "Cargar póliza" no dejaba
+ * elegir la empresa). Un operador normal (no superadmin) NUNCA puede
+ * pasar tenantId — se ignora silenciosamente si lo hace, para que una
+ * empresa jamás pueda cargar pólizas a nombre de otra. Después de cada
+ * INSERT dispara core.try_match_partner_record() para ver si el
  * viajero ya está registrado (ver proposed-partner-matching-function.sql).
  * No pasa por RlsCrudService: la lógica de negocio real (matching) vive
  * acá, no en un CRUD genérico.
@@ -117,13 +128,18 @@ export class PartnerRecordsController {
     @Req() request: AuthenticatedRequest,
     @Body(new ParseArrayPipe({ items: CreatePartnerRecordDto }))
     dtos: CreatePartnerRecordDto[],
+    @Query('tenantId') tenantIdOverride?: string,
   ) {
-    if (!request.user.tenantId) {
+    const tenantId =
+      request.user.canManageConfig && tenantIdOverride
+        ? tenantIdOverride
+        : request.user.tenantId;
+
+    if (!tenantId) {
       throw new ForbiddenException(
         'Solo un operador de una empresa puede cargar pólizas.',
       );
     }
-    const tenantId = request.user.tenantId;
     const blindIndexKey = this.config.get<string>('DB_BLIND_INDEX_KEY')!;
     const batchId = randomUUID();
 
@@ -165,6 +181,44 @@ export class PartnerRecordsController {
         });
       }
       return results;
+    });
+  }
+
+  /**
+   * Asignar/corregir el plan de una póliza ya emparejada con un viajero
+   * (gap #45) — recién acá se crea el enrollment real y el estado pasa
+   * de MATCHED_NO_PLAN a MATCHED definitivo. Mismo control de acceso
+   * que create(): un operador normal solo puede editar pólizas de su
+   * propio tenant, un superadmin puede editar cualquiera.
+   */
+  @Patch(':id/plan')
+  async assignPlan(
+    @Req() request: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Body() dto: AssignPlanDto,
+  ) {
+    return this.txManager.runInTransaction(async (queryRunner) => {
+      const [record] = await queryRunner.query(
+        `SELECT tenant_id FROM core.partner_member_records WHERE id = $1`,
+        [id],
+      );
+      if (!record) {
+        throw new NotFoundException('Póliza no encontrada');
+      }
+      if (!request.user.canManageConfig && record.tenant_id !== request.user.tenantId) {
+        throw new ForbiddenException('No podés editar pólizas de otra empresa');
+      }
+
+      const [result] = await queryRunner.query(
+        `SELECT * FROM core.assign_plan_to_partner_record($1, $2)`,
+        [id, dto.planCode],
+      );
+      if (!result.ok) {
+        throw new BadRequestException(
+          'Esta póliza todavía no está emparejada con ningún viajero.',
+        );
+      }
+      return { enrollmentId: result.enrollment_id };
     });
   }
 }

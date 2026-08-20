@@ -1,6 +1,17 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Sin esto la app no puede hacer NINGÚN request de red en builds de
+         release/profile (el manifest de debug ya lo declara aparte, por
+         eso solo fallaba con el APK instalado, nunca en `flutter run`). -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Foto de perfil por cámara (image_picker) -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- Sugerir país/ciudad al reportar una emergencia (geolocator + geocoding) -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- Entrada por voz en el asistente de salud (speech_to_text) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <application
-        android:label="medtravelapp"
+        android:label="MedtravelApp"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -25,6 +36,12 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Recorte de foto de perfil (image_cropper / UCrop) — no viene
+             declarada en el manifest del plugin, hay que agregarla acá. -->
+        <activity
+            android:name="com.yalantis.ucrop.UCropActivity"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.AppCompat.Light.NoActionBar"/>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
@@ -40,6 +57,17 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- Visibilidad del reconocedor de voz del sistema (speech_to_text) en Android 11+ -->
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <!-- url_launcher: abrir links http/https (WhatsApp vía wa.me, o el
+             navegador si no está instalado) — sin esto, Android 11+ no deja
+             ver si hay una app que pueda abrirlos. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
         </intent>
     </queries>
 </manifest>

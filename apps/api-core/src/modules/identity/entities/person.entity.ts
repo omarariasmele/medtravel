@@ -44,6 +44,10 @@ export class PersonEntity extends UuidBaseEntity {
   @Column({ type: 'boolean', default: true })
   active: boolean;
 
+  /** Nombre de archivo relativo en uploads/avatars/, no ruta absoluta — servido vía /clinical/patient-photo/:personId. */
+  @Column({ name: 'photo_path', type: 'text', nullable: true })
+  photoPath?: string;
+
   @Column({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 

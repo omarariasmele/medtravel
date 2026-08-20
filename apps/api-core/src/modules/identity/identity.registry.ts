@@ -24,6 +24,6 @@ export const IDENTITY_REGISTRY: Record<string, ResourceRegistryEntry> = {
   'tenant-brand-profiles': TenantBrandProfileEntity,
   persons: { entity: PersonEntity, encryptedFields: ['firstName', 'lastName'] },
   members: MemberEntity,
-  'member-contacts': MemberContactEntity,
+  'member-contacts': { entity: MemberContactEntity, encryptedFields: ['phone'] },
   'member-data-consents': MemberDataConsentEntity,
 };

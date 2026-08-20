@@ -8,7 +8,6 @@ import { ResetPasswordPage } from './pages/reset-password.page';
 import { DashboardPage } from './pages/dashboard.page';
 import { TravelersListPage } from './pages/travelers/travelers-list.page';
 import { TravelerDetailPage } from './pages/travelers/traveler-detail.page';
-import { CoveragesListPage } from './pages/coverages/coverages-list.page';
 import { TripsListPage } from './pages/trips/trips-list.page';
 import { CasesListPage } from './pages/cases/cases-list.page';
 import { CaseDetailPage } from './pages/cases/case-detail.page';
@@ -19,6 +18,10 @@ import { OperatorsPage } from './pages/operators/operators.page';
 import { CatalogsAdminPage } from './pages/catalogs/catalogs-admin.page';
 import { TenantsPage } from './pages/tenants/tenants.page';
 import { SmtpSettingsPage } from './pages/smtp/smtp-settings.page';
+import { AppSettingsPage } from './pages/app-settings/app-settings.page';
+import { KnowledgeBasePage } from './pages/knowledge-base/knowledge-base.page';
+import { InterviewQuestionsPage } from './pages/interview-questions/interview-questions.page';
+import { DestinationHealthInfoPage } from './pages/destination-health-info/destination-health-info.page';
 import { TestConsentsPage } from './pages/test-consents/test-consents.page';
 import { PartnerRecordsPage } from './pages/partner-records/partner-records.page';
 import { AssistancePlansPage } from './pages/assistance-plans/assistance-plans.page';
@@ -27,6 +30,7 @@ import { ProfessionalRegistrationPage } from './pages/professional-registration/
 import { SharePreviewPage } from './pages/share-preview/share-preview.page';
 import { AiConsumptionPage } from './pages/ai-consumption/ai-consumption.page';
 import { TravelersWithoutCoveragePage } from './pages/travelers-without-coverage/travelers-without-coverage.page';
+import { TravelerWithoutCoverageDetailPage } from './pages/travelers-without-coverage/traveler-without-coverage-detail.page';
 import { HealthcareProvidersPage } from './pages/healthcare-plans/healthcare-providers.page';
 import { HealthcareSocialSecurityPage } from './pages/healthcare-plans/healthcare-social-security.page';
 
@@ -45,7 +49,6 @@ function App() {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/travelers" element={<TravelersListPage />} />
           <Route path="/travelers/:id" element={<TravelerDetailPage />} />
-          <Route path="/coverages" element={<CoveragesListPage />} />
           <Route path="/trips" element={<TripsListPage />} />
           <Route path="/cases" element={<CasesListPage />} />
           <Route path="/cases/:id" element={<CaseDetailPage />} />
@@ -56,11 +59,16 @@ function App() {
           <Route path="/catalogs-admin" element={<CatalogsAdminPage />} />
           <Route path="/tenants" element={<TenantsPage />} />
           <Route path="/smtp-settings" element={<SmtpSettingsPage />} />
+          <Route path="/app-settings" element={<AppSettingsPage />} />
+          <Route path="/knowledge-base" element={<KnowledgeBasePage />} />
+          <Route path="/interview-questions" element={<InterviewQuestionsPage />} />
+          <Route path="/destination-health-info" element={<DestinationHealthInfoPage />} />
           <Route path="/test-consents" element={<TestConsentsPage />} />
           <Route path="/partner-records" element={<PartnerRecordsPage />} />
           <Route path="/assistance-plans" element={<AssistancePlansPage />} />
           <Route path="/ai-consumption" element={<AiConsumptionPage />} />
           <Route path="/travelers-without-coverage" element={<TravelersWithoutCoveragePage />} />
+          <Route path="/travelers-without-coverage/:personId" element={<TravelerWithoutCoverageDetailPage />} />
           <Route path="/healthcare-providers" element={<HealthcareProvidersPage />} />
           <Route path="/healthcare-social-security" element={<HealthcareSocialSecurityPage />} />
         </Route>

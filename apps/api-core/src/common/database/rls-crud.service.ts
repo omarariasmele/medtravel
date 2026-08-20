@@ -2,6 +2,7 @@ import { NotFoundException } from '@nestjs/common';
 import {
   EntityMetadata,
   EntityTarget,
+  IsNull,
   ObjectLiteral,
   QueryRunner,
 } from 'typeorm';
@@ -10,6 +11,24 @@ import { TenantTransactionManager } from './tenant-transaction.manager';
 import { mapPgError } from './pg-error.mapper';
 
 const ALIAS = 'e';
+
+/**
+ * Bug real reportado en vivo: createEncrypted/updateEncrypted mandaban
+ * los valores tal cual al driver de `pg` — para una columna jsonb (ej.
+ * clinical.lab_results.custom_values) recibiendo un array/objeto JS, el
+ * driver no lo serializa como JSON él solo y Postgres respondía
+ * "sintaxis de entrada no válida para tipo json", rompiendo el guardado
+ * siempre que ese campo traía datos. `JSON.stringify` en cualquier
+ * valor no-primitivo antes de mandarlo alcanza: para las columnas que
+ * no son json, Postgres nunca ve object/array como valor (siempre son
+ * string/number/boolean/Date/null), así que esto no afecta al resto.
+ */
+function serializeJsonValue(value: unknown): unknown {
+  if (value !== null && typeof value === 'object' && !(value instanceof Date)) {
+    return JSON.stringify(value);
+  }
+  return value;
+}
 
 /**
  * CRUD genérico sobre una entidad TypeORM, corriendo siempre dentro de
@@ -38,18 +57,38 @@ export class RlsCrudService<T extends ObjectLiteral> {
     private readonly encryptedFields: string[] = [],
   ) {}
 
+  /**
+   * Filas con `deleted_at` seteado son borrados-blandos (el patrón de
+   * retención de todo el schema: nunca DELETE real, ver ej.
+   * allergy_no_delete USING(FALSE)) — un list genérico nunca debe
+   * devolverlas, así que se excluyen siempre que la entidad tenga esa
+   * columna. No hay ningún caller hoy que dependa de verlas vía este
+   * endpoint (si lo necesitara, ya estaría filtrando manualmente y
+   * fallando en silencio como pasaba acá).
+   */
   async findAll(query: Record<string, string>): Promise<T[]> {
     const { limit: rawLimit, ...filters } = query;
     const take = this.parseLimit(rawLimit);
     try {
       return await this.txManager.runInTransaction((queryRunner) => {
+        const metadata = this.metadata(queryRunner);
+        const hasDeletedAt = metadata.columns.some(
+          (c) => c.propertyName === 'deletedAt',
+        );
         if (this.encryptedFields.length === 0) {
           return queryRunner.manager.find(this.entityClass, {
-            where: filters as any,
+            where: (hasDeletedAt
+              ? { ...filters, deletedAt: IsNull() }
+              : filters) as any,
             take,
           });
         }
-        return this.findAllEncrypted(queryRunner, filters, take);
+        return this.findAllEncrypted(
+          queryRunner,
+          filters,
+          take,
+          hasDeletedAt,
+        );
       });
     } catch (error) {
       mapPgError(error);
@@ -57,16 +96,21 @@ export class RlsCrudService<T extends ObjectLiteral> {
   }
 
   /**
-   * Tope duro de 500 para no permitir un scrape completo de una tabla
-   * grande vía un solo `?limit=`. El default sigue siendo 100 (mismo
-   * comportamiento de antes) para no cambiar la respuesta de ningún
-   * cliente existente que no pase `limit` — solo quien lo necesita
-   * (ej. Catálogos/Parámetros con >100 dominios) lo pide explícitamente.
+   * Bug real reportado en vivo: "en la web, en todas las listas, no
+   * debe haber un filtro por cantidad — tiene que poder visualizar
+   * todo lo que existe". El default de 100 (con tope duro de 500)
+   * cortaba en silencio cualquier pantalla que no pidiera `limit`
+   * explícito — pasó con Catálogos/Parámetros apenas un dominio superó
+   * 100 filas (ver catalogs-admin.page.tsx). Subido a un tope generoso
+   * para esta escala de sistema (cientos/pocos miles de filas por
+   * tabla, no un dataset masivo) — sigue habiendo UN tope (nunca
+   * "ilimitado" de verdad) para no exponer un scrape completo de una
+   * tabla que en el futuro crezca mucho vía un solo `?limit=`.
    */
   private parseLimit(raw: string | undefined): number {
-    const n = raw ? parseInt(raw, 10) : 100;
-    if (!Number.isFinite(n) || n < 1) return 100;
-    return Math.min(n, 500);
+    const n = raw ? parseInt(raw, 10) : 5000;
+    if (!Number.isFinite(n) || n < 1) return 5000;
+    return Math.min(n, 5000);
   }
 
   async findOne(id: string): Promise<T> {
@@ -182,6 +226,7 @@ export class RlsCrudService<T extends ObjectLiteral> {
     queryRunner: QueryRunner,
     query: Record<string, string>,
     take: number,
+    hasDeletedAt: boolean,
   ): Promise<T[]> {
     const metadata = this.metadata(queryRunner);
     const qb = this.baseSelectQuery(queryRunner, metadata);
@@ -193,6 +238,9 @@ export class RlsCrudService<T extends ObjectLiteral> {
       if (dbCol) {
         qb.andWhere(`"${ALIAS}"."${dbCol}" = :${key}`, { [key]: value });
       }
+    }
+    if (hasDeletedAt) {
+      qb.andWhere(`"${ALIAS}"."deleted_at" IS NULL`);
     }
     return qb.limit(take).getRawMany<T>();
   }
@@ -224,7 +272,7 @@ export class RlsCrudService<T extends ObjectLiteral> {
         ? `core.encrypt_pii($${i + 1})`
         : `$${i + 1}`,
     );
-    const values = entries.map(([, v]) => v);
+    const values = entries.map(([, v]) => serializeJsonValue(v));
 
     const [{ id }] = await queryRunner.query(
       `INSERT INTO ${this.qualifiedTable(metadata)} (${columns.join(', ')})
@@ -253,7 +301,7 @@ export class RlsCrudService<T extends ObjectLiteral> {
         : `$${i + 1}`;
       return `"${col}" = ${placeholder}`;
     });
-    const values = entries.map(([, v]) => v);
+    const values = entries.map(([, v]) => serializeJsonValue(v));
 
     await queryRunner.query(
       `UPDATE ${this.qualifiedTable(metadata)} SET ${setClauses.join(', ')}

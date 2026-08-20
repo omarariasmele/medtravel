@@ -111,6 +111,24 @@ export class ProfessionalsRegistrationController {
           ],
         );
 
+        // El profesional ES un core.users (comment de la clase) — teléfono
+        // e idioma reusan core.users.phone/preferred_lang (ya existen,
+        // core.update_user_phone ya lo usa /me/profile) en vez de agregar
+        // columnas nuevas en healthcare_professionals.
+        if (dto.phone) {
+          const phoneIdx = this.blindIndex(dto.phone);
+          await queryRunner.query(
+            `SELECT core.update_user_phone($1, $2, $3)`,
+            [user_id, dto.phone, phoneIdx],
+          );
+        }
+        if (dto.preferredLang) {
+          await queryRunner.query(
+            `UPDATE core.users SET preferred_lang = $1 WHERE id = $2`,
+            [dto.preferredLang, user_id],
+          );
+        }
+
         return { ...professional, personId: person_id, userId: user_id };
       });
     } catch (error) {

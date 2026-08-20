@@ -19,11 +19,11 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Typography,
 } from '@mui/material';
 
 import { apiClient } from '../../lib/api-client';
 import { labelFor, useCatalog } from '../../lib/catalog-hooks';
+import { usePageTitle } from '../../lib/page-title';
 import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface Operator {
@@ -75,6 +75,7 @@ const EMPTY_CREATE_FORM: CreateFormState = {
 };
 
 export function OperatorsPage() {
+  usePageTitle('Operadores');
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreateFormState>(EMPTY_CREATE_FORM);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -211,8 +212,7 @@ export function OperatorsPage() {
 
   return (
     <>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Typography variant="h4">Operadores</Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', mb: 2 }}>
         <Button variant="contained" onClick={() => setCreateOpen(true)}>
           Agregar operador
         </Button>

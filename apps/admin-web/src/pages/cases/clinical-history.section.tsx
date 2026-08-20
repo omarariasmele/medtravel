@@ -1,7 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Alert,
+  Autocomplete,
   Box,
   Button,
   Card,
@@ -13,15 +17,19 @@ import {
   DialogContent,
   DialogTitle,
   Grid,
+  IconButton,
   MenuItem,
-  Tab,
-  Tabs,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 
 import { apiClient } from '../../lib/api-client';
-import { labelFor, useCatalog } from '../../lib/catalog-hooks';
+import { labelFor, resolveCatalogValue, useCatalog } from '../../lib/catalog-hooks';
+import { useAuth } from '../../auth/auth-context';
 
 interface PatientSummary {
   firstName: string;
@@ -29,6 +37,7 @@ interface PatientSummary {
   birthDate: string | null;
   genderId: string | null;
   countryResidenceId: string | null;
+  healthRecordLastUpdatedAt: string | null;
 }
 
 interface VitalsRecord {
@@ -48,6 +57,23 @@ interface VitalsRecord {
   notes?: string;
 }
 
+/**
+ * Bug real reportado en vivo: diagnosedAt/resolvedAt/performedAt/
+ * implantedAt/startedAt son columnas `date` (sin hora) — pero salen de
+ * RlsCrudService.findAllEncrypted (query cruda vía QueryBuilder, no
+ * TypeORM find()), así que el driver de pg las devuelve como `Date`
+ * (medianoche UTC) y al serializar a JSON quedan como
+ * "2024-01-15T00:00:00.000Z" — mostradas tal cual, con hora. Mismo
+ * criterio que birthDate más abajo: forzar timeZone UTC evita además
+ * un corrimiento de un día al convertir a la zona horaria local.
+ */
+function formatDateOnly(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('es-AR', { timeZone: 'UTC' });
+}
+
 function calculateAge(birthDate: string | null): number | null {
   if (!birthDate) return null;
   const dob = new Date(birthDate);
@@ -65,11 +91,17 @@ interface Allergy {
   allergenTypeId: string;
   severityId: string;
   notes?: string;
+  /** clinical.allergies no tiene una fecha clínica propia (a diferencia
+   * de condiciones/cirugías/implantes) — se muestra la fecha de carga
+   * como referencia, pedido explícito del usuario de no dejar ningún
+   * registro sin fecha visible. */
+  createdAt?: string;
 }
 
 interface ConditionRecord {
   id: string;
   conditionName: string;
+  conditionCatalogId?: string;
   icd10Code?: string;
   statusId: string;
   travelRiskId?: string;
@@ -113,6 +145,50 @@ interface Medication {
   notes?: string;
 }
 
+interface LabResultRecord {
+  id: string;
+  performedAt: string;
+  labName?: string;
+  studyTypeId?: string;
+  hemoglobin?: string;
+  hematocrit?: string;
+  platelets?: string;
+  glucoseFasting?: string;
+  hba1c?: string;
+  totalCholesterol?: string;
+  hdlCholesterol?: string;
+  ldlCholesterol?: string;
+  triglycerides?: string;
+  creatinine?: string;
+  ptInr?: string;
+  aptt?: string;
+  customValues?: { name: string; value: string }[];
+}
+
+/** Mismos indicadores sembrados que ya tienen columna dedicada en este form — se excluyen de la lista dinámica de LAB_INDICATOR para sangre para no duplicar el campo. */
+const DEDICATED_FIELD_INDICATOR_CODES = new Set(['HEMOGLOBIN', 'HEMATOCRIT', 'GLUCOSE_FASTING']);
+
+/**
+ * Pedido explícito del usuario: la versión con <Tabs> obligaba a hacer
+ * clic pestaña por pestaña para ver algo — "no es práctico para la
+ * consulta" y además hacía invisibles los cambios (Implantes, la
+ * separación Crónicas/Enfermedades, Estudios agrupados) a menos que se
+ * entrara a cada pestaña. Ahora todas las secciones se muestran apiladas,
+ * en orden de prioridad clínica, cada una en su propia Card — no se
+ * pierde ninguna función de alta ("Agregar X" sigue estando en cada
+ * sección), solo deja de estar escondida detrás de un click.
+ */
+function HistorySection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <Card sx={{ mb: 2 }} variant="outlined">
+      <CardContent>
+        <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold' }}>{title}</Typography>
+        {children}
+      </CardContent>
+    </Card>
+  );
+}
+
 /**
  * Historia clínica — reutiliza clinical.has_clinical_access
  * (000_extensions.sql), que tiene varios caminos válidos: #5 (caso de
@@ -131,17 +207,13 @@ export function ClinicalHistorySection({
   personId: string;
   caseId?: string;
 }) {
-  const [tab, setTab] = useState<
-    'vitals' | 'allergies' | 'conditions' | 'surgeries' | 'medications'
-  >('vitals');
-
   const headers: Record<string, string> = caseId ? { 'x-active-case-id': caseId } : {};
 
   return (
     <Card sx={{ mt: 3 }}>
       <CardContent>
         <Typography variant="h6" gutterBottom>
-          Historia clínica
+          Historial de Salud
         </Typography>
         <Alert severity="info" sx={{ mb: 2 }}>
           {caseId
@@ -164,28 +236,38 @@ export function ClinicalHistorySection({
         <PatientSummaryCard personId={personId} headers={headers} />
         <CriticalAlertsBanner personId={personId} headers={headers} />
 
-        <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2, mt: 2 }}>
-          <Tab label="Signos vitales" value="vitals" />
-          <Tab label="Alergias" value="allergies" />
-          <Tab label="Comorbilidades" value="conditions" />
-          <Tab label="Cirugías" value="surgeries" />
-          <Tab label="Medicamentos" value="medications" />
-        </Tabs>
-        {tab === 'vitals' && (
-          <VitalsTab personId={personId} headers={headers} />
-        )}
-        {tab === 'allergies' && (
-          <AllergiesTab personId={personId} headers={headers} />
-        )}
-        {tab === 'conditions' && (
-          <ConditionsTab personId={personId} headers={headers} />
-        )}
-        {tab === 'surgeries' && (
-          <SurgeriesTab personId={personId} headers={headers} />
-        )}
-        {tab === 'medications' && (
-          <MedicationsTab personId={personId} headers={headers} />
-        )}
+        {/* Mismo orden y nombres que las solapas de la app móvil
+            (HealthRecordsScreen: Alergias, Enfermedades, Implantes,
+            Medicamentos, Cirugías, Peso y Mediciones, Estudios) — pedido
+            explícito del usuario de que ambas vistas coincidan.
+            Pedido explícito del usuario: "eliminar el título Comorbilidades
+            de todos lados, es enfermedades o enfermedades crónicas" — este
+            título general agrupa ambas subsecciones (Crónicas/No crónicas)
+            de ConditionsTab, por eso "Enfermedades" (sin "Crónicas") es el
+            que corresponde acá. */}
+        <Box sx={{ mt: 2 }}>
+          <HistorySection title="Alergias">
+            <AllergiesTab personId={personId} headers={headers} />
+          </HistorySection>
+          <HistorySection title="Enfermedades">
+            <ConditionsTab personId={personId} headers={headers} />
+          </HistorySection>
+          <HistorySection title="Implantes">
+            <ImplantsTab personId={personId} headers={headers} />
+          </HistorySection>
+          <HistorySection title="Medicamentos">
+            <MedicationsTab personId={personId} headers={headers} />
+          </HistorySection>
+          <HistorySection title="Cirugías">
+            <SurgeriesTab personId={personId} headers={headers} />
+          </HistorySection>
+          <HistorySection title="Peso y Mediciones">
+            <VitalsTab personId={personId} headers={headers} />
+          </HistorySection>
+          <HistorySection title="Estudios">
+            <LabResultsTab personId={personId} headers={headers} />
+          </HistorySection>
+        </Box>
       </CardContent>
     </Card>
   );
@@ -225,9 +307,24 @@ function PatientSummaryCard({
     },
   });
 
-  const latestVitals = (latestVitalsQuery.data ?? [])
+  /**
+   * clinical.vitals_history es append-only (vitals_no_update USING FALSE)
+   * — cada carga desde la app crea una fila nueva SOLO con los campos que
+   * se completaron esa vez (ej. peso/altura en una carga, grupo sanguíneo
+   * en otra posterior). Tomar la fila más reciente "tal cual" hacía que
+   * un campo cargado antes desapareciera de la vista apenas se guardaba
+   * un dato distinto después — hay que tomar el valor no-nulo más
+   * reciente POR CAMPO, no la fila más reciente entera.
+   */
+  const sortedVitals = (latestVitalsQuery.data ?? [])
     .slice()
-    .sort((a, b) => new Date(b.measuredAt).getTime() - new Date(a.measuredAt).getTime())[0];
+    .sort((a, b) => new Date(b.measuredAt).getTime() - new Date(a.measuredAt).getTime());
+  const latestVitals = {
+    weightKg: sortedVitals.find((v) => v.weightKg != null)?.weightKg,
+    heightCm: sortedVitals.find((v) => v.heightCm != null)?.heightCm,
+    bmi: sortedVitals.find((v) => v.bmi != null)?.bmi,
+    bloodTypeId: sortedVitals.find((v) => v.bloodTypeId != null)?.bloodTypeId,
+  };
 
   if (summaryQuery.isLoading) return <CircularProgress size={24} />;
   if (summaryQuery.isError || !summaryQuery.data) {
@@ -247,9 +344,19 @@ function PatientSummaryCard({
 
   return (
     <Box sx={{ mb: 1, p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
-      <Typography variant="subtitle2" gutterBottom>
-        {s.firstName} {s.lastName}
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+        <Typography variant="subtitle2" gutterBottom>
+          {s.firstName} {s.lastName}
+        </Typography>
+        <Typography
+          variant="caption"
+          color={s.healthRecordLastUpdatedAt ? 'text.secondary' : 'error'}
+        >
+          {s.healthRecordLastUpdatedAt
+            ? `Historial de Salud actualizado: ${new Date(s.healthRecordLastUpdatedAt).toLocaleDateString('es-AR')}`
+            : 'No hay información de salud registrada todavía — es necesario ingresarla.'}
+        </Typography>
+      </Box>
       <Grid container spacing={2}>
         <Grid size={{ xs: 6, sm: 3 }}>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Edad</Typography>
@@ -257,7 +364,9 @@ function PatientSummaryCard({
         </Grid>
         <Grid size={{ xs: 6, sm: 3 }}>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Fecha de nacimiento</Typography>
-          <Typography variant="body2">{s.birthDate ?? '—'}</Typography>
+          <Typography variant="body2">
+            {s.birthDate ? new Date(s.birthDate).toLocaleDateString('es-AR', { timeZone: 'UTC' }) : '—'}
+          </Typography>
         </Grid>
         <Grid size={{ xs: 6, sm: 3 }}>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Sexo</Typography>
@@ -289,11 +398,103 @@ function PatientSummaryCard({
 }
 
 /**
- * "Es de importancia ante una atención": alergias severas/críticas y
- * condiciones activas/crónicas (diabetes, hipertensión, cardíaco,
- * renal, etc.) no deberían estar escondidas detrás de un click en una
- * pestaña — se resumen acá, arriba de todo, con el mismo nivel de
- * visibilidad que los datos básicos del viajero. Reutiliza las mismas
+ * Pedido explícito del usuario: poder corregir/borrar un antecedente
+ * mal cargado desde la web — pero solo un operador puntualmente
+ * autorizado (claims.canEditClinicalData), no cualquiera con acceso
+ * al caso. "Borrar" es una baja lógica (PATCH deletedAt vía
+ * /clinical/admin-edit/, gateado con ClinicalEditGuard en el backend):
+ * clinical.*_no_delete bloquea el DELETE real a propósito, nunca se
+ * borra un dato clínico de verdad. Quién lo hizo y cuándo queda en
+ * audit.data_audit_events automáticamente (mismo trigger que ya
+ * corre en cada UPDATE de estas tablas).
+ */
+function ClinicalDeleteButton({
+  resource,
+  id,
+  itemLabel,
+  queryKey,
+  headers,
+}: {
+  resource: string;
+  id: string;
+  itemLabel: string;
+  queryKey: unknown[];
+  headers: Record<string, string>;
+}) {
+  const { claims } = useAuth();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const queryClient = useQueryClient();
+
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      await apiClient.patch(
+        `/clinical/admin-edit/${resource}/${id}`,
+        { deletedAt: new Date().toISOString() },
+        { headers },
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey });
+      setConfirmOpen(false);
+    },
+  });
+
+  if (!claims?.canEditClinicalData) return null;
+
+  return (
+    <>
+      <Tooltip title="Borrar (dato mal cargado)">
+        <IconButton size="small" onClick={() => setConfirmOpen(true)}>
+          <DeleteOutlineIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+      <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
+        <DialogTitle>¿Borrar este dato?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">
+            Vas a borrar &quot;{itemLabel}&quot; de la ficha médica del viajero. Queda registrado en la
+            auditoría quién lo borró y cuándo.
+          </Typography>
+          {deleteMutation.isError && (
+            <Alert severity="error" sx={{ mt: 2 }}>No se pudo borrar. Probá de nuevo.</Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmOpen(false)}>Cancelar</Button>
+          <Button color="error" variant="contained" disabled={deleteMutation.isPending} onClick={() => deleteMutation.mutate()}>
+            Borrar
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </>
+  );
+}
+
+/** Mismo gate que ClinicalDeleteButton, reutilizado para el botón "Editar" de cada tab (el formulario de edición es propio de cada una, solo cambia qué campos precarga). */
+function useCanEditClinical(): boolean {
+  const { claims } = useAuth();
+  return Boolean(claims?.canEditClinicalData);
+}
+
+function ClinicalEditButton({ onClick }: { onClick: () => void }) {
+  if (!useCanEditClinical()) return null;
+  return (
+    <Tooltip title="Editar (corregir dato mal cargado)">
+      <IconButton size="small" onClick={onClick}>
+        <EditOutlinedIcon fontSize="small" />
+      </IconButton>
+    </Tooltip>
+  );
+}
+
+/**
+ * "Es de importancia ante una atención": pedido explícito del usuario —
+ * TODAS las alergias (no solo severas/críticas) y TODAS las
+ * comorbilidades declaradas (no solo activas/crónicas) tienen que
+ * aparecer acá; el filtro por severidad/estado escondía datos que un
+ * médico podría necesitar. Las que además coinciden con una enfermedad
+ * marcada `isAlertWorthy: true` en el catálogo CONDITION_CATALOG se
+ * destacan en rojo (no se ocultan las demás). Reutiliza las mismas
  * query keys que AllergiesTab/ConditionsTab (React Query dedupea el
  * fetch, no pega dos veces al backend).
  */
@@ -305,7 +506,7 @@ function CriticalAlertsBanner({
   headers: Record<string, string>;
 }) {
   const severityCatalog = useCatalog('REACTION_SEVERITY');
-  const conditionStatusCatalog = useCatalog('CONDITION_STATUS');
+  const conditionCatalog = useCatalog('CONDITION_CATALOG');
 
   const allergiesQuery = useQuery({
     queryKey: ['clinical', 'allergies', personId],
@@ -329,39 +530,40 @@ function CriticalAlertsBanner({
     },
   });
 
+  const allergies = allergiesQuery.data ?? [];
+  const conditions = conditionsQuery.data ?? [];
+
   const severeCodes = new Set(['SEVERE', 'CRITICAL']);
-  const severeAllergies = (allergiesQuery.data ?? []).filter((a) => {
+  const isSevereAllergy = (a: Allergy) => {
     const code = severityCatalog.data?.find((s) => s.id === a.severityId)?.code;
-    return code && severeCodes.has(code);
-  });
+    return !!code && severeCodes.has(code);
+  };
+  const isAlertWorthyCondition = (c: ConditionRecord) => {
+    const catalogValue = conditionCatalog.data?.find((cv) => cv.id === c.conditionCatalogId);
+    return catalogValue?.metadata?.isAlertWorthy === true;
+  };
 
-  const relevantStatusCodes = new Set(['ACTIVE', 'CHRONIC']);
-  const activeConditions = (conditionsQuery.data ?? []).filter((c) => {
-    const code = conditionStatusCatalog.data?.find((s) => s.id === c.statusId)?.code;
-    return code && relevantStatusCodes.has(code);
-  });
-
-  if (severeAllergies.length === 0 && activeConditions.length === 0) return null;
+  if (allergies.length === 0 && conditions.length === 0) return null;
 
   return (
     <Alert severity="warning" sx={{ mb: 1 }}>
-      <Typography variant="subtitle2" gutterBottom>
+      <Typography variant="subtitle2" gutterBottom sx={{ fontWeight: 'bold' }}>
         Alertas médicas
       </Typography>
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-        {severeAllergies.map((a) => (
+        {allergies.map((a) => (
           <Chip
             key={a.id}
             size="small"
-            color="error"
+            color={isSevereAllergy(a) ? 'error' : 'default'}
             label={`Alergia: ${a.allergenName}`}
           />
         ))}
-        {activeConditions.map((c) => (
+        {conditions.map((c) => (
           <Chip
             key={c.id}
             size="small"
-            color="warning"
+            color={isAlertWorthyCondition(c) ? 'error' : 'default'}
             label={c.conditionName}
           />
         ))}
@@ -408,6 +610,27 @@ function VitalsTab({
   const sorted = (listQuery.data ?? [])
     .slice()
     .sort((a, b) => new Date(b.measuredAt).getTime() - new Date(a.measuredAt).getTime());
+
+  /**
+   * Pedido explícito del usuario: peso/altura/IMC no son "signos
+   * vitales" — tienen que verse juntos como un historial propio, y si
+   * una carga solo trae el peso (sin repetir la altura), el IMC de esa
+   * fecha se calcula igual arrastrando la última altura conocida. Es
+   * un cálculo de presentación (no se reescribe nada en la base).
+   */
+  const heightAndBmiById = new Map<string, { height?: string; bmi?: string; heightIsCarried: boolean }>();
+  let lastKnownHeight: string | undefined;
+  for (const v of sorted.slice().reverse()) {
+    if (v.heightCm) lastKnownHeight = v.heightCm;
+    const height = v.heightCm ?? lastKnownHeight;
+    let bmi = v.bmi;
+    if (!bmi && v.weightKg && height) {
+      const h = Number(height) / 100;
+      const w = Number(v.weightKg);
+      if (h > 0 && !Number.isNaN(w)) bmi = (w / (h * h)).toFixed(1);
+    }
+    heightAndBmiById.set(v.id, { height, bmi, heightIsCarried: !v.heightCm && !!height });
+  }
 
   const resetForm = () => {
     setWeightKg('');
@@ -466,33 +689,37 @@ function VitalsTab({
       {sorted.length === 0 && (
         <Alert severity="info">Sin signos vitales / datos morfológicos registrados.</Alert>
       )}
-      {sorted.map((v) => (
-        <Box key={v.id} sx={{ mb: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-            {new Date(v.measuredAt).toLocaleString('es-AR')}
-          </Typography>
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 0.5 }}>
-            {v.weightKg && <Chip size="small" label={`Peso: ${v.weightKg} kg`} />}
-            {v.heightCm && <Chip size="small" label={`Altura: ${v.heightCm} cm`} />}
-            {v.bmi && <Chip size="small" label={`IMC: ${v.bmi}`} />}
-            {(v.bloodPressureSys || v.bloodPressureDia) && (
-              <Chip size="small" label={`PA: ${v.bloodPressureSys ?? '—'}/${v.bloodPressureDia ?? '—'}`} />
-            )}
-            {v.heartRate && <Chip size="small" label={`FC: ${v.heartRate} lpm`} />}
-            {v.temperatureC && <Chip size="small" label={`Temp: ${v.temperatureC}°C`} />}
-            {v.oxygenSaturation && <Chip size="small" label={`SpO2: ${v.oxygenSaturation}%`} />}
-            {v.bloodGlucose && <Chip size="small" label={`Glucemia: ${v.bloodGlucose}`} />}
-            {v.bloodTypeId && (
-              <Chip size="small" variant="outlined" label={labelFor(bloodTypeCatalog.data, v.bloodTypeId)} />
+      {sorted.map((v) => {
+        const computed = heightAndBmiById.get(v.id);
+        return (
+          <Box key={v.id} sx={{ mb: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+            {/* Pedido explícito del usuario: fecha y mediciones en la
+                misma línea, mismo criterio que el resto de las tablas. */}
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
+              <Typography variant="caption" color="text.secondary">
+                {new Date(v.measuredAt).toLocaleString('es-AR')}
+              </Typography>
+              {v.weightKg && <Chip size="small" label={`Peso: ${v.weightKg} kg`} />}
+              {computed?.height && (
+                <Chip size="small" label={`Altura: ${computed.height} cm${computed.heightIsCarried ? ' (última cargada)' : ''}`} />
+              )}
+              {computed?.bmi && <Chip size="small" label={`IMC: ${computed.bmi}`} />}
+              {(v.bloodPressureSys || v.bloodPressureDia) && (
+                <Chip size="small" label={`PA: ${v.bloodPressureSys ?? '—'}/${v.bloodPressureDia ?? '—'}`} />
+              )}
+              {v.heartRate && <Chip size="small" label={`FC: ${v.heartRate} lpm`} />}
+              {v.temperatureC && <Chip size="small" label={`Temp: ${v.temperatureC}°C`} />}
+              {v.oxygenSaturation && <Chip size="small" label={`SpO2: ${v.oxygenSaturation}%`} />}
+              {v.bloodGlucose && <Chip size="small" label={`Glucemia: ${v.bloodGlucose}`} />}
+            </Box>
+            {v.notes && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                {v.notes}
+              </Typography>
             )}
           </Box>
-          {v.notes && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-              {v.notes}
-            </Typography>
-          )}
-        </Box>
-      ))}
+        );
+      })}
 
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm">
         <DialogTitle>Agregar signos vitales / datos morfológicos</DialogTitle>
@@ -554,6 +781,7 @@ function AllergiesTab({
   headers: Record<string, string>;
 }) {
   const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [allergenName, setAllergenName] = useState('');
   const [allergenTypeId, setAllergenTypeId] = useState('');
   const [severityId, setSeverityId] = useState('');
@@ -565,6 +793,7 @@ function AllergiesTab({
   const severityCatalog = useCatalog('REACTION_SEVERITY');
   const statusCatalog = useCatalog('CANONICAL_STATUS');
   const provenanceCatalog = useCatalog('PROVENANCE_TYPE');
+  const allergenCatalog = useCatalog('ALLERGEN');
 
   const listQuery = useQuery({
     queryKey: ['clinical', 'allergies', personId],
@@ -577,17 +806,47 @@ function AllergiesTab({
     },
   });
 
+  const resetForm = () => {
+    setOpen(false);
+    setEditingId(null);
+    setAllergenName('');
+    setAllergenTypeId('');
+    setSeverityId('');
+    setNotes('');
+    setError(null);
+  };
+
+  const openCreate = () => {
+    setEditingId(null);
+    setAllergenName('');
+    setAllergenTypeId('');
+    setSeverityId('');
+    setNotes('');
+    setOpen(true);
+  };
+
+  const openEdit = (a: Allergy) => {
+    setEditingId(a.id);
+    setAllergenName(a.allergenName);
+    setAllergenTypeId(a.allergenTypeId ?? '');
+    setSeverityId(a.severityId ?? '');
+    setNotes(a.notes ?? '');
+    setOpen(true);
+  };
+
   const createMutation = useMutation({
     mutationFn: async () => {
       const provisional = statusCatalog.data?.find((s) => s.code === 'PROVISIONAL');
       const staffEntered = provenanceCatalog.data?.find(
         (p) => p.code === 'PROFESSIONAL_ENTERED',
       );
+      const allergenCatalogId = await resolveCatalogValue('ALLERGEN', allergenName, allergenCatalog.data ?? []);
       const { data } = await apiClient.post(
         '/clinical/allergies',
         {
           personId,
           allergenName,
+          allergenCatalogId,
           allergenTypeId,
           severityId,
           canonicalStatusId: provisional?.id,
@@ -600,19 +859,32 @@ function AllergiesTab({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clinical', 'allergies', personId] });
-      setOpen(false);
-      setAllergenName('');
-      setAllergenTypeId('');
-      setSeverityId('');
-      setNotes('');
-      setError(null);
+      resetForm();
     },
     onError: () => setError('No se pudo guardar la alergia.'),
   });
 
+  const updateMutation = useMutation({
+    mutationFn: async () => {
+      const allergenCatalogId = await resolveCatalogValue('ALLERGEN', allergenName, allergenCatalog.data ?? []);
+      await apiClient.patch(
+        `/clinical/admin-edit/allergies/${editingId}`,
+        { allergenName, allergenCatalogId, allergenTypeId, severityId, notes: notes || null },
+        { headers },
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clinical', 'allergies', personId] });
+      resetForm();
+    },
+    onError: () => setError('No se pudo guardar la corrección.'),
+  });
+
+  const saving = createMutation.isPending || updateMutation.isPending;
+
   return (
     <Box>
-      <Button size="small" variant="outlined" onClick={() => setOpen(true)} sx={{ mb: 2 }}>
+      <Button size="small" variant="outlined" onClick={openCreate} sx={{ mb: 2 }}>
         Agregar alergia
       </Button>
       {listQuery.isLoading && <CircularProgress size={24} />}
@@ -620,30 +892,51 @@ function AllergiesTab({
         <Alert severity="info">Sin alergias registradas.</Alert>
       )}
       {listQuery.data?.map((a) => (
-        <Box key={a.id} sx={{ mb: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
-          <Typography variant="body2" component="div">
-            <strong>{a.allergenName}</strong>{' '}
-            <Chip size="small" label={labelFor(severityCatalog.data, a.severityId)} />{' '}
-            <Chip size="small" variant="outlined" label={labelFor(typeCatalog.data, a.allergenTypeId)} />
-          </Typography>
-          {a.notes && (
-            <Typography variant="caption" color="text.secondary">
-              {a.notes}
+        <Box key={a.id} sx={{ mb: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <Box>
+            {/* Pedido explícito del usuario: alergia + fecha en la misma
+                línea, mismo criterio que el resto de las tablas. El chip
+                de tipo "Otro" es el default sin información real — mismo
+                criterio que "Activa" en Enfermedades, no se muestra. */}
+            <Typography variant="body2" component="div">
+              <strong>{a.allergenName}</strong>
+              {a.createdAt && ` — Registrada: ${new Date(a.createdAt).toLocaleDateString('es-AR')}`}{' '}
+              <Chip size="small" label={labelFor(severityCatalog.data, a.severityId)} />{' '}
+              {typeCatalog.data?.find((c) => c.id === a.allergenTypeId)?.code !== 'OTHER' && (
+                <Chip size="small" variant="outlined" label={labelFor(typeCatalog.data, a.allergenTypeId)} />
+              )}
             </Typography>
-          )}
+            {a.notes && (
+              <Typography variant="caption" color="text.secondary">
+                {a.notes}
+              </Typography>
+            )}
+          </Box>
+          <Box sx={{ display: 'flex' }}>
+            <ClinicalEditButton onClick={() => openEdit(a)} />
+            <ClinicalDeleteButton
+              resource="allergies"
+              id={a.id}
+              itemLabel={a.allergenName}
+              queryKey={['clinical', 'allergies', personId]}
+              headers={headers}
+            />
+          </Box>
         </Box>
       ))}
 
-      <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm">
-        <DialogTitle>Agregar alergia</DialogTitle>
+      <Dialog open={open} onClose={resetForm} fullWidth maxWidth="sm">
+        <DialogTitle>{editingId ? 'Editar alergia' : 'Agregar alergia'}</DialogTitle>
         <DialogContent>
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-          <TextField
-            label="Alérgeno"
-            fullWidth
-            margin="normal"
-            value={allergenName}
-            onChange={(e) => setAllergenName(e.target.value)}
+          <Autocomplete
+            freeSolo
+            options={(allergenCatalog.data ?? []).map((o) => o.labelEs)}
+            inputValue={allergenName}
+            onInputChange={(_, v) => setAllergenName(v)}
+            renderInput={(params) => (
+              <TextField {...params} label="Alérgeno" fullWidth margin="normal" helperText="Elegí uno existente o escribí uno nuevo" />
+            )}
           />
           <TextField
             select
@@ -680,11 +973,11 @@ function AllergiesTab({
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOpen(false)}>Cancelar</Button>
+          <Button onClick={resetForm}>Cancelar</Button>
           <Button
             variant="contained"
-            disabled={!allergenName || !allergenTypeId || !severityId || createMutation.isPending}
-            onClick={() => createMutation.mutate()}
+            disabled={!allergenName || !allergenTypeId || !severityId || saving}
+            onClick={() => (editingId ? updateMutation.mutate() : createMutation.mutate())}
           >
             Guardar
           </Button>
@@ -730,6 +1023,7 @@ function ConditionsTab({
   headers: Record<string, string>;
 }) {
   const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<ConditionFormState>(EMPTY_CONDITION_FORM);
   const [error, setError] = useState<string | null>(null);
   const queryClient = useQueryClient();
@@ -738,6 +1032,7 @@ function ConditionsTab({
   const travelRiskCatalog = useCatalog('TRAVEL_RISK');
   const canonicalCatalog = useCatalog('CANONICAL_STATUS');
   const provenanceCatalog = useCatalog('PROVENANCE_TYPE');
+  const conditionCatalog = useCatalog('CONDITION_CATALOG');
 
   const setField =
     (field: keyof ConditionFormState) =>
@@ -755,17 +1050,50 @@ function ConditionsTab({
     },
   });
 
+  const resetForm = () => {
+    setOpen(false);
+    setEditingId(null);
+    setForm(EMPTY_CONDITION_FORM);
+    setError(null);
+  };
+
+  const openCreate = () => {
+    setEditingId(null);
+    setForm(EMPTY_CONDITION_FORM);
+    setOpen(true);
+  };
+
+  const openEdit = (c: ConditionRecord) => {
+    setEditingId(c.id);
+    setForm({
+      conditionName: c.conditionName,
+      icd10Code: c.icd10Code ?? '',
+      statusId: c.statusId,
+      travelRiskId: c.travelRiskId ?? '',
+      diagnosedAt: c.diagnosedAt?.slice(0, 10) ?? '',
+      resolvedAt: c.resolvedAt?.slice(0, 10) ?? '',
+      treatingDoctor: c.treatingDoctor ?? '',
+      treatingSpecialty: c.treatingSpecialty ?? '',
+      treatmentNotes: c.treatmentNotes ?? '',
+      travelRestrictions: c.travelRestrictions ?? '',
+      notes: c.notes ?? '',
+    });
+    setOpen(true);
+  };
+
   const createMutation = useMutation({
     mutationFn: async () => {
       const provisional = canonicalCatalog.data?.find((s) => s.code === 'PROVISIONAL');
       const staffEntered = provenanceCatalog.data?.find(
         (p) => p.code === 'PROFESSIONAL_ENTERED',
       );
+      const conditionCatalogId = await resolveCatalogValue('CONDITION_CATALOG', form.conditionName, conditionCatalog.data ?? []);
       const { data } = await apiClient.post(
         '/clinical/conditions',
         {
           personId,
           conditionName: form.conditionName,
+          conditionCatalogId,
           icd10Code: form.icd10Code || undefined,
           statusId: form.statusId,
           travelRiskId: form.travelRiskId || undefined,
@@ -785,69 +1113,135 @@ function ConditionsTab({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clinical', 'conditions', personId] });
-      setOpen(false);
-      setForm(EMPTY_CONDITION_FORM);
-      setError(null);
+      resetForm();
     },
     onError: () => setError('No se pudo guardar la condición.'),
   });
 
+  const updateMutation = useMutation({
+    mutationFn: async () => {
+      const conditionCatalogId = await resolveCatalogValue('CONDITION_CATALOG', form.conditionName, conditionCatalog.data ?? []);
+      await apiClient.patch(
+        `/clinical/admin-edit/conditions/${editingId}`,
+        {
+          conditionName: form.conditionName,
+          conditionCatalogId,
+          icd10Code: form.icd10Code || null,
+          statusId: form.statusId,
+          travelRiskId: form.travelRiskId || null,
+          diagnosedAt: form.diagnosedAt || null,
+          resolvedAt: form.resolvedAt || null,
+          treatingDoctor: form.treatingDoctor || null,
+          treatingSpecialty: form.treatingSpecialty || null,
+          treatmentNotes: form.treatmentNotes || null,
+          travelRestrictions: form.travelRestrictions || null,
+          notes: form.notes || null,
+        },
+        { headers },
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clinical', 'conditions', personId] });
+      resetForm();
+    },
+    onError: () => setError('No se pudo guardar la corrección.'),
+  });
+
+  const saving = createMutation.isPending || updateMutation.isPending;
+
+  const chronicStatusId = statusCatalog.data?.find((s) => s.code === 'CHRONIC')?.id;
+  const chronicConditions = (listQuery.data ?? []).filter((c) => c.statusId === chronicStatusId);
+  const otherConditions = (listQuery.data ?? []).filter((c) => c.statusId !== chronicStatusId);
+
+  const renderCondition = (c: ConditionRecord) => (
+    <Box key={c.id} sx={{ mb: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+      <Box>
+        <Typography variant="body2" component="div">
+          {/* Pedido explícito del usuario: la enfermedad y la fecha de
+              diagnóstico tienen que quedar en la misma línea, no una
+              abajo de la otra. */}
+          <strong>{c.conditionName}</strong>
+          {c.diagnosedAt && ` — Diagnosticada: ${formatDateOnly(c.diagnosedAt)}`}{' '}
+          {c.icd10Code && <Chip size="small" variant="outlined" label={c.icd10Code} />}{' '}
+          {/* Pedido explícito del usuario: "Activa" es el estado por defecto de toda condición —
+              mostrarlo siempre es ruido. Solo aporta algo cuando el estado NO es el default. */}
+          {!['ACTIVE', 'CHRONIC'].includes(statusCatalog.data?.find((s) => s.id === c.statusId)?.code ?? '') && (
+            <Chip size="small" label={labelFor(statusCatalog.data, c.statusId)} />
+          )}{' '}
+          {c.travelRiskId && (
+            <Chip size="small" color="warning" label={`Riesgo de viaje: ${labelFor(travelRiskCatalog.data, c.travelRiskId)}`} />
+          )}
+        </Typography>
+        <Typography variant="caption" color="text.secondary" component="div">
+          {c.resolvedAt && `Resuelta: ${formatDateOnly(c.resolvedAt)}`}
+          {c.treatingDoctor && ` · Médico tratante: ${c.treatingDoctor}`}
+          {c.treatingSpecialty && ` (${c.treatingSpecialty})`}
+        </Typography>
+        {c.treatmentNotes && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+            Tratamiento: {c.treatmentNotes}
+          </Typography>
+        )}
+        {c.travelRestrictions && (
+          <Typography variant="caption" color="error" sx={{ display: 'block' }}>
+            Restricciones de viaje: {c.travelRestrictions}
+          </Typography>
+        )}
+        {c.notes && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+            {c.notes}
+          </Typography>
+        )}
+      </Box>
+      <Box sx={{ display: 'flex' }}>
+        <ClinicalEditButton onClick={() => openEdit(c)} />
+        <ClinicalDeleteButton
+          resource="conditions"
+          id={c.id}
+          itemLabel={c.conditionName}
+          queryKey={['clinical', 'conditions', personId]}
+          headers={headers}
+        />
+      </Box>
+    </Box>
+  );
+
   return (
     <Box>
-      <Button size="small" variant="outlined" onClick={() => setOpen(true)} sx={{ mb: 2 }}>
+      <Button size="small" variant="outlined" onClick={openCreate} sx={{ mb: 2 }}>
         Agregar condición
       </Button>
       {listQuery.isLoading && <CircularProgress size={24} />}
       {listQuery.data?.length === 0 && (
         <Alert severity="info">Sin condiciones registradas.</Alert>
       )}
-      {listQuery.data?.map((c) => (
-        <Box key={c.id} sx={{ mb: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
-          <Typography variant="body2" component="div">
-            <strong>{c.conditionName}</strong>{' '}
-            {c.icd10Code && <Chip size="small" variant="outlined" label={c.icd10Code} />}{' '}
-            <Chip size="small" label={labelFor(statusCatalog.data, c.statusId)} />{' '}
-            {c.travelRiskId && (
-              <Chip size="small" color="warning" label={`Riesgo de viaje: ${labelFor(travelRiskCatalog.data, c.travelRiskId)}`} />
-            )}
-          </Typography>
-          <Typography variant="caption" color="text.secondary" component="div">
-            {c.diagnosedAt && `Diagnosticada: ${c.diagnosedAt}`}
-            {c.resolvedAt && ` · Resuelta: ${c.resolvedAt}`}
-            {c.treatingDoctor && ` · Médico tratante: ${c.treatingDoctor}`}
-            {c.treatingSpecialty && ` (${c.treatingSpecialty})`}
-          </Typography>
-          {c.treatmentNotes && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-              Tratamiento: {c.treatmentNotes}
-            </Typography>
-          )}
-          {c.travelRestrictions && (
-            <Typography variant="caption" color="error" sx={{ display: 'block' }}>
-              Restricciones de viaje: {c.travelRestrictions}
-            </Typography>
-          )}
-          {c.notes && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-              {c.notes}
-            </Typography>
-          )}
-        </Box>
-      ))}
+      {chronicConditions.length > 0 && (
+        <>
+          <Typography variant="subtitle2" sx={{ mt: 1, mb: 0.5, fontWeight: 'bold' }}>Enfermedades Crónicas</Typography>
+          {chronicConditions.map(renderCondition)}
+        </>
+      )}
+      {otherConditions.length > 0 && (
+        <>
+          <Typography variant="subtitle2" sx={{ mt: 2, mb: 0.5, fontWeight: 'bold' }}>Enfermedades</Typography>
+          {otherConditions.map(renderCondition)}
+        </>
+      )}
 
-      <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm">
-        <DialogTitle>Agregar condición</DialogTitle>
+      <Dialog open={open} onClose={resetForm} fullWidth maxWidth="sm">
+        <DialogTitle>{editingId ? 'Editar condición' : 'Agregar condición'}</DialogTitle>
         <DialogContent>
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
           <Grid container spacing={1}>
             <Grid size={{ xs: 8 }}>
-              <TextField
-                label="Comorbilidad"
-                fullWidth
-                margin="normal"
-                value={form.conditionName}
-                onChange={setField('conditionName')}
-                helperText="Ej. Diabetes mellitus tipo 2"
+              <Autocomplete
+                freeSolo
+                options={(conditionCatalog.data ?? []).map((o) => o.labelEs)}
+                inputValue={form.conditionName}
+                onInputChange={(_, v) => setForm((f) => ({ ...f, conditionName: v }))}
+                renderInput={(params) => (
+                  <TextField {...params} label="Comorbilidad" fullWidth margin="normal" helperText="Ej. Diabetes mellitus tipo 2" />
+                )}
               />
             </Grid>
             <Grid size={{ xs: 4 }}>
@@ -964,11 +1358,11 @@ function ConditionsTab({
           </Grid>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOpen(false)}>Cancelar</Button>
+          <Button onClick={resetForm}>Cancelar</Button>
           <Button
             variant="contained"
-            disabled={!form.conditionName || !form.statusId || createMutation.isPending}
-            onClick={() => createMutation.mutate()}
+            disabled={!form.conditionName || !form.statusId || saving}
+            onClick={() => (editingId ? updateMutation.mutate() : createMutation.mutate())}
           >
             Guardar
           </Button>
@@ -986,6 +1380,7 @@ function SurgeriesTab({
   headers: Record<string, string>;
 }) {
   const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [procedureName, setProcedureName] = useState('');
   const [icd10Code, setIcd10Code] = useState('');
   const [performedAt, setPerformedAt] = useState('');
@@ -1004,6 +1399,7 @@ function SurgeriesTab({
   const outcomeCatalog = useCatalog('SURGERY_OUTCOME');
   const canonicalCatalog = useCatalog('CANONICAL_STATUS');
   const provenanceCatalog = useCatalog('PROVENANCE_TYPE');
+  const surgeryCatalog = useCatalog('SURGERY_CATALOG');
 
   const listQuery = useQuery({
     queryKey: ['clinical', 'surgeries', personId],
@@ -1016,7 +1412,7 @@ function SurgeriesTab({
     },
   });
 
-  const resetForm = () => {
+  const clearFields = () => {
     setProcedureName('');
     setIcd10Code('');
     setPerformedAt('');
@@ -1030,17 +1426,48 @@ function SurgeriesTab({
     setImplantDetails('');
   };
 
+  const closeForm = () => {
+    setOpen(false);
+    setEditingId(null);
+    clearFields();
+    setError(null);
+  };
+
+  const openCreate = () => {
+    setEditingId(null);
+    clearFields();
+    setOpen(true);
+  };
+
+  const openEdit = (s: SurgeryRecord) => {
+    setEditingId(s.id);
+    setProcedureName(s.procedureName);
+    setIcd10Code(s.icd10Code ?? '');
+    setPerformedAt(s.performedAt?.slice(0, 10) ?? '');
+    setHospitalName(s.hospitalName ?? '');
+    setSurgeonName(s.surgeonName ?? '');
+    setApproachId(s.approachId ?? '');
+    setOutcomeId(s.outcomeId ?? '');
+    setComplications(s.complications ?? '');
+    setRecoveryNotes(s.recoveryNotes ?? '');
+    setHasImplant(s.hasImplant ?? false);
+    setImplantDetails(s.implantDetails ?? '');
+    setOpen(true);
+  };
+
   const createMutation = useMutation({
     mutationFn: async () => {
       const provisional = canonicalCatalog.data?.find((s) => s.code === 'PROVISIONAL');
       const staffEntered = provenanceCatalog.data?.find(
         (p) => p.code === 'PROFESSIONAL_ENTERED',
       );
+      const procedureCatalogId = await resolveCatalogValue('SURGERY_CATALOG', procedureName, surgeryCatalog.data ?? []);
       const { data } = await apiClient.post(
         '/clinical/surgeries',
         {
           personId,
           procedureName,
+          procedureCatalogId,
           icd10Code: icd10Code || undefined,
           performedAt,
           hospitalName: hospitalName || undefined,
@@ -1060,16 +1487,45 @@ function SurgeriesTab({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clinical', 'surgeries', personId] });
-      setOpen(false);
-      resetForm();
-      setError(null);
+      closeForm();
     },
     onError: () => setError('No se pudo guardar la cirugía.'),
   });
 
+  const updateMutation = useMutation({
+    mutationFn: async () => {
+      const procedureCatalogId = await resolveCatalogValue('SURGERY_CATALOG', procedureName, surgeryCatalog.data ?? []);
+      await apiClient.patch(
+        `/clinical/admin-edit/surgeries/${editingId}`,
+        {
+          procedureName,
+          procedureCatalogId,
+          icd10Code: icd10Code || null,
+          performedAt,
+          hospitalName: hospitalName || null,
+          surgeonName: surgeonName || null,
+          approachId: approachId || null,
+          outcomeId: outcomeId || null,
+          complications: complications || null,
+          recoveryNotes: recoveryNotes || null,
+          hasImplant,
+          implantDetails: hasImplant ? implantDetails || null : null,
+        },
+        { headers },
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clinical', 'surgeries', personId] });
+      closeForm();
+    },
+    onError: () => setError('No se pudo guardar la corrección.'),
+  });
+
+  const saving = createMutation.isPending || updateMutation.isPending;
+
   return (
     <Box>
-      <Button size="small" variant="outlined" onClick={() => setOpen(true)} sx={{ mb: 2 }}>
+      <Button size="small" variant="outlined" onClick={openCreate} sx={{ mb: 2 }}>
         Agregar cirugía
       </Button>
       {listQuery.isLoading && <CircularProgress size={24} />}
@@ -1077,50 +1533,67 @@ function SurgeriesTab({
         <Alert severity="info">Sin cirugías / antecedentes quirúrgicos registrados.</Alert>
       )}
       {listQuery.data?.map((s) => (
-        <Box key={s.id} sx={{ mb: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
-          <Typography variant="body2" component="div">
-            <strong>{s.procedureName}</strong>{' '}
-            {s.icd10Code && <Chip size="small" variant="outlined" label={s.icd10Code} />}{' '}
-            {s.outcomeId && <Chip size="small" label={labelFor(outcomeCatalog.data, s.outcomeId)} />}{' '}
-            {s.hasImplant && <Chip size="small" color="info" label="Con implante" />}
-          </Typography>
-          <Typography variant="caption" color="text.secondary" component="div">
-            {s.performedAt}
-            {s.hospitalName && ` · ${s.hospitalName}`}
-            {s.surgeonName && ` · Dr./Dra. ${s.surgeonName}`}
-            {s.approachId && ` · ${labelFor(approachCatalog.data, s.approachId)}`}
-          </Typography>
-          {s.complications && (
-            <Typography variant="caption" color="error" sx={{ display: 'block' }}>
-              Complicaciones: {s.complications}
+        <Box key={s.id} sx={{ mb: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <Box>
+            {/* Pedido explícito del usuario: cirugía + fecha en la misma
+                línea, mismo criterio que Enfermedades/Medicamentos. */}
+            <Typography variant="body2" component="div">
+              <strong>{s.procedureName}</strong>
+              {s.performedAt && ` — ${formatDateOnly(s.performedAt)}`}{' '}
+              {s.icd10Code && <Chip size="small" variant="outlined" label={s.icd10Code} />}{' '}
+              {s.outcomeId && <Chip size="small" label={labelFor(outcomeCatalog.data, s.outcomeId)} />}{' '}
+              {s.hasImplant && <Chip size="small" color="info" label="Con implante" />}
             </Typography>
-          )}
-          {s.recoveryNotes && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-              Recuperación: {s.recoveryNotes}
-            </Typography>
-          )}
-          {s.hasImplant && s.implantDetails && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-              Implante: {s.implantDetails}
-            </Typography>
-          )}
+            {(s.hospitalName || s.surgeonName || s.approachId) && (
+              <Typography variant="caption" color="text.secondary" component="div">
+                {s.hospitalName}
+                {s.surgeonName && ` · Dr./Dra. ${s.surgeonName}`}
+                {s.approachId && ` · ${labelFor(approachCatalog.data, s.approachId)}`}
+              </Typography>
+            )}
+            {s.complications && (
+              <Typography variant="caption" color="error" sx={{ display: 'block' }}>
+                Complicaciones: {s.complications}
+              </Typography>
+            )}
+            {s.recoveryNotes && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                Recuperación: {s.recoveryNotes}
+              </Typography>
+            )}
+            {s.hasImplant && s.implantDetails && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                Implante: {s.implantDetails}
+              </Typography>
+            )}
+          </Box>
+          <Box sx={{ display: 'flex' }}>
+            <ClinicalEditButton onClick={() => openEdit(s)} />
+            <ClinicalDeleteButton
+              resource="surgeries"
+              id={s.id}
+              itemLabel={s.procedureName}
+              queryKey={['clinical', 'surgeries', personId]}
+              headers={headers}
+            />
+          </Box>
         </Box>
       ))}
 
-      <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm">
-        <DialogTitle>Agregar cirugía</DialogTitle>
+      <Dialog open={open} onClose={closeForm} fullWidth maxWidth="sm">
+        <DialogTitle>{editingId ? 'Editar cirugía' : 'Agregar cirugía'}</DialogTitle>
         <DialogContent>
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
           <Grid container spacing={1}>
             <Grid size={{ xs: 8 }}>
-              <TextField
-                label="Procedimiento"
-                fullWidth
-                margin="normal"
-                value={procedureName}
-                onChange={(e) => setProcedureName(e.target.value)}
-                helperText="Ej. Colecistectomía"
+              <Autocomplete
+                freeSolo
+                options={(surgeryCatalog.data ?? []).map((o) => o.labelEs)}
+                inputValue={procedureName}
+                onInputChange={(_, v) => setProcedureName(v)}
+                renderInput={(params) => (
+                  <TextField {...params} label="Procedimiento" fullWidth margin="normal" helperText="Ej. Colecistectomía" />
+                )}
               />
             </Grid>
             <Grid size={{ xs: 4 }}>
@@ -1235,11 +1708,214 @@ function SurgeriesTab({
           </Grid>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOpen(false)}>Cancelar</Button>
+          <Button onClick={closeForm}>Cancelar</Button>
           <Button
             variant="contained"
-            disabled={!procedureName || !performedAt || createMutation.isPending}
-            onClick={() => createMutation.mutate()}
+            disabled={!procedureName || !performedAt || saving}
+            onClick={() => (editingId ? updateMutation.mutate() : createMutation.mutate())}
+          >
+            Guardar
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
+  );
+}
+
+interface ImplantDeviceRecord {
+  id: string;
+  deviceName: string;
+  deviceTypeId?: string;
+  implantedAt?: string;
+  notes?: string;
+}
+
+function ImplantsTab({
+  personId,
+  headers,
+}: {
+  personId: string;
+  headers: Record<string, string>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [deviceName, setDeviceName] = useState('');
+  const [implantedAt, setImplantedAt] = useState('');
+  const [notes, setNotes] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+
+  const typeCatalog = useCatalog('IMPLANT_TYPE');
+  const canonicalCatalog = useCatalog('CANONICAL_STATUS');
+  const provenanceCatalog = useCatalog('PROVENANCE_TYPE');
+
+  const listQuery = useQuery({
+    queryKey: ['clinical', 'implants-devices', personId],
+    queryFn: async () => {
+      const { data } = await apiClient.get<ImplantDeviceRecord[]>('/clinical/implants-devices', {
+        params: { personId },
+        headers,
+      });
+      return data;
+    },
+  });
+
+  const clearFields = () => {
+    setDeviceName('');
+    setImplantedAt('');
+    setNotes('');
+  };
+
+  const closeForm = () => {
+    setOpen(false);
+    setEditingId(null);
+    clearFields();
+    setError(null);
+  };
+
+  const openCreate = () => {
+    setEditingId(null);
+    clearFields();
+    setOpen(true);
+  };
+
+  const openEdit = (d: ImplantDeviceRecord) => {
+    setEditingId(d.id);
+    setDeviceName(d.deviceName);
+    setImplantedAt(d.implantedAt?.slice(0, 10) ?? '');
+    setNotes(d.notes ?? '');
+    setOpen(true);
+  };
+
+  const createMutation = useMutation({
+    mutationFn: async () => {
+      const provisional = canonicalCatalog.data?.find((s) => s.code === 'PROVISIONAL');
+      const staffEntered = provenanceCatalog.data?.find(
+        (p) => p.code === 'PROFESSIONAL_ENTERED',
+      );
+      const deviceTypeId = await resolveCatalogValue('IMPLANT_TYPE', deviceName, typeCatalog.data ?? []);
+      const { data } = await apiClient.post(
+        '/clinical/implants-devices',
+        {
+          personId,
+          deviceName,
+          deviceTypeId,
+          implantedAt: implantedAt || undefined,
+          notes: notes || undefined,
+          canonicalStatusId: provisional?.id,
+          provenanceId: staffEntered?.id,
+        },
+        { headers },
+      );
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clinical', 'implants-devices', personId] });
+      closeForm();
+    },
+    onError: () => setError('No se pudo guardar el implante/dispositivo.'),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async () => {
+      const deviceTypeId = await resolveCatalogValue('IMPLANT_TYPE', deviceName, typeCatalog.data ?? []);
+      await apiClient.patch(
+        `/clinical/admin-edit/implants-devices/${editingId}`,
+        { deviceName, deviceTypeId, implantedAt: implantedAt || null, notes: notes || null },
+        { headers },
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clinical', 'implants-devices', personId] });
+      closeForm();
+    },
+    onError: () => setError('No se pudo guardar la corrección.'),
+  });
+
+  const saving = createMutation.isPending || updateMutation.isPending;
+
+  return (
+    <Box>
+      <Button size="small" variant="outlined" onClick={openCreate} sx={{ mb: 2 }}>
+        Agregar implante o dispositivo
+      </Button>
+      {listQuery.isLoading && <CircularProgress size={24} />}
+      {listQuery.data?.length === 0 && (
+        <Alert severity="info">Sin implantes ni dispositivos registrados.</Alert>
+      )}
+      {listQuery.data?.map((d) => (
+        <Box key={d.id} sx={{ mb: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <Box>
+            {/* Pedido explícito del usuario: implante + fecha en la
+                misma línea, mismo criterio que Enfermedades/Medicamentos/Cirugías. */}
+            <Typography variant="body2" component="div">
+              <strong>{d.deviceName}</strong>
+              {d.implantedAt && ` — ${formatDateOnly(d.implantedAt)}`}{' '}
+              {/* Bug real reportado en vivo: "por qué repite Marcapasos"
+                  — el tipo de catálogo suele coincidir exactamente con
+                  el nombre escrito (mismo texto), mostrarlo dos veces es
+                  ruido. Solo se muestra el chip si aporta algo distinto. */}
+              {d.deviceTypeId && labelFor(typeCatalog.data, d.deviceTypeId).trim().toLowerCase() !== d.deviceName.trim().toLowerCase() && (
+                <Chip size="small" variant="outlined" label={labelFor(typeCatalog.data, d.deviceTypeId)} />
+              )}
+            </Typography>
+            {d.notes && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                {d.notes}
+              </Typography>
+            )}
+          </Box>
+          <Box sx={{ display: 'flex' }}>
+            <ClinicalEditButton onClick={() => openEdit(d)} />
+            <ClinicalDeleteButton
+              resource="implants-devices"
+              id={d.id}
+              itemLabel={d.deviceName}
+              queryKey={['clinical', 'implants-devices', personId]}
+              headers={headers}
+            />
+          </Box>
+        </Box>
+      ))}
+
+      <Dialog open={open} onClose={closeForm} fullWidth maxWidth="sm">
+        <DialogTitle>{editingId ? 'Editar implante o dispositivo' : 'Agregar implante o dispositivo'}</DialogTitle>
+        <DialogContent>
+          {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+          <Autocomplete
+            freeSolo
+            options={(typeCatalog.data ?? []).map((o) => o.labelEs)}
+            inputValue={deviceName}
+            onInputChange={(_, v) => setDeviceName(v)}
+            renderInput={(params) => (
+              <TextField {...params} label="Implante / dispositivo" fullWidth margin="normal" helperText="Ej. marcapasos, prótesis de cadera, bomba de insulina" />
+            )}
+          />
+          <TextField
+            label="Fecha de implantación (opcional)"
+            type="date"
+            fullWidth
+            margin="normal"
+            slotProps={{ inputLabel: { shrink: true } }}
+            value={implantedAt}
+            onChange={(e) => setImplantedAt(e.target.value)}
+          />
+          <TextField
+            label="Notas"
+            fullWidth
+            multiline
+            minRows={2}
+            margin="normal"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeForm}>Cancelar</Button>
+          <Button
+            variant="contained"
+            disabled={!deviceName || saving}
+            onClick={() => (editingId ? updateMutation.mutate() : createMutation.mutate())}
           >
             Guardar
           </Button>
@@ -1257,6 +1933,7 @@ function MedicationsTab({
   headers: Record<string, string>;
 }) {
   const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [genericName, setGenericName] = useState('');
   const [brandName, setBrandName] = useState('');
   const [doseAmount, setDoseAmount] = useState('');
@@ -1264,6 +1941,7 @@ function MedicationsTab({
   const [frequencyId, setFrequencyId] = useState('');
   const [routeId, setRouteId] = useState('');
   const [startedAt, setStartedAt] = useState('');
+  const [prescribedDate, setPrescribedDate] = useState('');
   const [isChronic, setIsChronic] = useState(false);
   const [travelNotes, setTravelNotes] = useState('');
   const [notes, setNotes] = useState('');
@@ -1275,6 +1953,7 @@ function MedicationsTab({
   const doseUnitCatalog = useCatalog('DOSE_UNIT');
   const frequencyCatalog = useCatalog('MEDICATION_FREQUENCY');
   const routeCatalog = useCatalog('MEDICATION_ROUTE');
+  const medicationCatalog = useCatalog('MEDICATION');
 
   const listQuery = useQuery({
     queryKey: ['clinical', 'medications', personId],
@@ -1287,7 +1966,7 @@ function MedicationsTab({
     },
   });
 
-  const resetForm = () => {
+  const clearFields = () => {
     setGenericName('');
     setBrandName('');
     setDoseAmount('');
@@ -1295,9 +1974,39 @@ function MedicationsTab({
     setFrequencyId('');
     setRouteId('');
     setStartedAt('');
+    setPrescribedDate('');
     setIsChronic(false);
     setTravelNotes('');
     setNotes('');
+  };
+
+  const closeForm = () => {
+    setOpen(false);
+    setEditingId(null);
+    clearFields();
+    setError(null);
+  };
+
+  const openCreate = () => {
+    setEditingId(null);
+    clearFields();
+    setOpen(true);
+  };
+
+  const openEdit = (m: Medication) => {
+    setEditingId(m.id);
+    setGenericName(m.genericName);
+    setBrandName(m.brandName ?? '');
+    setDoseAmount(m.doseAmount ?? '');
+    setDoseUnitId(m.doseUnitId ?? '');
+    setFrequencyId(m.frequencyId ?? '');
+    setRouteId(m.routeId ?? '');
+    setStartedAt(m.startedAt?.slice(0, 10) ?? '');
+    setPrescribedDate('');
+    setIsChronic(m.isChronic ?? false);
+    setTravelNotes(m.travelNotes ?? '');
+    setNotes(m.notes ?? '');
+    setOpen(true);
   };
 
   const createMutation = useMutation({
@@ -1306,17 +2015,20 @@ function MedicationsTab({
       const staffEntered = provenanceCatalog.data?.find(
         (p) => p.code === 'PROFESSIONAL_ENTERED',
       );
+      const medicationCatalogId = await resolveCatalogValue('MEDICATION', genericName, medicationCatalog.data ?? []);
       const { data } = await apiClient.post(
         '/clinical/medications',
         {
           personId,
           genericName,
+          medicationCatalogId,
           brandName: brandName || undefined,
           doseAmount: doseAmount || undefined,
           doseUnitId: doseUnitId || undefined,
           frequencyId: frequencyId || undefined,
           routeId: routeId || undefined,
           startedAt: startedAt || undefined,
+          prescribedDate: prescribedDate || undefined,
           isChronic,
           travelNotes: travelNotes || undefined,
           canonicalStatusId: provisional?.id,
@@ -1329,16 +2041,44 @@ function MedicationsTab({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clinical', 'medications', personId] });
-      setOpen(false);
-      resetForm();
-      setError(null);
+      closeForm();
     },
     onError: () => setError('No se pudo guardar el medicamento.'),
   });
 
+  const updateMutation = useMutation({
+    mutationFn: async () => {
+      const medicationCatalogId = await resolveCatalogValue('MEDICATION', genericName, medicationCatalog.data ?? []);
+      await apiClient.patch(
+        `/clinical/admin-edit/medications/${editingId}`,
+        {
+          genericName,
+          medicationCatalogId,
+          brandName: brandName || null,
+          doseAmount: doseAmount || null,
+          doseUnitId: doseUnitId || null,
+          frequencyId: frequencyId || null,
+          routeId: routeId || null,
+          startedAt: startedAt || null,
+          isChronic,
+          travelNotes: travelNotes || null,
+          notes: notes || null,
+        },
+        { headers },
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clinical', 'medications', personId] });
+      closeForm();
+    },
+    onError: () => setError('No se pudo guardar la corrección.'),
+  });
+
+  const saving = createMutation.isPending || updateMutation.isPending;
+
   return (
     <Box>
-      <Button size="small" variant="outlined" onClick={() => setOpen(true)} sx={{ mb: 2 }}>
+      <Button size="small" variant="outlined" onClick={openCreate} sx={{ mb: 2 }}>
         Agregar medicamento
       </Button>
       {listQuery.isLoading && <CircularProgress size={24} />}
@@ -1346,43 +2086,70 @@ function MedicationsTab({
         <Alert severity="info">Sin medicamentos registrados.</Alert>
       )}
       {listQuery.data?.map((m) => (
-        <Box key={m.id} sx={{ mb: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
-          <Typography variant="body2" component="div">
-            <strong>{m.genericName}</strong>
-            {m.brandName ? ` (${m.brandName})` : ''}{' '}
-            {m.isChronic && <Chip size="small" color="warning" label="Crónico" />}
-          </Typography>
-          <Typography variant="caption" color="text.secondary" component="div">
-            {m.doseAmount && `${m.doseAmount} ${labelFor(doseUnitCatalog.data, m.doseUnitId)}`}
-            {m.frequencyId && ` · ${labelFor(frequencyCatalog.data, m.frequencyId)}`}
-            {m.routeId && ` · ${labelFor(routeCatalog.data, m.routeId)}`}
-            {m.startedAt && ` · Desde: ${m.startedAt}`}
-          </Typography>
-          {m.travelNotes && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-              Para viajar: {m.travelNotes}
+        <Box key={m.id} sx={{ mb: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <Box>
+            {/* Pedido explícito del usuario: Medicamento, Dosis y fecha
+                (si tiene) todo en la misma línea — mismo criterio que
+                Enfermedades. */}
+            {/* Pedido explícito del usuario: todo en una sola línea que
+                fluye normalmente (wrap del navegador) — si no entra en el
+                ancho disponible, continúa debajo por wrap natural, no por
+                un salto de línea forzado con un bloque aparte. Por eso
+                "notes" (que a veces es la dosis sin poder parsear, ej.
+                Reliveran "Dosis: 05") va DENTRO del mismo Typography, no
+                en un <Typography> separado. */}
+            <Typography variant="body2" component="div">
+              <strong>{m.genericName}</strong>
+              {m.brandName ? ` (${m.brandName})` : ''}
+              {m.doseAmount && ` — Dosis: ${m.doseAmount} ${labelFor(doseUnitCatalog.data, m.doseUnitId)}`}
+              {!m.doseAmount && m.notes && ` — ${m.notes}`}
+              {m.startedAt && ` — Desde: ${formatDateOnly(m.startedAt)}`}{' '}
+              {m.isChronic && <Chip size="small" color="warning" label="Crónico" />}
             </Typography>
-          )}
-          {m.notes && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-              {m.notes}
-            </Typography>
-          )}
+            {(m.frequencyId || m.routeId) && (
+              <Typography variant="caption" color="text.secondary" component="div">
+                {m.frequencyId && labelFor(frequencyCatalog.data, m.frequencyId)}
+                {m.routeId && ` · ${labelFor(routeCatalog.data, m.routeId)}`}
+              </Typography>
+            )}
+            {m.travelNotes && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                Para viajar: {m.travelNotes}
+              </Typography>
+            )}
+            {m.doseAmount && m.notes && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                {m.notes}
+              </Typography>
+            )}
+          </Box>
+          <Box sx={{ display: 'flex' }}>
+            <ClinicalEditButton onClick={() => openEdit(m)} />
+            <ClinicalDeleteButton
+              resource="medications"
+              id={m.id}
+              itemLabel={m.genericName}
+              queryKey={['clinical', 'medications', personId]}
+              headers={headers}
+            />
+          </Box>
         </Box>
       ))}
 
-      <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm">
-        <DialogTitle>Agregar medicamento</DialogTitle>
+      <Dialog open={open} onClose={closeForm} fullWidth maxWidth="sm">
+        <DialogTitle>{editingId ? 'Editar medicamento' : 'Agregar medicamento'}</DialogTitle>
         <DialogContent>
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
           <Grid container spacing={1}>
             <Grid size={{ xs: 6 }}>
-              <TextField
-                label="Nombre genérico"
-                fullWidth
-                margin="normal"
-                value={genericName}
-                onChange={(e) => setGenericName(e.target.value)}
+              <Autocomplete
+                freeSolo
+                options={(medicationCatalog.data ?? []).map((o) => o.labelEs)}
+                inputValue={genericName}
+                onInputChange={(_, v) => setGenericName(v)}
+                renderInput={(params) => (
+                  <TextField {...params} label="Nombre genérico" fullWidth margin="normal" />
+                )}
               />
             </Grid>
             <Grid size={{ xs: 6 }}>
@@ -1457,6 +2224,17 @@ function MedicationsTab({
                 onChange={(e) => setStartedAt(e.target.value)}
               />
             </Grid>
+            <Grid size={{ xs: 6 }}>
+              <TextField
+                label="Fecha de prescripción"
+                type="date"
+                fullWidth
+                margin="normal"
+                slotProps={{ inputLabel: { shrink: true } }}
+                value={prescribedDate}
+                onChange={(e) => setPrescribedDate(e.target.value)}
+              />
+            </Grid>
             <Grid size={{ xs: 12 }}>
               <label>
                 <input
@@ -1492,10 +2270,301 @@ function MedicationsTab({
           </Grid>
         </DialogContent>
         <DialogActions>
+          <Button onClick={closeForm}>Cancelar</Button>
+          <Button
+            variant="contained"
+            disabled={!genericName || saving}
+            onClick={() => (editingId ? updateMutation.mutate() : createMutation.mutate())}
+          >
+            Guardar
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
+  );
+}
+
+/**
+ * "Estudios" — pedido explícito del usuario: clinical.lab_results ya
+ * existía en el schema (columnas con nombre propio para los valores más
+ * comunes + custom_values jsonb para el resto) pero no había ninguna
+ * pantalla para verlos ni cargarlos a mano — se veían en el chat de IA
+ * pero no en la ficha. Mismo recurso genérico /clinical/lab-results que
+ * ya usa la IA al confirmar un proposal LAB_RESULT (ver ai.service.ts).
+ */
+function LabResultsTab({
+  personId,
+  headers,
+}: {
+  personId: string;
+  headers: Record<string, string>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [labName, setLabName] = useState('');
+  const [performedAt, setPerformedAt] = useState(() => new Date().toISOString().slice(0, 10));
+  const [studyTypeId, setStudyTypeId] = useState('');
+  const [hemoglobin, setHemoglobin] = useState('');
+  const [hematocrit, setHematocrit] = useState('');
+  const [platelets, setPlatelets] = useState('');
+  const [glucoseFasting, setGlucoseFasting] = useState('');
+  const [hba1c, setHba1c] = useState('');
+  const [totalCholesterol, setTotalCholesterol] = useState('');
+  const [creatinine, setCreatinine] = useState('');
+  const [ptInr, setPtInr] = useState('');
+  const [aptt, setAptt] = useState('');
+  const [notes, setNotes] = useState('');
+  const [indicatorValues, setIndicatorValues] = useState<Record<string, string>>({});
+  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+
+  const provenanceCatalog = useCatalog('PROVENANCE_TYPE');
+  const statusCatalog = useCatalog('CANONICAL_STATUS');
+  const studyTypeCatalog = useCatalog('LAB_STUDY_TYPE');
+  const indicatorCatalog = useCatalog('LAB_INDICATOR');
+
+  useEffect(() => {
+    if (studyTypeId || !studyTypeCatalog.data?.length) return;
+    const blood = studyTypeCatalog.data.find((s) => s.code === 'BLOOD');
+    setStudyTypeId((blood ?? studyTypeCatalog.data[0]).id);
+  }, [studyTypeCatalog.data, studyTypeId]);
+
+  const studyTypeCode = studyTypeCatalog.data?.find((s) => s.id === studyTypeId)?.code;
+  const isBlood = studyTypeCode === 'BLOOD' || !studyTypeCode;
+  const dynamicIndicators = (indicatorCatalog.data ?? []).filter((ind) => {
+    if (ind.metadata?.studyTypeCode !== studyTypeCode) return false;
+    if (studyTypeCode === 'BLOOD' && DEDICATED_FIELD_INDICATOR_CODES.has(ind.code)) return false;
+    return true;
+  });
+
+  const indicatorLabel = (code: string) => {
+    const ind = indicatorCatalog.data?.find((i) => i.code === code);
+    if (!ind) return null;
+    const unit = ind.metadata?.unit as string | undefined;
+    return `${ind.labelEs}${unit ? ` (${unit})` : ''}`;
+  };
+
+  const listQuery = useQuery({
+    queryKey: ['clinical', 'lab-results', personId],
+    queryFn: async () => {
+      const { data } = await apiClient.get<LabResultRecord[]>(
+        '/clinical/lab-results',
+        { params: { personId }, headers },
+      );
+      return data;
+    },
+  });
+
+  const sorted = (listQuery.data ?? [])
+    .slice()
+    .sort((a, b) => new Date(b.performedAt).getTime() - new Date(a.performedAt).getTime());
+
+  const groupedByType = (studyTypeCatalog.data ?? []).map((type) => ({
+    type,
+    items: sorted.filter((r) => r.studyTypeId === type.id),
+  })).filter((g) => g.items.length > 0);
+  /** Si todavía no cargó el catálogo, o hay resultados sin studyTypeId (no debería pasar), no se pierden — se listan aparte. */
+  const ungrouped = sorted.filter((r) => !(studyTypeCatalog.data ?? []).some((t) => t.id === r.studyTypeId));
+
+  const resetForm = () => {
+    setLabName('');
+    setPerformedAt(new Date().toISOString().slice(0, 10));
+    setHemoglobin('');
+    setHematocrit('');
+    setPlatelets('');
+    setGlucoseFasting('');
+    setHba1c('');
+    setTotalCholesterol('');
+    setCreatinine('');
+    setPtInr('');
+    setAptt('');
+    setNotes('');
+    setIndicatorValues({});
+  };
+
+  const createMutation = useMutation({
+    mutationFn: async () => {
+      const staffEntered = provenanceCatalog.data?.find((p) => p.code === 'PROFESSIONAL_ENTERED');
+      const provisional = statusCatalog.data?.find((s) => s.code === 'PROVISIONAL');
+      const customValues = [
+        ...dynamicIndicators
+          .filter((ind) => (indicatorValues[ind.id] ?? '').trim())
+          .map((ind) => ({ name: ind.code, value: indicatorValues[ind.id].trim() })),
+        ...(notes ? [{ name: 'Notas', value: notes }] : []),
+      ];
+      const { data } = await apiClient.post(
+        '/clinical/lab-results',
+        {
+          personId,
+          labName: labName || undefined,
+          performedAt,
+          studyTypeId: studyTypeId || undefined,
+          hemoglobin: isBlood ? hemoglobin || undefined : undefined,
+          hematocrit: isBlood ? hematocrit || undefined : undefined,
+          platelets: isBlood ? platelets || undefined : undefined,
+          glucoseFasting: isBlood ? glucoseFasting || undefined : undefined,
+          hba1c: isBlood ? hba1c || undefined : undefined,
+          totalCholesterol: isBlood ? totalCholesterol || undefined : undefined,
+          creatinine: isBlood ? creatinine || undefined : undefined,
+          ptInr: isBlood ? ptInr || undefined : undefined,
+          aptt: isBlood ? aptt || undefined : undefined,
+          customValues,
+          canonicalStatusId: provisional?.id,
+          provenanceId: staffEntered?.id,
+        },
+        { headers },
+      );
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clinical', 'lab-results', personId] });
+      setOpen(false);
+      resetForm();
+      setError(null);
+    },
+    onError: () => setError('No se pudo guardar el estudio.'),
+  });
+
+  const renderResult = (r: LabResultRecord) => (
+    <Box key={r.id} sx={{ mb: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+        {r.labName ?? 'Estudio'} · {new Date(r.performedAt).toLocaleDateString('es-AR')}
+      </Typography>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 0.5 }}>
+        {r.hemoglobin && <Chip size="small" label={`Hemoglobina: ${r.hemoglobin}`} />}
+        {r.hematocrit && <Chip size="small" label={`Hematocrito: ${r.hematocrit}`} />}
+        {r.platelets && <Chip size="small" label={`Plaquetas: ${r.platelets}`} />}
+        {r.glucoseFasting && <Chip size="small" label={`Glucemia: ${r.glucoseFasting}`} />}
+        {r.hba1c && <Chip size="small" label={`HbA1c: ${r.hba1c}`} />}
+        {r.totalCholesterol && <Chip size="small" label={`Colesterol total: ${r.totalCholesterol}`} />}
+        {r.creatinine && <Chip size="small" label={`Creatinina: ${r.creatinine}`} />}
+        {r.ptInr && <Chip size="small" label={`INR: ${r.ptInr}`} />}
+        {r.aptt && <Chip size="small" label={`APTT: ${r.aptt}`} />}
+        {(r.customValues ?? []).map((v, i) => (
+          <Chip key={i} size="small" variant="outlined" label={indicatorLabel(v.name) ? `${indicatorLabel(v.name)}: ${v.value}` : `${v.name}: ${v.value}`} />
+        ))}
+      </Box>
+    </Box>
+  );
+
+  return (
+    <Box>
+      <Button size="small" variant="outlined" onClick={() => setOpen(true)} sx={{ mb: 2 }}>
+        Agregar estudio
+      </Button>
+      {listQuery.isLoading && <CircularProgress size={24} />}
+      {sorted.length === 0 && (
+        <Alert severity="info">Sin estudios / análisis registrados.</Alert>
+      )}
+      {groupedByType.map(({ type, items }) => (
+        <Box key={type.id} sx={{ mb: 2 }}>
+          <Typography variant="subtitle2" sx={{ mb: 0.5, fontWeight: 'bold' }}>{type.labelEs}</Typography>
+          {renderResult(items[0])}
+          {items.length > 1 && (
+            <Accordion disableGutters sx={{ boxShadow: 'none', '&:before': { display: 'none' } }}>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                <Typography variant="caption">Ver estudios anteriores ({items.length - 1})</Typography>
+              </AccordionSummary>
+              <AccordionDetails sx={{ p: 0 }}>
+                {items.slice(1).map(renderResult)}
+              </AccordionDetails>
+            </Accordion>
+          )}
+        </Box>
+      ))}
+      {ungrouped.map(renderResult)}
+
+      <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm">
+        <DialogTitle>Agregar estudio / análisis</DialogTitle>
+        <DialogContent>
+          {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+          <Grid container spacing={1}>
+            <Grid size={{ xs: 8 }}>
+              <TextField label="Estudio" fullWidth margin="normal" value={labName} onChange={(e) => setLabName(e.target.value)} helperText="Ej. Análisis de sangre, coagulograma" />
+            </Grid>
+            <Grid size={{ xs: 4 }}>
+              <TextField label="Fecha" type="date" fullWidth margin="normal" InputLabelProps={{ shrink: true }} value={performedAt} onChange={(e) => setPerformedAt(e.target.value)} />
+            </Grid>
+            <Grid size={{ xs: 12 }}>
+              <TextField
+                select
+                label="Tipo de estudio"
+                fullWidth
+                margin="normal"
+                value={studyTypeId}
+                onChange={(e) => setStudyTypeId(e.target.value)}
+              >
+                {(studyTypeCatalog.data ?? []).map((o) => (
+                  <MenuItem key={o.id} value={o.id}>{o.labelEs}</MenuItem>
+                ))}
+              </TextField>
+            </Grid>
+            {isBlood && (
+              <>
+                <Grid size={{ xs: 6 }}>
+                  <TextField label="Hemoglobina" type="number" fullWidth margin="normal" value={hemoglobin} onChange={(e) => setHemoglobin(e.target.value)} />
+                </Grid>
+                <Grid size={{ xs: 6 }}>
+                  <TextField label="Hematocrito" type="number" fullWidth margin="normal" value={hematocrit} onChange={(e) => setHematocrit(e.target.value)} />
+                </Grid>
+                <Grid size={{ xs: 6 }}>
+                  <TextField label="Plaquetas" type="number" fullWidth margin="normal" value={platelets} onChange={(e) => setPlatelets(e.target.value)} />
+                </Grid>
+                <Grid size={{ xs: 6 }}>
+                  <TextField label="Glucemia" type="number" fullWidth margin="normal" value={glucoseFasting} onChange={(e) => setGlucoseFasting(e.target.value)} />
+                </Grid>
+                <Grid size={{ xs: 6 }}>
+                  <TextField label="HbA1c" type="number" fullWidth margin="normal" value={hba1c} onChange={(e) => setHba1c(e.target.value)} />
+                </Grid>
+                <Grid size={{ xs: 6 }}>
+                  <TextField label="Colesterol total" type="number" fullWidth margin="normal" value={totalCholesterol} onChange={(e) => setTotalCholesterol(e.target.value)} />
+                </Grid>
+                <Grid size={{ xs: 6 }}>
+                  <TextField label="Creatinina" type="number" fullWidth margin="normal" value={creatinine} onChange={(e) => setCreatinine(e.target.value)} />
+                </Grid>
+                <Grid size={{ xs: 6 }}>
+                  <TextField label="INR" type="number" fullWidth margin="normal" value={ptInr} onChange={(e) => setPtInr(e.target.value)} />
+                </Grid>
+                <Grid size={{ xs: 6 }}>
+                  <TextField label="APTT" type="number" fullWidth margin="normal" value={aptt} onChange={(e) => setAptt(e.target.value)} />
+                </Grid>
+              </>
+            )}
+            {dynamicIndicators.length > 0 && (
+              <Grid size={{ xs: 12 }}>
+                <Typography variant="subtitle2" sx={{ mt: 1 }}>Otros indicadores</Typography>
+              </Grid>
+            )}
+            {dynamicIndicators.map((ind) => (
+              <Grid size={{ xs: 6 }} key={ind.id}>
+                <TextField
+                  label={indicatorLabel(ind.code) ?? ind.labelEs}
+                  type="number"
+                  fullWidth
+                  margin="normal"
+                  value={indicatorValues[ind.id] ?? ''}
+                  onChange={(e) => setIndicatorValues((v) => ({ ...v, [ind.id]: e.target.value }))}
+                />
+              </Grid>
+            ))}
+            <Grid size={{ xs: 12 }}>
+              <TextField
+                label="Otros valores / notas"
+                fullWidth
+                multiline
+                minRows={2}
+                margin="normal"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                helperText="Cualquier otro resultado sin campo propio (ej. protrombina 95%)"
+              />
+            </Grid>
+          </Grid>
+        </DialogContent>
+        <DialogActions>
           <Button onClick={() => setOpen(false)}>Cancelar</Button>
           <Button
             variant="contained"
-            disabled={!genericName || createMutation.isPending}
+            disabled={!performedAt || createMutation.isPending}
             onClick={() => createMutation.mutate()}
           >
             Guardar

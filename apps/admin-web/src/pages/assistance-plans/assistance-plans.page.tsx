@@ -22,12 +22,12 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Typography,
 } from '@mui/material';
 
 import { apiClient } from '../../lib/api-client';
 import { useAuth } from '../../auth/auth-context';
 import { labelFor, useCatalog } from '../../lib/catalog-hooks';
+import { usePageTitle } from '../../lib/page-title';
 import { PaginationFooter, usePagination } from '../../lib/pagination';
 
 interface AssistancePlan {
@@ -81,6 +81,7 @@ const EMPTY_FORM: FormState = {
  * solo la UI que faltaba.
  */
 export function AssistancePlansPage() {
+  usePageTitle('Planes de asistencia');
   const { claims } = useAuth();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<AssistancePlan | null>(null);
@@ -175,8 +176,7 @@ export function AssistancePlansPage() {
 
   return (
     <>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Typography variant="h4">Planes de asistencia</Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
         <Button variant="contained" onClick={openCreate}>
           Nuevo plan
         </Button>

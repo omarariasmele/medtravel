@@ -13,6 +13,7 @@ import { Server, Socket } from 'socket.io';
 
 import { TenantTransactionManager } from '@common/database/tenant-transaction.manager';
 import { JwtPayload } from '@modules/auth/jwt-payload.interface';
+import { AIService } from '@modules/ai/ai.service';
 
 interface SocketUser {
   userId: string;
@@ -69,6 +70,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   constructor(
     private readonly jwtService: JwtService,
     private readonly txManager: TenantTransactionManager,
+    private readonly aiService: AIService,
   ) {}
 
   async handleConnection(client: Socket): Promise<void> {
@@ -103,10 +105,13 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() payload: JoinCasePayload,
     @ConnectedSocket() client: Socket,
   ): Promise<{ ok: boolean; error?: string }> {
-    const participant = await this.findActiveParticipant(
+    let participant = await this.findActiveParticipant(
       client,
       payload.caseId,
     );
+    if (!participant) {
+      participant = await this.tryAutoJoinAsOperator(client, payload.caseId);
+    }
     if (!participant) {
       return { ok: false, error: 'No sos participante activo de este caso' };
     }
@@ -127,6 +132,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() payload: SendMessagePayload,
     @ConnectedSocket() client: Socket,
   ): Promise<{ ok: boolean; error?: string; message?: unknown }> {
+    const user = client.data.user as SocketUser;
     const participant = await this.findActiveParticipant(
       client,
       payload.caseId,
@@ -140,8 +146,12 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         error: 'No autorizado para enviar mensajes en este caso',
       };
     }
-
-    const user = client.data.user as SocketUser;
+    if (await this.isCaseClosed(payload.caseId, user)) {
+      return {
+        ok: false,
+        error: 'Este caso ya está cerrado — no se pueden enviar más mensajes',
+      };
+    }
 
     try {
       const message = await this.txManager.runInTransaction(
@@ -189,11 +199,125 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       );
 
       this.emitChatMessage(payload.caseId, message);
+
+      // Pedido explícito del usuario: la IA sigue contestando mientras
+      // nadie humano tomó el caso — se dispara aparte (sin await en el
+      // ack al viajero, para no sumarle la latencia de OpenAI a cada
+      // mensaje) y respondInEmergencyChat ya se abstiene sola si hay
+      // un operador activo o si la IA está deshabilitada.
+      if (participant.senderTypeCode === 'MEMBER') {
+        this.aiService
+          .respondInEmergencyChat(payload.caseId)
+          .then((aiMessage) => {
+            if (aiMessage) this.emitChatMessage(payload.caseId, aiMessage);
+          })
+          .catch((error) => {
+            this.logger.error(
+              `Error generando respuesta de IA para el caso ${payload.caseId}: ${(error as Error).message}`,
+            );
+          });
+      }
+
       return { ok: true, message };
     } catch (error) {
       this.logger.error(`Error enviando mensaje: ${(error as Error).message}`);
       return { ok: false, error: 'No se pudo enviar el mensaje' };
     }
+  }
+
+  /**
+   * Un caso RESOLVED/CLOSED no debería seguir recibiendo mensajes —
+   * cerrarlo no tocaba can_send_messages en ningún lado (ni RLS ni acá),
+   * así que el chat quedaba abierto para siempre. Reportado por el
+   * usuario probando en la app. Mismos códigos que
+   * emergency-cases.controller.ts::CLOSING_STATUS_CODES.
+   */
+  private async isCaseClosed(
+    caseId: string,
+    user: SocketUser,
+  ): Promise<boolean> {
+    const rows = await this.txManager.runInTransaction(
+      (queryRunner) =>
+        queryRunner.query(
+          `SELECT cv.code FROM operations.emergency_cases ec
+           JOIN params.catalog_values cv ON cv.id = ec.status_id
+           WHERE ec.id = $1`,
+          [caseId],
+        ),
+      { userId: user.userId, personId: user.personId },
+    );
+    const code = rows[0]?.code as string | undefined;
+    return code === 'RESOLVED' || code === 'CLOSED';
+  }
+
+  /**
+   * Un operador con acceso al tenant del caso (o administrador de
+   * plataforma, gap #59) puede sumarse a la sala de chat aunque
+   * todavía no sea case_participant — se agrega automáticamente al
+   * primer join, mismo criterio de autorización que ya usa
+   * case_participants_insert (core.has_tenant_access). Un viajero
+   * NUNCA se auto-agrega por acá: su alta como participante es
+   * exclusiva de operations.create_member_emergency_case().
+   */
+  private async tryAutoJoinAsOperator(
+    client: Socket,
+    caseId: string,
+  ): Promise<ActiveParticipant | null> {
+    const user = client.data.user as SocketUser | undefined;
+    if (!user) {
+      return null;
+    }
+
+    return this.txManager.runInTransaction(
+      async (queryRunner) => {
+        const operatorRows = await queryRunner.query(
+          `SELECT first_name, last_name FROM operations.operators WHERE user_id = $1`,
+          [user.userId],
+        );
+        const operator = operatorRows[0];
+        if (!operator) {
+          return null;
+        }
+
+        const participantTypeRows = await queryRunner.query(
+          `SELECT cv.id FROM params.catalog_values cv
+           JOIN params.domain_catalogs dc ON cv.domain_id = dc.id
+           WHERE dc.code = 'CASE_PARTICIPANT_TYPE' AND cv.code = 'OPERATOR'`,
+        );
+        const participantTypeId = participantTypeRows[0]?.id;
+        if (!participantTypeId) {
+          this.logger.warn(
+            `Catálogo CASE_PARTICIPANT_TYPE/OPERATOR no encontrado — no se pudo auto-agregar al operador`,
+          );
+          return null;
+        }
+
+        const senderName = `${operator.first_name} ${operator.last_name}`;
+        try {
+          await queryRunner.query(
+            `INSERT INTO operations.case_participants
+               (case_id, participant_type_id, operator_id, display_name,
+                can_send_messages, can_send_files, joined_at)
+             VALUES ($1, $2, $3, $4, TRUE, TRUE, NOW())`,
+            [caseId, participantTypeId, user.userId, senderName],
+          );
+        } catch (error) {
+          // RLS lo rechaza si el operador no tiene acceso al tenant del
+          // caso — no es un error real, solo "no puede sumarse".
+          this.logger.debug(
+            `No se pudo auto-agregar como participante: ${(error as Error).message}`,
+          );
+          return null;
+        }
+
+        return {
+          canSendMessages: true,
+          senderName,
+          senderTypeCode: 'OPERATOR',
+        };
+      },
+      { userId: user.userId, personId: user.personId },
+    );
   }
 
   /**

@@ -4,6 +4,8 @@ export const DEFAULT_SHARE_SCOPE = [
   'critical_allergies',
   'critical_conditions',
   'current_medications',
+  'surgical_history',
+  'implants_devices',
   'emergency_contacts',
 ];
 
@@ -13,6 +15,7 @@ interface PatientSummaryRow {
   birth_date: string | null;
   gender_id: string | null;
   country_residence_id: string | null;
+  photo_path: string | null;
 }
 
 interface MembershipRow {
@@ -24,6 +27,13 @@ interface MembershipRow {
   status_authority: string;
 }
 
+interface VitalsRow {
+  weight_kg: string | null;
+  height_cm: string | null;
+  bmi: string | null;
+  blood_type_id: string | null;
+}
+
 export interface SharedProfileView {
   person: {
     firstName: string;
@@ -31,6 +41,7 @@ export interface SharedProfileView {
     birthDate: string | null;
     genderId: string | null;
     countryResidenceId: string | null;
+    photoPath: string | null;
   } | null;
   membership: Array<{
     tenantName: string | null;
@@ -43,23 +54,44 @@ export interface SharedProfileView {
   allergies: Array<{
     allergenName: string;
     severity: string | null;
+    severityId: string | null;
     reactionType: string | null;
   }>;
   conditions: Array<{
     conditionName: string;
     icd10Code: string | null;
     travelRestrictions: string | null;
+    diagnosedAt: string | null;
+    statusCode: string | null;
   }>;
   medications: Array<{
     genericName: string;
     brandName: string | null;
     doseAmount: string | null;
+    startedAt: string | null;
   }>;
+  surgeries: Array<{
+    procedureName: string;
+    performedAt: string;
+    indication: string | null;
+  }>;
+  implants: Array<{
+    deviceName: string;
+    implantedAt: string | null;
+    notes: string | null;
+  }>;
+  vitals: {
+    weightKg: string | null;
+    heightCm: string | null;
+    bmi: string | null;
+    bloodTypeId: string | null;
+  } | null;
   emergencyContacts: Array<{
     firstName: string;
     lastName: string;
     phone: string | null;
     relationship: string | null;
+    relationshipId: string | null;
   }>;
 }
 
@@ -108,7 +140,7 @@ export async function buildSharedProfile(
   const allergies = scope.includes('critical_allergies')
     ? await queryRunner.query(
         `SELECT core.decrypt_pii(a.allergen_name) AS "allergenName",
-                sv.code AS severity, rt.code AS "reactionType"
+                sv.code AS severity, sv.id AS "severityId", rt.code AS "reactionType"
          FROM clinical.allergies a
          LEFT JOIN params.catalog_values sv ON sv.id = a.severity_id
          LEFT JOIN params.catalog_values rt ON rt.id = a.reaction_type_id
@@ -120,11 +152,15 @@ export async function buildSharedProfile(
 
   const conditions = scope.includes('critical_conditions')
     ? await queryRunner.query(
-        `SELECT core.decrypt_pii(condition_name) AS "conditionName", icd10_code AS "icd10Code",
-                core.decrypt_pii(travel_restrictions) AS "travelRestrictions"
-         FROM clinical.conditions
-         WHERE person_id = $1 AND active = TRUE
-           AND show_on_emergency = TRUE AND deleted_at IS NULL`,
+        `SELECT core.decrypt_pii(c.condition_name) AS "conditionName", c.icd10_code AS "icd10Code",
+                core.decrypt_pii(c.travel_restrictions) AS "travelRestrictions",
+                c.diagnosed_at AS "diagnosedAt",
+                cs.code AS "statusCode"
+         FROM clinical.conditions c
+         LEFT JOIN params.catalog_values cs ON cs.id = c.status_id
+         WHERE c.person_id = $1 AND c.active = TRUE
+           AND c.show_on_emergency = TRUE AND c.deleted_at IS NULL
+         ORDER BY c.diagnosed_at DESC NULLS LAST`,
         [personId],
       )
     : [];
@@ -133,13 +169,70 @@ export async function buildSharedProfile(
     ? await queryRunner.query(
         `SELECT core.decrypt_pii(generic_name) AS "genericName",
                 core.decrypt_pii(brand_name) AS "brandName",
-                dose_amount AS "doseAmount"
+                dose_amount AS "doseAmount",
+                started_at AS "startedAt"
          FROM clinical.medications
          WHERE person_id = $1 AND active = TRUE
-           AND is_current = TRUE AND deleted_at IS NULL`,
+           AND is_current = TRUE AND deleted_at IS NULL
+         ORDER BY started_at DESC NULLS LAST`,
         [personId],
       )
     : [];
+
+  /** gap #46/documento del usuario: faltaba en la ficha que ve el médico. */
+  const surgeries = scope.includes('surgical_history')
+    ? await queryRunner.query(
+        `SELECT core.decrypt_pii(procedure_name) AS "procedureName",
+                performed_at AS "performedAt",
+                core.decrypt_pii(indication) AS "indication"
+         FROM clinical.surgeries
+         WHERE person_id = $1
+           AND show_on_emergency = TRUE AND deleted_at IS NULL
+         ORDER BY performed_at DESC`,
+        [personId],
+      )
+    : [];
+
+  /** Historial de Salud (pedido del usuario): implantes/dispositivos (marcapasos, prótesis, etc.), antes invisibles para el médico. */
+  const implants = scope.includes('implants_devices')
+    ? await queryRunner.query(
+        `SELECT core.decrypt_pii(device_name) AS "deviceName",
+                implanted_at AS "implantedAt",
+                core.decrypt_pii(notes) AS "notes"
+         FROM clinical.implants_devices
+         WHERE person_id = $1 AND active = TRUE AND deleted_at IS NULL
+         ORDER BY implanted_at DESC NULLS LAST`,
+        [personId],
+      )
+    : [];
+
+  /**
+   * Pedido explícito del usuario: grupo sanguíneo (y peso/altura/IMC)
+   * son de importancia en una atención de urgencia — tienen que
+   * aparecer arriba en la vista del médico, cosa que hoy no pasaba en
+   * absoluto (buildSharedProfile no traía nada de vitals_history).
+   * Siempre se incluye, no depende del scope del token (mismo criterio
+   * que membership) — es información de seguridad, no un antecedente
+   * clínico sensible. clinical.vitals_history es append-only (una fila
+   * nueva por carga, no siempre con todos los campos), así que se toma
+   * el valor no-nulo más reciente POR CAMPO, no la fila más reciente
+   * entera — mismo criterio que PatientSummaryCard en admin-web.
+   */
+  const vitalsRows: VitalsRow[] = await queryRunner.query(
+    `SELECT weight_kg, height_cm, bmi, blood_type_id
+     FROM clinical.vitals_history
+     WHERE person_id = $1 AND deleted_at IS NULL
+     ORDER BY measured_at DESC`,
+    [personId],
+  );
+  const vitals = vitalsRows.length
+    ? {
+        weightKg: vitalsRows.find((v) => v.weight_kg != null)?.weight_kg ?? null,
+        heightCm: vitalsRows.find((v) => v.height_cm != null)?.height_cm ?? null,
+        bmi: vitalsRows.find((v) => v.bmi != null)?.bmi ?? null,
+        bloodTypeId: vitalsRows.find((v) => v.blood_type_id != null)?.blood_type_id ?? null,
+      }
+    : null;
 
   const emergencyContacts = scope.includes('emergency_contacts')
     ? (
@@ -152,6 +245,7 @@ export async function buildSharedProfile(
         lastName: row.last_name,
         phone: row.phone,
         relationship: row.relationship_code,
+        relationshipId: row.relationship_type_id,
       }))
     : [];
 
@@ -163,12 +257,16 @@ export async function buildSharedProfile(
           birthDate: summary.birth_date,
           genderId: summary.gender_id,
           countryResidenceId: summary.country_residence_id,
+          photoPath: summary.photo_path,
         }
       : null,
     membership,
     allergies,
     conditions,
     medications,
+    surgeries,
+    implants,
+    vitals,
     emergencyContacts,
   };
 }
