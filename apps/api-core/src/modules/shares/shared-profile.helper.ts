@@ -6,6 +6,7 @@ export const DEFAULT_SHARE_SCOPE = [
   'current_medications',
   'surgical_history',
   'implants_devices',
+  'treatments',
   'emergency_contacts',
 ];
 
@@ -16,6 +17,7 @@ interface PatientSummaryRow {
   gender_id: string | null;
   country_residence_id: string | null;
   photo_path: string | null;
+  blood_type_id: string | null;
 }
 
 interface MembershipRow {
@@ -78,6 +80,12 @@ export interface SharedProfileView {
   implants: Array<{
     deviceName: string;
     implantedAt: string | null;
+    notes: string | null;
+  }>;
+  treatments: Array<{
+    treatmentName: string;
+    statusCode: string | null;
+    startedAt: string | null;
     notes: string | null;
   }>;
   vitals: {
@@ -207,6 +215,27 @@ export async function buildSharedProfile(
     : [];
 
   /**
+   * Pedido explícito del usuario: diálisis/quimioterapia/etc. son un
+   * TRATAMIENTO, no una enfermedad (ver proposed-treatment-type.sql) —
+   * dato crítico para un médico de emergencia (maneja fluidos/
+   * inmunosupresión distinto), tiene que aparecer en la ficha
+   * compartida igual que implants_devices.
+   */
+  const treatments = scope.includes('treatments')
+    ? await queryRunner.query(
+        `SELECT core.decrypt_pii(treatment_name) AS "treatmentName",
+                ts.code AS "statusCode",
+                started_at AS "startedAt",
+                core.decrypt_pii(notes) AS "notes"
+         FROM clinical.treatments t
+         LEFT JOIN params.catalog_values ts ON ts.id = t.status_id
+         WHERE t.person_id = $1 AND t.active = TRUE AND t.deleted_at IS NULL
+         ORDER BY started_at DESC NULLS LAST`,
+        [personId],
+      )
+    : [];
+
+  /**
    * Pedido explícito del usuario: grupo sanguíneo (y peso/altura/IMC)
    * son de importancia en una atención de urgencia — tienen que
    * aparecer arriba en la vista del médico, cosa que hoy no pasaba en
@@ -225,12 +254,18 @@ export async function buildSharedProfile(
      ORDER BY measured_at DESC`,
     [personId],
   );
-  const vitals = vitalsRows.length
+  // Pedido explícito del usuario: "Grupo Sanguíneo no es un signo
+  // vital... siempre es el mismo" — vive en core.persons.blood_type_id
+  // (ver proposed-blood-type-persons-and-clinical-dates.sql), no en
+  // vitals_history. Se prioriza ese valor fijo; el escaneo de
+  // vitals_history queda solo como respaldo para historiales viejos
+  // cargados antes de este cambio.
+  const vitals = vitalsRows.length || summary?.blood_type_id
     ? {
         weightKg: vitalsRows.find((v) => v.weight_kg != null)?.weight_kg ?? null,
         heightCm: vitalsRows.find((v) => v.height_cm != null)?.height_cm ?? null,
         bmi: vitalsRows.find((v) => v.bmi != null)?.bmi ?? null,
-        bloodTypeId: vitalsRows.find((v) => v.blood_type_id != null)?.blood_type_id ?? null,
+        bloodTypeId: summary?.blood_type_id ?? vitalsRows.find((v) => v.blood_type_id != null)?.blood_type_id ?? null,
       }
     : null;
 
@@ -266,6 +301,7 @@ export async function buildSharedProfile(
     medications,
     surgeries,
     implants,
+    treatments,
     vitals,
     emergencyContacts,
   };

@@ -1,0 +1,22 @@
+-- ============================================================
+-- Bug real reportado en vivo: en Estructurado, "¿Tenés diabetes?"
+-- -> "Sí" saltaba DIRECTO a "¿En qué fecha aproximada?", nunca
+-- preguntaba el tipo (Tipo 1/Tipo 2/Gestacional/MODY/LADA) pese a que
+-- la pregunta sí tiene esas 5 opciones cargadas en `options`.
+--
+-- Causa: ai.service.ts calcula needsDetail como
+--   free_text_enabled && !condition_label && !detail
+-- condition_label es el nombre de respaldo para preguntas SIN
+-- opciones que no necesitan "¿Cuál?" (ver el comentario grande en
+-- needsDetail) — nunca debería convivir con `options`, porque hace
+-- que el código piense "ya tengo un nombre genérico, no hace falta
+-- preguntar cuál" aunque la pregunta SÍ tenga subtipos reales para
+-- elegir. DIABETES es la única fila de toda la tabla con options Y
+-- condition_label a la vez — un dato mal cargado, no un bug de
+-- lógica (confirmado comparando contra el resto de las preguntas:
+-- ninguna otra con options tiene condition_label, y las que sí
+-- necesitan "¿Cuál?" sin options — alergias, cirugías, anticoagulante,
+-- etc. — correctamente tienen condition_label NULL).
+-- ============================================================
+
+UPDATE ai.interview_questions SET condition_label = NULL WHERE code = 'DIABETES';

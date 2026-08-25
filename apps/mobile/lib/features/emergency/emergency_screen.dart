@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/api_client.dart';
 import '../../core/catalog_service.dart';
 import '../assistant/health_assistant_screen.dart';
+import '../../l10n/app_strings.dart';
 
 /// País/ciudad resueltos automáticamente (GPS geocodificado en el
 /// dispositivo, o el destino del viaje activo hoy) antes de mostrar el
@@ -135,19 +136,16 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Activá tu ubicación'),
-        content: const Text(
-          'Para ubicarte automáticamente y agilizar la asistencia, activá la ubicación del celular. '
-          'Si no la activás, te vamos a pedir el país y la ciudad a mano antes de enviar.',
-        ),
+        title: Text(context.tr('emergency.enableLocationTitle')),
+        content: Text(context.tr('emergency.enableLocationBody')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Ahora no')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(context.tr('emergency.notNow'))),
           FilledButton(
             onPressed: () {
               Navigator.pop(ctx);
               Geolocator.openLocationSettings();
             },
-            child: const Text('Activar ubicación'),
+            child: Text(context.tr('emergency.enableLocationButton')),
           ),
         ],
       ),
@@ -179,14 +177,11 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
     final go = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Cargá tu Ficha de Salud primero'),
-        content: const Text(
-          'Todavía no tenés ningún dato cargado en tu Ficha de Salud (alergias, medicamentos, antecedentes). '
-          'Es justo la información que necesita quien te atienda en una emergencia — cargala antes de reportar una.',
-        ),
+        title: Text(context.tr('emergency.loadHealthRecordFirstTitle')),
+        content: Text(context.tr('emergency.loadHealthRecordFirstBody')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ahora no')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Cargar ahora')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(context.tr('emergency.notNow'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(context.tr('emergency.loadNowButton'))),
         ],
       ),
     );
@@ -240,48 +235,49 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
               Row(children: [
                 const Icon(Icons.emergency, color: Colors.red),
                 const SizedBox(width: 8),
-                Text('Reportar emergencia', style: Theme.of(ctx).textTheme.titleLarge),
+                Text(context.tr('emergency.reportButton'), style: Theme.of(ctx).textTheme.titleLarge),
               ]),
               const SizedBox(height: 12),
               TextField(
                 controller: descriptionController,
                 minLines: 2,
                 maxLines: 4,
-                decoration: const InputDecoration(labelText: 'Qué está pasando'),
+                decoration: InputDecoration(labelText: context.tr('emergency.whatsHappening')),
                 onChanged: (_) => setSheetState(() {}),
               ),
               const SizedBox(height: 12),
-              TextField(controller: symptomsController, decoration: const InputDecoration(labelText: 'Síntomas (opcional)')),
+              TextField(controller: symptomsController, decoration: InputDecoration(labelText: context.tr('emergency.symptomsOptional'))),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
-                title: const Text('El paciente está consciente'),
+                title: Text(context.tr('emergency.patientConscious')),
                 value: conscious,
                 onChanged: (v) => setSheetState(() => conscious = v),
               ),
               const SizedBox(height: 8),
-              Text('Ubicación', style: Theme.of(ctx).textTheme.titleSmall),
+              Text(context.tr('emergency.locationLabel'), style: Theme.of(ctx).textTheme.titleSmall),
               if (latitude != null)
-                const Padding(
-                  padding: EdgeInsets.only(top: 4, bottom: 4),
-                  child: Text('Detectada por GPS — revisala y corregila si hace falta.', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                Padding(
+                  padding: const EdgeInsets.only(top: 4, bottom: 4),
+                  child: Text(context.tr('emergency.gpsDetectedHint'), style: const TextStyle(fontSize: 12, color: Colors.grey)),
                 ),
               const SizedBox(height: 4),
               DropdownButtonFormField<String>(
                 initialValue: countryId,
-                decoration: const InputDecoration(labelText: 'País'),
-                items: countries.map((c) => DropdownMenuItem(value: c.id, child: Text(c.labelEs))).toList(),
+                isExpanded: true,
+                decoration: InputDecoration(labelText: context.tr('emergency.countryLabel')),
+                items: countries.map((c) => DropdownMenuItem(value: c.id, child: Text(c.label(context.lang), overflow: TextOverflow.ellipsis))).toList(),
                 onChanged: (v) => setSheetState(() => countryId = v),
               ),
               const SizedBox(height: 12),
               TextField(
                 controller: cityController,
-                decoration: const InputDecoration(labelText: 'Ciudad'),
+                decoration: InputDecoration(labelText: context.tr('emergency.cityLabel')),
                 onChanged: (_) => setSheetState(() {}),
               ),
               const SizedBox(height: 8),
               FilledButton.icon(
                 icon: const Icon(Icons.send),
-                label: const Text('Enviar — se comparte tu ubicación'),
+                label: Text(context.tr('emergency.sendButton')),
                 style: FilledButton.styleFrom(backgroundColor: Colors.red),
                 onPressed: (descriptionController.text.trim().length < 5 ||
                         countryId == null ||
@@ -298,14 +294,15 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
     if (confirmed != true) return;
     if (!mounted) return;
 
+    final creatingCaseText = context.tr('emergency.creatingCase');
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => const AlertDialog(
+      builder: (_) => AlertDialog(
         content: Row(children: [
-          CircularProgressIndicator(),
-          SizedBox(width: 16),
-          Expanded(child: Text('Creando caso…')),
+          const CircularProgressIndicator(),
+          const SizedBox(width: 16),
+          Expanded(child: Text(creatingCaseText)),
         ]),
       ),
     );
@@ -336,7 +333,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
       if (mounted) {
         Navigator.of(context).pop();
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No se pudo crear el caso. Intentá de nuevo.')),
+          SnackBar(content: Text(context.tr('emergency.createError'))),
         );
       }
     }
@@ -345,17 +342,17 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return Scaffold(appBar: AppBar(title: const Text('Emergencia')), body: const Center(child: CircularProgressIndicator()));
+      return Scaffold(appBar: AppBar(title: Text(context.tr('emergency.title'))), body: const Center(child: CircularProgressIndicator()));
     }
     return Scaffold(
-      appBar: AppBar(title: const Text('Emergencia')),
+      appBar: AppBar(title: Text(context.tr('emergency.title'))),
       body: RefreshIndicator(
         onRefresh: _load,
         child: _cases.isEmpty
-            ? ListView(children: const [
+            ? ListView(children: [
                 Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Text('No tenés casos de asistencia activos. Si necesitás ayuda urgente, tocá el botón de abajo.'),
+                  padding: const EdgeInsets.all(24),
+                  child: Text(context.tr('emergency.noActiveCases')),
                 ),
               ])
             : ListView.builder(
@@ -380,8 +377,12 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
         onPressed: _openCreateDialog,
         backgroundColor: Colors.red,
         icon: const Icon(Icons.emergency),
-        label: const Text('Reportar emergencia'),
+        label: Text(context.tr('emergency.reportButton')),
       ),
+      // Pedido explícito del usuario: centrado abajo en vez de la
+      // esquina inferior derecha por default — más visible/alcanzable
+      // en un botón que es literalmente para pedir ayuda urgente.
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
     );
   }
 }

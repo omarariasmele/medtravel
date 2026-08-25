@@ -54,10 +54,15 @@ BEGIN
   GET DIAGNOSTICS v_count = ROW_COUNT;
   table_name := 'lab_results'; deleted_count := v_count; RETURN NEXT;
 
-  DELETE FROM ai.proposals WHERE person_id = p_person_id;
-  DELETE FROM ai.messages WHERE person_id = p_person_id;
-  DELETE FROM ai.interview_sessions WHERE person_id = p_person_id;
-  DELETE FROM ai.conversations WHERE person_id = p_person_id;
+  -- Bug real reportado en vivo: "raro, me desapareció el consumo de
+  -- IA de Marcelo de hoy" — este reset borraba también ai.proposals/
+  -- messages/interview_sessions/conversations, así que cada vez que se
+  -- usaba el botón de prueba para volver a cargar la ficha, el
+  -- dashboard de Consumo de IA perdía TODO el historial de esa
+  -- persona. El costo ya se gastó de verdad en OpenAI pase lo que pase
+  -- con la ficha clínica después — un reset para volver a probar la
+  -- carga no tiene por qué borrar el registro de auditoría/costo, así
+  -- que ya no se toca ai.*.
   UPDATE core.persons SET health_record_last_updated_at = NULL WHERE id = p_person_id;
 
   RETURN;

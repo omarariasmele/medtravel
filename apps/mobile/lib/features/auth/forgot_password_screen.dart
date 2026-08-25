@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/api_client.dart';
+import '../../l10n/app_strings.dart';
 
 /// Mismo endpoint y mismo mensaje que forgot-password.page.tsx en
 /// admin-web (POST /auth/password-reset/request) — el mail que llega
@@ -56,31 +57,31 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                   Image.asset('assets/images/logo-principal.png', height: 120),
                   const SizedBox(height: 24),
                   Text(
-                    'Recuperar contraseña',
+                    context.tr('forgotPassword.title'),
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 16),
                   if (_sent) ...[
-                    const Card(
-                      color: Color(0xFFE8F5E9),
+                    Card(
+                      color: const Color(0xFFE8F5E9),
                       child: Padding(
-                        padding: EdgeInsets.all(16),
+                        padding: const EdgeInsets.all(16),
                         child: Text(
-                          'Si el email existe en el sistema, vas a recibir un link para restablecer tu contraseña.',
+                          context.tr('forgotPassword.sentMessage'),
                         ),
                       ),
                     ),
                   ] else ...[
                     Text(
-                      'Ingresá tu email y te enviamos un link para restablecer tu contraseña.',
+                      context.tr('forgotPassword.instructions'),
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                     const SizedBox(height: 16),
                     TextField(
                       controller: _emailController,
                       keyboardType: TextInputType.emailAddress,
-                      decoration: const InputDecoration(labelText: 'Email'),
+                      decoration: InputDecoration(labelText: context.tr('forgotPassword.email')),
                       onChanged: (_) => setState(() {}),
                       onSubmitted: (_) => _submit(),
                     ),
@@ -89,13 +90,13 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                       onPressed: (_loading || _emailController.text.trim().isEmpty) ? null : _submit,
                       child: _loading
                           ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                          : const Text('Enviar link'),
+                          : Text(context.tr('forgotPassword.sendLinkButton')),
                     ),
                   ],
                   const SizedBox(height: 12),
                   TextButton(
                     onPressed: () => context.pop(),
-                    child: const Text('Volver a iniciar sesión'),
+                    child: Text(context.tr('forgotPassword.backToLogin')),
                   ),
                 ],
               ),

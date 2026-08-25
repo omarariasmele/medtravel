@@ -10,6 +10,19 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <!-- Entrada por voz en el asistente de salud (speech_to_text) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- Motor Realtime del modo Clásico (flutter_webrtc) — control de
+         volumen/enrutamiento de audio durante la llamada WebRTC. -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+    <!-- Bug real reportado en vivo: sin estos dos, el hilo de red de
+         WebRTC (que consulta el estado de la red para armar la
+         conexión) tira una SecurityException no capturada del lado
+         Java, que WebRTC trata como fatal y aborta todo el proceso
+         (crash confirmado con logcat: "Fatal error in jvm.cc...
+         Check failed: false", en network_thread, apenas se pedía
+         permiso de micrófono). Requeridos por flutter_webrtc, no
+         estaban declarados. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>
     <application
         android:label="MedtravelApp"
         android:name="${applicationName}"

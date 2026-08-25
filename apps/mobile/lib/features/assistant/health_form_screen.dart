@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/api_client.dart';
 import '../../core/auth_state.dart';
 import '../../core/catalog_service.dart';
 import '../../core/error_message.dart';
+import '../../l10n/app_strings.dart';
 
 class _ParsedDose {
   _ParsedDose(this.amount, this.unitCode);
@@ -167,6 +169,17 @@ class HealthFormScreen extends StatefulWidget {
 }
 
 class _HealthFormScreenState extends State<HealthFormScreen> {
+  // Bug real reportado en vivo (mismo encontrado antes en profile_screen.dart):
+  // context.tr() usa context.watch<AuthState>() por dentro, que Provider
+  // solo permite llamar DURANTE build() — llamado después de un await
+  // (ej. en el catch de un PATCH que falló) tira una excepción SIN
+  // CAPTURAR y corta la función ahí mismo, en silencio. context.read()
+  // no se suscribe a cambios, así que es seguro fuera de build().
+  String _trSafe(String key, {Map<String, String>? params}) {
+    final lang = mounted ? context.read<AuthState>().preferredLang : 'es';
+    return AppStrings.forLang(lang, key, params: params);
+  }
+
   final _birthDateController = TextEditingController();
   String? _sexCode;
   final _weightController = TextEditingController();
@@ -206,6 +219,34 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
   bool _submitting = false;
   bool _loadingExisting = true;
   String? _error;
+
+  // Bug real reportado en vivo: "al validar y guardar no lo hace pero
+  // no dice qué está mal" — el aviso de error SÍ se estaba armando
+  // (confirmado con el log del servidor: un ROLLBACK justo en el
+  // momento de la prueba), pero el banner rojo se dibuja arriba de
+  // todo en un formulario largo — al tocar "Validar y guardar" (abajo
+  // del todo) quedaba fuera de la pantalla, invisible. Pedido explícito
+  // del usuario: "tiene que ir arriba para poder visualizarlo, si no
+  // se navega hasta arriba del formulario no lo van a ver y van a
+  // esperar a ver qué pasa" — en vez de depender de que alguien
+  // scrollee, un diálogo modal centrado corta lo que sea que esté
+  // mirando y exige que lo lea/cierre antes de seguir. El banner rojo
+  // (más abajo en build()) queda además como recordatorio visible
+  // mientras completa la corrección, sin tener que volver a abrir nada.
+  Future<void> _showFormError(String message) async {
+    if (!mounted) return;
+    setState(() => _error = message);
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(_trSafe('form.errorDialogTitle')),
+        content: Text(message),
+        actions: [
+          FilledButton(onPressed: () => Navigator.of(ctx).pop(), child: Text(_trSafe('form.errorDialogOk'))),
+        ],
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -257,7 +298,13 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
       }
 
       setState(() {
-        _questions = allQuestions.where((q) => q['proposalType'] == 'CONDITION').toList()
+        // Pedido explícito del usuario: diálisis/quimioterapia/etc. son
+        // TREATMENT, no CONDITION (ver proposed-treatment-type.sql) —
+        // sin este agregado, DIALYSIS directamente desaparecía del
+        // Formulario (nunca se mostraba, ni se guardaba). El backend
+        // (ai.service.ts::submitHealthForm) ya distingue el tipo real
+        // de CADA fila de esta misma lista al armar los proposals.
+        _questions = allQuestions.where((q) => q['proposalType'] == 'CONDITION' || q['proposalType'] == 'TREATMENT').toList()
           ..sort((a, b) => (a['displayOrder'] as int).compareTo(b['displayOrder'] as int));
         for (final q in _questions) {
           _conditionRows[q['id'] as String] = _ConditionRowState();
@@ -267,6 +314,10 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
           _birthDateController.text = _formatDdMmYyyy(profile['birth_date'] as String);
         }
         _sexCode = codeOf(genderCatalog, profile['gender_id'] as String?);
+        // Pedido explícito del usuario: grupo sanguíneo es un dato fijo
+        // de la persona (core.persons.blood_type_id), no un signo vital
+        // — se lee del perfil, no escaneando el historial de mediciones.
+        _bloodTypeCode = codeOf(bloodTypeCatalog, profile['blood_type_id'] as String?);
         final lastUpdatedRaw = profile['health_record_last_updated_at'];
         if (lastUpdatedRaw is String) {
           _lastUpdatedText = _formatDdMmYyyy(lastUpdatedRaw);
@@ -294,9 +345,6 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
           if (_heightController.text.isEmpty && row['heightCm'] != null) {
             _heightController.text = row['heightCm'].toString();
           }
-          if (_bloodTypeCode == null && row['bloodTypeId'] != null) {
-            _bloodTypeCode = codeOf(bloodTypeCatalog, row['bloodTypeId'] as String?);
-          }
         }
 
         // Pedido explícito del usuario: "nada debería ser fijo" — nada
@@ -311,56 +359,94 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
         // 5 letras o más, y "gota" tiene 4. Ahora se prueban TODAS las
         // palabras significativas (≥4 letras) de la pregunta, no solo la
         // primera, para no perder términos médicos cortos.
+        //
+        // Bug real reportado en vivo, grave: "enfermedad cardiovascular"
+        // mostraba el detalle de EPOC, "enfermedad pulmonar crónica"
+        // mostraba insuficiencia renal — confirmado: "enfermedad" y
+        // "crónica" son palabras "significativas" (≥4 letras) que
+        // aparecen en CASI todas las preguntas Y en casi todos los
+        // nombres de condición, así que matcheaban cualquier cosa con
+        // cualquier cosa según el orden de iteración, sin relación real.
+        // sourceQuestionId (si está cargado — ver proposed-backfill-
+        // source-question-id.sql) es un vínculo EXACTO, no una
+        // adivinanza por palabras — se usa primero y salta directo a la
+        // pregunta correcta; el matcheo por palabras clave queda SOLO
+        // de respaldo para antecedentes viejos sin ese vínculo.
         for (final c in conditions) {
           final row = c as Map<String, dynamic>;
           final conditionName = row['conditionName'] as String? ?? '';
           final name = conditionName.toLowerCase();
-          for (final q in _questions) {
-            final questionText = q['questionText'] as String;
-            final keywords = _significantWordsOf(questionText);
-            if (keywords.any((k) => name.contains(k))) {
-              final target = _conditionRows[q['id'] as String]!;
-              target.checked = true;
-              target.existingId = row['id'] as String?;
-              final options = (q['options'] as List?)?.cast<String>();
-              if (options != null && options.isNotEmpty) {
-                // Bug real reportado en vivo: "no me carga el tipo de
-                // diabetes que tiene cargado" — el nombre guardado (ej.
-                // "Diabetes Tipo 2") nunca se comparaba contra las
-                // opciones fijas de la pregunta, así que el desplegable
-                // "Tipo" quedaba siempre vacío aunque el dato ya
-                // existiera. Ahora se busca la opción que coincide.
-                for (final opt in options) {
-                  final optLower = opt.toLowerCase();
-                  if (name.contains(optLower) || optLower.contains(name)) {
-                    target.selectedOption = opt;
-                    break;
-                  }
-                }
-                if (target.selectedOption == null) {
-                  final otraOption = options.firstWhere(
-                    (o) => o.toLowerCase() == 'otra' || o.toLowerCase() == 'otro',
-                    orElse: () => '',
-                  );
-                  if (otraOption.isNotEmpty) {
-                    target.selectedOption = otraOption;
-                    target.detailController.text = conditionName;
-                  }
-                }
-              } else if (!_isJustAnEcho(conditionName, questionText)) {
-                // Bug real reportado en vivo: "¿Padece de gota?" (sin
-                // ningún detalle real cargado) aparecía en el campo
-                // Detalle repitiendo literalmente la pregunta — pasaba
-                // porque conditionName a veces guarda el texto de la
-                // pregunta tal cual, sin agregar nada nuevo. Si el
-                // nombre guardado no aporta ninguna palabra que la
-                // pregunta ya no tenga, se deja el campo en blanco.
-                target.detailController.text = conditionName;
+          final sourceQuestionId = row['sourceQuestionId'] as String?;
+
+          // Vínculo exacto primero: si esta condición ya sabe de qué
+          // pregunta salió (sourceQuestionId), no hay que adivinar nada.
+          Map<String, dynamic>? matchedQuestion;
+          if (sourceQuestionId != null && _conditionRows.containsKey(sourceQuestionId)) {
+            for (final q in _questions) {
+              if ((q['id'] as String?) == sourceQuestionId) {
+                matchedQuestion = q;
+                break;
               }
-              if (row['diagnosedAt'] != null) target.dateController.text = _formatDdMmYyyy(row['diagnosedAt'] as String);
-              target.snapshot();
-              break;
             }
+          }
+
+          // Respaldo solo para antecedentes viejos sin sourceQuestionId
+          // (cargados antes del backfill, o por Clásico/Estructurado sin
+          // pregunta de formulario asociada).
+          if (matchedQuestion == null) {
+            for (final q in _questions) {
+              final questionText = q['questionText'] as String;
+              final keywords = _significantWordsOf(questionText);
+              if (keywords.any((k) => name.contains(k))) {
+                matchedQuestion = q;
+                break;
+              }
+            }
+          }
+
+          if (matchedQuestion != null) {
+            final q = matchedQuestion;
+            final questionText = q['questionText'] as String;
+            final target = _conditionRows[q['id'] as String]!;
+            target.checked = true;
+            target.existingId = row['id'] as String?;
+            final options = (q['options'] as List?)?.cast<String>();
+            if (options != null && options.isNotEmpty) {
+              // Bug real reportado en vivo: "no me carga el tipo de
+              // diabetes que tiene cargado" — el nombre guardado (ej.
+              // "Diabetes Tipo 2") nunca se comparaba contra las
+              // opciones fijas de la pregunta, así que el desplegable
+              // "Tipo" quedaba siempre vacío aunque el dato ya
+              // existiera. Ahora se busca la opción que coincide.
+              for (final opt in options) {
+                final optLower = opt.toLowerCase();
+                if (name.contains(optLower) || optLower.contains(name)) {
+                  target.selectedOption = opt;
+                  break;
+                }
+              }
+              if (target.selectedOption == null) {
+                final otraOption = options.firstWhere(
+                  (o) => o.toLowerCase() == 'otra' || o.toLowerCase() == 'otro',
+                  orElse: () => '',
+                );
+                if (otraOption.isNotEmpty) {
+                  target.selectedOption = otraOption;
+                  target.detailController.text = conditionName;
+                }
+              }
+            } else if (!_isJustAnEcho(conditionName, questionText)) {
+              // Bug real reportado en vivo: "¿Padece de gota?" (sin
+              // ningún detalle real cargado) aparecía en el campo
+              // Detalle repitiendo literalmente la pregunta — pasaba
+              // porque conditionName a veces guarda el texto de la
+              // pregunta tal cual, sin agregar nada nuevo. Si el
+              // nombre guardado no aporta ninguna palabra que la
+              // pregunta ya no tenga, se deja el campo en blanco.
+              target.detailController.text = conditionName;
+            }
+            if (row['diagnosedAt'] != null) target.dateController.text = _formatDdMmYyyy(row['diagnosedAt'] as String);
+            target.snapshot();
           }
         }
 
@@ -473,15 +559,17 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('¿Quitar este dato ya cargado?'),
-        content: Text('"$itemLabel" ya estaba en tu Historial de Salud. Si lo destildás/borrás acá, se va a quitar de tu ficha real, no solo de este formulario.'),
+        title: Text(context.tr('form.removeExistingTitle')),
+        content: Text(context.tr('form.removeExistingBody', params: {'item': itemLabel})),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancelar')),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Quitar')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: Text(context.tr('assistant.cancel'))),
+          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: Text(context.tr('form.remove'))),
         ],
       ),
     );
     if (confirmed != true) return false;
+    if (!mounted) return false;
+    final removeErrorFallback = _trSafe('form.removeError');
     try {
       await ApiClient.instance.dio.patch('/clinical/$resource/$id', data: {
         'deletedAt': DateTime.now().toUtc().toIso8601String(),
@@ -490,7 +578,7 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(dioErrorMessage(e, 'No se pudo quitar — probá de nuevo.'))),
+          SnackBar(content: Text(dioErrorMessage(e, removeErrorFallback))),
         );
       }
       return false;
@@ -703,8 +791,21 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
   /// PATCH directo al endpoint dedicado, que además re-resuelve el
   /// catálogo (para que las alertas médicas etc. reflejen el tipo
   /// nuevo). Ver AIService.updateConditionAnswer.
-  Future<int> _syncConditionEdits() async {
+  // Pedido explícito del usuario: "no tiene que solo aislar los casos
+  // con falla de fecha sino que tiene que informar el problema al
+  // usuario para que lo corrija" — antes, si el PATCH fallaba (ej.
+  // fecha futura o anterior al nacimiento, rechazada por el backend —
+  // ver AIService.updateConditionAnswer), el error se descartaba en un
+  // catch vacío: el viajero corregía la fecha en pantalla, tocaba
+  // guardar, veía "Formulario guardado" y la ficha se quedaba con el
+  // dato VIEJO sin ningún aviso de que su corrección nunca entró. Cada
+  // fila que falla queda registrada acá (label + motivo real del
+  // servidor) para mostrarla en el mensaje final — el resto de las
+  // filas se sigue guardando igual (mismo criterio "mejor esto que
+  // trabar todo el formulario"), pero ya no en silencio.
+  Future<({int count, List<String> failures})> _syncConditionEdits() async {
     var count = 0;
+    final failures = <String>[];
     for (final q in _questions) {
       final row = _conditionRows[q['id'] as String]!;
       if (!row.checked || row.existingId == null || !row.isNewOrChanged) continue;
@@ -717,21 +818,30 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
           if (dateText.isNotEmpty) 'dateRaw': dateText,
         });
         count++;
-      } catch (_) {
-        // best-effort — si falla una fila puntual, se sigue con el
-        // resto en vez de trabar todo el guardado del formulario.
+      } catch (e) {
+        failures.add('$conditionName: ${dioErrorMessage(e, _trSafe('form.saveError'))}');
       }
     }
-    return count;
+    return (count: count, failures: failures);
   }
 
   Future<void> _submit() async {
     setState(() => _submitting = true);
     final doseEditsCount = await _syncMedicationDoseEdits();
     final allergyEditsCount = await _syncAllergyEdits();
-    final conditionEditsCount = await _syncConditionEdits();
-    final directEditsCount = doseEditsCount + allergyEditsCount + conditionEditsCount;
+    final conditionEdits = await _syncConditionEdits();
+    final directEditsCount = doseEditsCount + allergyEditsCount + conditionEdits.count;
     if (!mounted) return;
+
+    // Pedido explícito del usuario: "no tiene que solo aislar los casos
+    // con falla de fecha sino que tiene que informar el problema al
+    // usuario para que lo corrija" — si alguna corrección de antecedente
+    // ya existente falló (típicamente una fecha inválida rechazada por
+    // el servidor), se junta acá para mostrarla SIEMPRE, sin importar
+    // qué camino tome el resto del guardado más abajo.
+    final failureNotice = conditionEdits.failures.isNotEmpty
+        ? '${_trSafe('form.someEditsFailed')} ${conditionEdits.failures.join(' ')}'
+        : null;
 
     final payload = _buildPayload();
     final hasAnyData = (payload['conditions'] as List).isNotEmpty ||
@@ -749,9 +859,19 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
         // hace falta pasar por el diálogo de revisión de propuestas
         // nuevas.
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Se actualizaron $directEditsCount dato${directEditsCount == 1 ? '' : 's'} ya cargado${directEditsCount == 1 ? '' : 's'}.')),
+          SnackBar(content: Text(directEditsCount == 1
+              ? _trSafe('form.updatedExistingDataOne')
+              : _trSafe('form.updatedExistingDataMany', params: {'count': '$directEditsCount'}))),
         );
+        if (failureNotice != null) {
+          _showFormError(failureNotice);
+          return;
+        }
         if (mounted) Navigator.of(context).pop(true);
+        return;
+      }
+      if (failureNotice != null) {
+        _showFormError(failureNotice);
         return;
       }
       // Pedido explícito del usuario: si ya había datos cargados y no se
@@ -767,7 +887,7 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
           _heightController.text.trim().isNotEmpty;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(
-          hasAnythingFilled ? 'No hay cambios nuevos para guardar.' : 'Completá al menos un dato antes de guardar.',
+          hasAnythingFilled ? _trSafe('form.noChangesToSave') : _trSafe('form.fillAtLeastOne'),
         )),
       );
       return;
@@ -788,15 +908,32 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
       final confirmed = await _showReviewDialog(proposals.length, corrections);
       if (confirmed != true || !mounted) return;
       setState(() => _submitting = true);
-      await ApiClient.instance.dio.post('/me/health-assistant/conversations/$conversationId/confirm-all');
+      final confirmResponse =
+          await ApiClient.instance.dio.post('/me/health-assistant/conversations/$conversationId/confirm-all');
       if (!mounted) return;
+      // Bug real reportado en vivo: "la primera vez que se pone una
+      // fecha mal... guarda la enfermedad pero no la fecha y no dice
+      // nada" — confirm-all ahora devuelve dateWarnings cuando un
+      // antecedente NUEVO tenía una fecha futura/anterior al
+      // nacimiento (se guardó sin fecha); se junta con failureNotice
+      // para nunca dejar pasar un guardado incompleto en silencio.
+      final dateWarnings =
+          ((confirmResponse.data as Map<String, dynamic>?)?['dateWarnings'] as List?)?.cast<String>() ??
+              const <String>[];
+      final combinedNotice = [
+        ?failureNotice,
+        ...dateWarnings,
+      ].join(' ');
+      if (combinedNotice.isNotEmpty) {
+        setState(() => _submitting = false);
+        _showFormError(combinedNotice);
+        return;
+      }
       Navigator.of(context).pop(true);
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _submitting = false;
-        _error = dioErrorMessage(e, 'No se pudo guardar el formulario — probá de nuevo.');
-      });
+      setState(() => _submitting = false);
+      _showFormError(dioErrorMessage(e, _trSafe('form.saveError')));
     }
   }
 
@@ -804,7 +941,7 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
     return showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Revisar antes de guardar'),
+        title: Text(context.tr('form.reviewTitle')),
         content: SizedBox(
           width: double.maxFinite,
           child: SingleChildScrollView(
@@ -812,10 +949,12 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Se van a guardar $proposalCount dato${proposalCount == 1 ? '' : 's'} nuevo${proposalCount == 1 ? '' : 's'} o actualizado${proposalCount == 1 ? '' : 's'} en tu Historial de Salud.'),
+                Text(proposalCount == 1
+                    ? context.tr('form.willSaveDataOne')
+                    : context.tr('form.willSaveDataMany', params: {'count': '$proposalCount'})),
                 if (corrections.isNotEmpty) ...[
                   const SizedBox(height: 12),
-                  const Text('La IA corrigió estos textos:', style: TextStyle(fontWeight: FontWeight.bold)),
+                  Text(context.tr('form.aiCorrectedText'), style: const TextStyle(fontWeight: FontWeight.bold)),
                   const SizedBox(height: 4),
                   for (final c in corrections)
                     Padding(
@@ -828,8 +967,8 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancelar')),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Confirmar y guardar')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: Text(context.tr('assistant.cancel'))),
+          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: Text(context.tr('form.confirmAndSaveButton'))),
         ],
       ),
     );
@@ -839,12 +978,12 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
   Widget build(BuildContext context) {
     if (_loadingExisting) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Ficha de salud — Formulario')),
+        appBar: AppBar(title: Text(context.tr('form.title'))),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
     return Scaffold(
-      appBar: AppBar(title: const Text('Ficha de salud — Formulario')),
+      appBar: AppBar(title: Text(context.tr('form.title'))),
       body: AbsorbPointer(
         absorbing: _submitting,
         child: ListView(
@@ -854,28 +993,31 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
               padding: const EdgeInsets.only(bottom: 12),
               child: Text(_error!, style: const TextStyle(color: Colors.red)),
             ),
-            const Text('Completá los datos que tengas — no hace falta llenar todo. Al final revisamos juntos antes de guardar.',
-                style: TextStyle(color: Colors.grey)),
+            Text(context.tr('form.intro'),
+                style: const TextStyle(color: Colors.grey)),
             if (_lastUpdatedText != null) ...[
               const SizedBox(height: 4),
-              Text('Última actualización de tu ficha: $_lastUpdatedText',
+              Text(context.tr('form.lastUpdated', params: {'date': _lastUpdatedText!}),
                   style: const TextStyle(color: Colors.grey, fontStyle: FontStyle.italic)),
             ],
             const SizedBox(height: 16),
-            _sectionTitle('Datos básicos'),
+            _sectionTitle(context.tr('form.basicDataSection')),
             TextField(
               controller: _birthDateController,
-              decoration: const InputDecoration(labelText: 'Fecha de nacimiento (DD/MM/AAAA)'),
+              keyboardType: TextInputType.datetime,
+              inputFormatters: _dateInputFormatters,
+              decoration: InputDecoration(labelText: context.tr('form.birthDateLabel')),
             ),
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
               initialValue: _sexCode,
-              decoration: const InputDecoration(labelText: 'Sexo'),
-              items: const [
-                DropdownMenuItem(value: 'MALE', child: Text('Masculino')),
-                DropdownMenuItem(value: 'FEMALE', child: Text('Femenino')),
-                DropdownMenuItem(value: 'OTHER', child: Text('Otro')),
-                DropdownMenuItem(value: 'PREFER_NOT_TO_SAY', child: Text('Prefiero no decir')),
+              isExpanded: true,
+              decoration: InputDecoration(labelText: context.tr('form.sexLabel')),
+              items: [
+                DropdownMenuItem(value: 'MALE', child: Text(context.tr('form.sexMale'), overflow: TextOverflow.ellipsis)),
+                DropdownMenuItem(value: 'FEMALE', child: Text(context.tr('form.sexFemale'), overflow: TextOverflow.ellipsis)),
+                DropdownMenuItem(value: 'OTHER', child: Text(context.tr('form.sexOther'), overflow: TextOverflow.ellipsis)),
+                DropdownMenuItem(value: 'PREFER_NOT_TO_SAY', child: Text(context.tr('form.sexPreferNotToSay'), overflow: TextOverflow.ellipsis)),
               ],
               onChanged: (v) => setState(() => _sexCode = v),
             ),
@@ -884,19 +1026,20 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
               Expanded(child: TextField(
                 controller: _weightController,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Peso (kg)'),
+                decoration: InputDecoration(labelText: context.tr('form.weightLabel')),
               )),
               const SizedBox(width: 12),
               Expanded(child: TextField(
                 controller: _heightController,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Altura (cm)'),
+                decoration: InputDecoration(labelText: context.tr('form.heightLabel')),
               )),
             ]),
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
               initialValue: _bloodTypeCode,
-              decoration: const InputDecoration(labelText: 'Grupo sanguíneo'),
+              isExpanded: true,
+              decoration: InputDecoration(labelText: context.tr('form.bloodTypeLabel')),
               items: const [
                 DropdownMenuItem(value: 'O_NEG', child: Text('O-')),
                 DropdownMenuItem(value: 'O_POS', child: Text('O+')),
@@ -910,40 +1053,40 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
               onChanged: (v) => setState(() => _bloodTypeCode = v),
             ),
 
-            _sectionTitle('Antecedentes médicos'),
-            const Text('Marcá los que tengas o hayas tenido.', style: TextStyle(color: Colors.grey, fontSize: 12)),
+            _sectionTitle(context.tr('form.medicalHistorySection')),
+            Text(context.tr('form.medicalHistoryHint'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
             for (final q in _questions) _conditionTile(q),
 
-            _sectionTitle('Alergias'),
+            _sectionTitle(context.tr('form.allergiesSection')),
             for (var i = 0; i < _allergies.length; i++) _allergyRow(i),
             OutlinedButton.icon(
               onPressed: () => setState(() => _allergies.add(_AllergyRow())),
               icon: const Icon(Icons.add),
-              label: const Text('Agregar alergia'),
+              label: Text(context.tr('form.addAllergyButton')),
             ),
 
-            _sectionTitle('Medicamentos que toma habitualmente'),
+            _sectionTitle(context.tr('form.medicationsSection')),
             for (var i = 0; i < _medications.length; i++) _medicationRow(i),
             OutlinedButton.icon(
               onPressed: () => setState(() => _medications.add(_MedicationRow())),
               icon: const Icon(Icons.add),
-              label: const Text('Agregar medicamento'),
+              label: Text(context.tr('form.addMedicationButton')),
             ),
 
-            _sectionTitle('Cirugías'),
-            for (var i = 0; i < _surgeries.length; i++) _nameDateRow(_surgeries, i, 'Cirugía', 'surgeries'),
+            _sectionTitle(context.tr('form.surgeriesSection')),
+            for (var i = 0; i < _surgeries.length; i++) _nameDateRow(_surgeries, i, context.tr('form.surgeryNameLabel'), 'surgeries'),
             OutlinedButton.icon(
               onPressed: () => setState(() => _surgeries.add(_NameDateRow())),
               icon: const Icon(Icons.add),
-              label: const Text('Agregar cirugía'),
+              label: Text(context.tr('form.addSurgeryButton')),
             ),
 
-            _sectionTitle('Implantes y dispositivos médicos'),
-            for (var i = 0; i < _implants.length; i++) _nameDateRow(_implants, i, 'Implante/dispositivo', 'implants-devices'),
+            _sectionTitle(context.tr('form.implantsSection')),
+            for (var i = 0; i < _implants.length; i++) _nameDateRow(_implants, i, context.tr('form.implantNameLabel'), 'implants-devices'),
             OutlinedButton.icon(
               onPressed: () => setState(() => _implants.add(_NameDateRow())),
               icon: const Icon(Icons.add),
-              label: const Text('Agregar implante'),
+              label: Text(context.tr('form.addImplantButton')),
             ),
 
             const SizedBox(height: 24),
@@ -951,7 +1094,7 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
               onPressed: _submitting ? null : _submit,
               child: _submitting
                   ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Text('Validar y guardar'),
+                  : Text(context.tr('form.validateAndSaveButton')),
             ),
             const SizedBox(height: 40),
           ],
@@ -959,6 +1102,49 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
       ),
     );
   }
+
+  /// Pedido explícito del usuario: "Detalle (opcional)" se confundía con
+  /// el texto que el viajero ya había escrito porque Material dibuja el
+  /// labelText DENTRO del campo, con el mismo tono, hasta que se hace
+  /// foco — con floatingLabelBehavior.always queda siempre arriba, chico
+  /// y en gris, así nunca se puede confundir con un valor cargado.
+  // Pedido explícito del usuario: "se le puede sacar un poco de margen
+  // a ambos fecha y detalle opcional" — las fechas ("dd/mm/aaaa", 10
+  // caracteres) quedaban cortadas dentro del campo angosto de al lado
+  // del desplegable de tipo/detalle — el padding horizontal por
+  // default de Material le deja poco lugar de verdad al texto. Un
+  // padding más chico les da más espacio real a ambos sin agrandar el
+  // campo en sí.
+  static const _tightContentPadding = EdgeInsets.symmetric(horizontal: 8, vertical: 12);
+
+  InputDecoration _lightLabelDecoration(String label) => InputDecoration(
+        labelText: label,
+        isDense: true,
+        contentPadding: _tightContentPadding,
+        floatingLabelBehavior: FloatingLabelBehavior.always,
+        labelStyle: TextStyle(color: Colors.grey.shade500, fontSize: 12),
+      );
+
+  InputDecoration _dateFieldDecoration(String label) => InputDecoration(
+        labelText: label,
+        isDense: true,
+        contentPadding: _tightContentPadding,
+      );
+
+  /// Bug real reportado en vivo: quedó guardado un antecedente con
+  /// "Fecha declarada por el viajero: 15/*12/2021" — un caracter suelto
+  /// (el "*") coló en un campo de fecha de texto libre. Los campos de
+  /// fecha de ANTECEDENTES (condición/cirugía/implante) se dejan tal
+  /// cual, sin restringir el teclado — a propósito aceptan texto tipo
+  /// "desde los 10 años" (ver parseFormDateWithAge en el backend), así
+  /// que restringirlos a solo dígitos rompería esa función. La fecha
+  /// de NACIMIENTO no tiene ese caso de uso (nadie "nació hace X años"
+  /// como respuesta relativa a sí misma), así que ahí sí se restringe
+  /// el teclado a solo dígitos y "/". La validación real (fecha
+  /// implausible, futura o anterior al nacimiento) ahora se hace del
+  /// lado del servidor para TODOS los campos de fecha, sin importar el
+  /// formato de texto — ver AIService.normalizeDateOrNull.
+  static final _dateInputFormatters = [FilteringTextInputFormatter.allow(RegExp(r'[0-9/]'))];
 
   Widget _sectionTitle(String text) => Padding(
         padding: const EdgeInsets.only(top: 20, bottom: 8),
@@ -1010,20 +1196,27 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
             padding: const EdgeInsets.only(left: 16, bottom: 12),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(children: [
-                Expanded(
-                  flex: 1,
+                // Pedido explícito del usuario: "no corregiste el
+                // margen de los box contenedores... sacale margen y va
+                // a andar bien" — un flex proporcional se achicaba en
+                // pantallas angostas hasta cortar "dd/mm/aaaa". Un
+                // ancho FIJO (suficiente para 10 caracteres con
+                // margen) garantiza que la fecha entre completa sin
+                // importar cuánto ocupe el campo de al lado.
+                SizedBox(
+                  width: 118,
                   child: TextField(
                     controller: row.dateController,
-                    decoration: const InputDecoration(labelText: 'Fecha aprox.', isDense: true),
+                    decoration: _dateFieldDecoration(context.tr('form.approxDateLabel')),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  flex: 2,
                   child: DropdownButtonFormField<String>(
                     initialValue: row.selectedOption,
-                    decoration: const InputDecoration(labelText: 'Tipo', isDense: true),
-                    items: options.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+                    isExpanded: true,
+                    decoration: InputDecoration(labelText: context.tr('form.conditionTypeLabel'), isDense: true),
+                    items: options.map((t) => DropdownMenuItem(value: t, child: Text(t, overflow: TextOverflow.ellipsis))).toList(),
                     onChanged: (v) => setState(() => row.selectedOption = v),
                   ),
                 ),
@@ -1033,7 +1226,7 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
                   padding: const EdgeInsets.only(top: 8),
                   child: TextField(
                     controller: row.detailController,
-                    decoration: const InputDecoration(labelText: 'Cuál', isDense: true),
+                    decoration: _lightLabelDecoration(context.tr('form.whichLabel')),
                   ),
                 ),
             ]),
@@ -1042,19 +1235,18 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
           Padding(
             padding: const EdgeInsets.only(left: 16, bottom: 12),
             child: Row(children: [
-              Expanded(
-                flex: 1,
+              SizedBox(
+                width: 118,
                 child: TextField(
                   controller: row.dateController,
-                  decoration: const InputDecoration(labelText: 'Fecha aprox.', isDense: true),
+                  decoration: _dateFieldDecoration(context.tr('form.approxDateLabel')),
                 ),
               ),
               const SizedBox(width: 8),
               Expanded(
-                flex: 2,
                 child: TextField(
                   controller: row.detailController,
-                  decoration: const InputDecoration(labelText: 'Detalle (opcional)', isDense: true),
+                  decoration: _lightLabelDecoration(context.tr('form.detailOptionalLabel')),
                 ),
               ),
             ]),
@@ -1071,10 +1263,11 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
         Row(children: [
           Expanded(child: TextField(
             controller: row.nameController,
-            decoration: const InputDecoration(labelText: 'A qué es alérgico', isDense: true),
+            decoration: InputDecoration(labelText: context.tr('form.allergyWhatLabel'), isDense: true),
           )),
           IconButton(
-            icon: const Icon(Icons.remove_circle_outline),
+            icon: const Icon(Icons.delete_outline),
+            tooltip: context.tr('form.remove'),
             onPressed: () => _removeRow(
               resource: 'allergies',
               existingId: row.existingId,
@@ -1088,12 +1281,12 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
           Expanded(child: DropdownButtonFormField<String>(
             initialValue: row.type,
             isExpanded: true,
-            decoration: const InputDecoration(labelText: 'Tipo', isDense: true),
-            items: const [
-              DropdownMenuItem(value: 'MEDICATION', child: Text('Medicamento', overflow: TextOverflow.ellipsis)),
-              DropdownMenuItem(value: 'FOOD', child: Text('Alimento', overflow: TextOverflow.ellipsis)),
-              DropdownMenuItem(value: 'ENVIRONMENTAL', child: Text('Ambiental', overflow: TextOverflow.ellipsis)),
-              DropdownMenuItem(value: 'OTHER', child: Text('Otra', overflow: TextOverflow.ellipsis)),
+            decoration: InputDecoration(labelText: context.tr('form.conditionTypeLabel'), isDense: true),
+            items: [
+              DropdownMenuItem(value: 'MEDICATION', child: Text(context.tr('form.allergyTypeMedication'), overflow: TextOverflow.ellipsis)),
+              DropdownMenuItem(value: 'FOOD', child: Text(context.tr('form.allergyTypeFood'), overflow: TextOverflow.ellipsis)),
+              DropdownMenuItem(value: 'ENVIRONMENTAL', child: Text(context.tr('form.allergyTypeEnvironmental'), overflow: TextOverflow.ellipsis)),
+              DropdownMenuItem(value: 'OTHER', child: Text(context.tr('form.allergyTypeOther'), overflow: TextOverflow.ellipsis)),
             ],
             onChanged: (v) => setState(() => row.type = v ?? 'OTHER'),
           )),
@@ -1101,12 +1294,12 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
           Expanded(child: DropdownButtonFormField<String>(
             initialValue: row.severity,
             isExpanded: true,
-            decoration: const InputDecoration(labelText: 'Gravedad', isDense: true),
-            items: const [
-              DropdownMenuItem(value: 'MILD', child: Text('Leve', overflow: TextOverflow.ellipsis)),
-              DropdownMenuItem(value: 'MODERATE', child: Text('Moderada', overflow: TextOverflow.ellipsis)),
-              DropdownMenuItem(value: 'SEVERE', child: Text('Severa', overflow: TextOverflow.ellipsis)),
-              DropdownMenuItem(value: 'CRITICAL', child: Text('Riesgo de vida', overflow: TextOverflow.ellipsis)),
+            decoration: InputDecoration(labelText: context.tr('form.severityLabel'), isDense: true),
+            items: [
+              DropdownMenuItem(value: 'MILD', child: Text(context.tr('form.severityMild'), overflow: TextOverflow.ellipsis)),
+              DropdownMenuItem(value: 'MODERATE', child: Text(context.tr('form.severityModerate'), overflow: TextOverflow.ellipsis)),
+              DropdownMenuItem(value: 'SEVERE', child: Text(context.tr('form.severitySevere'), overflow: TextOverflow.ellipsis)),
+              DropdownMenuItem(value: 'CRITICAL', child: Text(context.tr('form.severityCritical'), overflow: TextOverflow.ellipsis)),
             ],
             onChanged: (v) => setState(() => row.severity = v ?? 'MODERATE'),
           )),
@@ -1123,10 +1316,11 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
         Row(children: [
           Expanded(child: TextField(
             controller: row.nameController,
-            decoration: const InputDecoration(labelText: 'Medicamento', isDense: true),
+            decoration: InputDecoration(labelText: context.tr('form.medicationNameLabel'), isDense: true),
           )),
           IconButton(
-            icon: const Icon(Icons.remove_circle_outline),
+            icon: const Icon(Icons.delete_outline),
+            tooltip: context.tr('form.remove'),
             onPressed: () => _removeRow(
               resource: 'medications',
               existingId: row.existingId,
@@ -1139,12 +1333,12 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
         Row(children: [
           Expanded(child: TextField(
             controller: row.doseController,
-            decoration: const InputDecoration(labelText: 'Dosis', isDense: true),
+            decoration: InputDecoration(labelText: context.tr('form.doseLabel'), isDense: true),
           )),
           const SizedBox(width: 8),
           Expanded(child: TextField(
             controller: row.sinceController,
-            decoration: const InputDecoration(labelText: 'Desde cuándo', isDense: true),
+            decoration: InputDecoration(labelText: context.tr('form.sinceWhenLabel'), isDense: true),
           )),
         ]),
       ]),
@@ -1161,12 +1355,16 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
           decoration: InputDecoration(labelText: nameLabel, isDense: true),
         )),
         const SizedBox(width: 8),
-        Expanded(child: TextField(
-          controller: row.dateController,
-          decoration: const InputDecoration(labelText: 'Fecha aprox.', isDense: true),
-        )),
+        SizedBox(
+          width: 118,
+          child: TextField(
+            controller: row.dateController,
+            decoration: _dateFieldDecoration(context.tr('form.approxDateLabel')),
+          ),
+        ),
         IconButton(
-          icon: const Icon(Icons.remove_circle_outline),
+          icon: const Icon(Icons.delete_outline),
+          tooltip: context.tr('form.remove'),
           onPressed: () => _removeRow(
             resource: resource,
             existingId: row.existingId,

@@ -62,7 +62,7 @@ interface ModelComparison {
 
 const MODEL_LABEL: Record<ModelComparison['intakeModel'], string> = {
   CLASSIC: 'Clásico (conversacional)',
-  STRUCTURED: 'Estructurado (tabla, beta)',
+  STRUCTURED: 'Estructurado (tabla)',
 };
 
 const usd = (n: number) => `USD ${n.toFixed(4)}`;

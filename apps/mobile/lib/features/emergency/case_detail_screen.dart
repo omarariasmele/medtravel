@@ -5,6 +5,7 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 
 import '../../core/api_client.dart';
 import '../../core/catalog_service.dart';
+import '../../l10n/app_strings.dart';
 
 /// Seguimiento del caso desde la app: qué se reportó, dónde, y el
 /// detalle de la atención que va dejando el call center/médico
@@ -102,11 +103,11 @@ class _CaseDetailScreenState extends State<CaseDetailScreen> {
   Widget build(BuildContext context) {
     final caseNumber = _case?['case_number'] as String? ?? widget.caseNumber ?? '';
     return Scaffold(
-      appBar: AppBar(title: Text(caseNumber.isNotEmpty ? caseNumber : 'Caso de asistencia')),
+      appBar: AppBar(title: Text(caseNumber.isNotEmpty ? caseNumber : context.tr('caseDetail.defaultTitle'))),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _case == null
-              ? const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('No se pudo cargar el caso.')))
+              ? Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(context.tr('caseDetail.loadError'))))
               : RefreshIndicator(
                   onRefresh: _load,
                   child: ListView(
@@ -114,36 +115,36 @@ class _CaseDetailScreenState extends State<CaseDetailScreen> {
                     children: [
                       _buildStatusChip(),
                       const SizedBox(height: 16),
-                      _sectionLabel('Fecha y hora'),
+                      _sectionLabel(context.tr('caseDetail.dateTimeLabel')),
                       Text(_formatDateTime(_case!['created_at'] as String?)),
                       const SizedBox(height: 12),
-                      _sectionLabel('Qué está pasando'),
+                      _sectionLabel(context.tr('caseDetail.whatsHappeningLabel')),
                       Text(_case!['initial_description'] as String? ?? '—'),
                       const SizedBox(height: 12),
-                      _sectionLabel('Síntomas'),
+                      _sectionLabel(context.tr('caseDetail.symptomsLabel')),
                       Text((_case!['patient_symptoms'] as String?)?.isNotEmpty == true
                           ? _case!['patient_symptoms'] as String
                           : '—'),
                       const SizedBox(height: 12),
-                      _sectionLabel('Ubicación'),
+                      _sectionLabel(context.tr('caseDetail.locationLabel')),
                       Text(_locationText()),
                       if (_case!['resolution_notes'] != null) ...[
                         const SizedBox(height: 12),
-                        _sectionLabel('Resolución'),
+                        _sectionLabel(context.tr('caseDetail.resolutionLabel')),
                         Text(_case!['resolution_notes'] as String),
                       ],
                       const Divider(height: 32),
-                      Text('Atención del caso', style: Theme.of(context).textTheme.titleMedium),
+                      Text(context.tr('caseDetail.caseAttentionTitle'), style: Theme.of(context).textTheme.titleMedium),
                       const SizedBox(height: 4),
-                      const Text(
-                        'Lo que va registrando el call center o el médico a cargo, en orden.',
-                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      Text(
+                        context.tr('caseDetail.caseAttentionSubtitle'),
+                        style: const TextStyle(fontSize: 12, color: Colors.grey),
                       ),
                       const SizedBox(height: 12),
                       if (_events.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 16),
-                          child: Text('Todavía no hay novedades registradas en tu caso.'),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          child: Text(context.tr('caseDetail.noEventsYet')),
                         )
                       else
                         ..._sortedEvents().map(_buildEventCard),
@@ -157,7 +158,7 @@ class _CaseDetailScreenState extends State<CaseDetailScreen> {
                 'caseNumber': caseNumber,
               }),
               icon: const Icon(Icons.chat_bubble_outline),
-              label: const Text('Chat con asistencia'),
+              label: Text(context.tr('caseDetail.chatButton')),
             )
           : null,
     );
@@ -180,7 +181,7 @@ class _CaseDetailScreenState extends State<CaseDetailScreen> {
             Row(
               children: [
                 Chip(
-                  label: Text(CatalogService.labelFor(_eventTypeCatalog, e['eventTypeId'] as String?)),
+                  label: Text(CatalogService.labelFor(_eventTypeCatalog, e['eventTypeId'] as String?, lang: context.lang)),
                   visualDensity: VisualDensity.compact,
                 ),
                 const Spacer(),
@@ -201,7 +202,7 @@ class _CaseDetailScreenState extends State<CaseDetailScreen> {
 
   Widget _buildStatusChip() {
     final statusId = _case!['status_id'] as String?;
-    final label = CatalogService.labelFor(_statusCatalog, statusId);
+    final label = CatalogService.labelFor(_statusCatalog, statusId, lang: context.lang);
     final closed = _case!['closed_at'] != null;
     return Chip(
       avatar: Icon(closed ? Icons.check_circle_outline : Icons.pending_actions, size: 18),

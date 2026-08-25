@@ -31,7 +31,12 @@ export class PersonEntity extends UuidBaseEntity {
   @Column({ name: 'country_residence_id', type: 'uuid', nullable: true })
   countryResidenceId?: string;
 
-  @Column({ name: 'preferred_lang', type: 'char', length: 5, default: 'es' })
+  // Bug real reportado en vivo: CHAR(5) hace que Postgres devuelva el
+  // valor relleno con espacios ("es   "), lo que rompía cualquier
+  // comparación exacta contra 'es'/'en'/'pt'/'fr' del lado de la app
+  // (el idioma nunca aparecía como seleccionado, ni la IA lo
+  // respetaba). Cambiado a VARCHAR(5), que no rellena.
+  @Column({ name: 'preferred_lang', type: 'varchar', length: 5, default: 'es' })
   preferredLang: string;
 
   @Column({

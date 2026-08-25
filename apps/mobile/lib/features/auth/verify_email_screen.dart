@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../core/api_client.dart';
 import '../../core/auth_state.dart';
 import '../../core/error_message.dart';
+import '../../l10n/app_strings.dart';
 
 /// Pedido explícito del usuario: "la app hasta que no este validado el
 /// mail no deberia permitir su uso" — a diferencia del banner
@@ -45,7 +46,8 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
       // Esto hace que el redirect de router.dart deje pasar a "/" solo.
       await context.read<AuthState>().refreshEmailVerified();
     } catch (e) {
-      setState(() => _error = dioErrorMessage(e, 'Código inválido o vencido.'));
+      if (!mounted) return;
+      setState(() => _error = dioErrorMessage(e, context.tr('verifyEmail.invalidCodeError')));
     } finally {
       if (mounted) setState(() => _verifying = false);
     }
@@ -59,9 +61,11 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
     });
     try {
       await ApiClient.instance.dio.post('/auth/resend-verification-email');
-      setState(() => _info = 'Código reenviado.');
+      if (!mounted) return;
+      setState(() => _info = context.tr('verifyEmail.resentMessage'));
     } catch (e) {
-      setState(() => _error = dioErrorMessage(e, 'No se pudo reenviar — probá de nuevo en un momento.'));
+      if (!mounted) return;
+      setState(() => _error = dioErrorMessage(e, context.tr('verifyEmail.resendError')));
     } finally {
       if (mounted) setState(() => _resending = false);
     }
@@ -71,12 +75,12 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Verificá tu email'),
+        title: Text(context.tr('verifyEmail.title')),
         automaticallyImplyLeading: false,
         actions: [
           IconButton(
             icon: const Icon(Icons.logout),
-            tooltip: 'Cerrar sesión',
+            tooltip: context.tr('verifyEmail.logoutTooltip'),
             onPressed: () => context.read<AuthState>().logout(),
           ),
         ],
@@ -90,9 +94,8 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
             children: [
               const Icon(Icons.mark_email_unread_outlined, size: 56),
               const SizedBox(height: 16),
-              const Text(
-                'Es el canal directo de comunicación con vos, así que hace falta confirmarlo antes de seguir. '
-                'Te mandamos un código de 6 dígitos por email — ingresalo acá:',
+              Text(
+                context.tr('verifyEmail.instructions'),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 16),
@@ -102,7 +105,7 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
                 maxLength: 6,
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 24, letterSpacing: 8),
-                decoration: const InputDecoration(labelText: 'Código'),
+                decoration: InputDecoration(labelText: context.tr('verifyEmail.codeLabel')),
               ),
               if (_error != null)
                 Padding(
@@ -116,22 +119,22 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
                 ),
               FilledButton(
                 onPressed: _verifying ? null : _verify,
-                child: Text(_verifying ? 'Verificando…' : 'Verificar'),
+                child: Text(_verifying ? context.tr('verifyEmail.verifying') : context.tr('verifyEmail.verifyButton')),
               ),
               const SizedBox(height: 8),
               TextButton(
                 onPressed: _resending ? null : _resend,
-                child: Text(_resending ? 'Reenviando…' : 'Reenviar código'),
+                child: Text(_resending ? context.tr('verifyEmail.resending') : context.tr('verifyEmail.resendCodeButton')),
               ),
               const Divider(height: 32),
               Text(
-                '¿El email está mal escrito?',
+                context.tr('verifyEmail.wrongEmailQuestion'),
                 style: Theme.of(context).textTheme.bodyMedium,
                 textAlign: TextAlign.center,
               ),
               TextButton(
                 onPressed: () => context.push('/profile'),
-                child: const Text('Corregirlo en mi perfil'),
+                child: Text(context.tr('verifyEmail.fixInProfile')),
               ),
             ],
           ),

@@ -70,6 +70,18 @@ dependencies:
   speech_to_text: ^7.4.0
   flutter_tts: ^4.2.5
   audioplayers: ^6.8.1
+  # Motor nuevo del modo Clásico — voz en tiempo real (OpenAI Realtime
+  # API): conexión WebRTC directa contra OpenAI, sin pasar por
+  # speech_to_text/flutter_tts/audioplayers (elimina de raíz los
+  # cuelgues de reconocimiento y la ventana de silencio corta que
+  # venían dando bugs en vivo con ese pipeline).
+  # Pedido explícito: NUNCA bajar de 1.5.x — la 0.14.x (resuelta antes)
+  # tiene un crash nativo conocido justo al inicializar el micrófono
+  # ("Fatal error... jni_generator_helper.h", SIGABRT en network_thread,
+  # confirmado en vivo con logcat en el Samsung Galaxy S20+ de prueba)
+  # que las versiones 1.x ya corrigieron (manejo del audio device module
+  # en Android).
+  flutter_webrtc: ^1.5.2
 
 dev_dependencies:
   flutter_test:

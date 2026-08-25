@@ -6,6 +6,7 @@ import { MedicationEntity } from './entities/medication.entity';
 import { SurgeryEntity } from './entities/surgery.entity';
 import { LabResultEntity } from './entities/lab-result.entity';
 import { ImplantDeviceEntity } from './entities/implant-device.entity';
+import { TreatmentEntity } from './entities/treatment.entity';
 import { VitalsHistoryEntity } from './entities/vitals-history.entity';
 import { VaccineEntity } from './entities/vaccine.entity';
 import { ClinicalDocumentEntity } from './entities/clinical-document.entity';
@@ -84,6 +85,10 @@ export const CLINICAL_REGISTRY: Record<string, ResourceRegistryEntry> = {
   'implants-devices': {
     entity: ImplantDeviceEntity,
     encryptedFields: ['deviceName', 'memberChallengeNotes', 'notes'],
+  },
+  treatments: {
+    entity: TreatmentEntity,
+    encryptedFields: ['treatmentName', 'memberChallengeNotes', 'notes'],
   },
   'vitals-history': {
     entity: VitalsHistoryEntity,

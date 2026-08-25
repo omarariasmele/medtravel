@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../core/auth_state.dart';
 import '../../core/catalog_service.dart';
 import '../../core/error_message.dart';
+import '../../l10n/app_strings.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -36,6 +37,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   List<CatalogValue> _docTypes = [];
   List<CatalogValue> _countries = [];
+
+  /// El texto fijo de ESTA pantalla no puede depender de
+  /// AuthState.preferredLang (todavía no hay cuenta) ni del idioma del
+  /// dispositivo (pedido explícito del usuario: si elige "Inglés" acá
+  /// arriba, el resto del formulario tiene que pasarse a inglés en el
+  /// momento) — se resuelve siempre contra el chip que el usuario tocó.
+  String _t(String key, {Map<String, String>? params}) =>
+      AppStrings.forLang(_preferredLang, key, params: params);
 
   @override
   void initState() {
@@ -73,8 +82,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             preferredLang: _preferredLang,
           );
     } catch (e) {
-      setState(() => _error = dioErrorMessage(
-          e, 'No se pudo registrar — el email o el documento ya podrían estar en uso.'));
+      setState(() => _error = dioErrorMessage(e, _t('register.error')));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -98,7 +106,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Crear cuenta')),
+      appBar: AppBar(title: Text(_t('register.title'))),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -118,22 +126,51 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             Text(_error!, style: const TextStyle(color: Colors.red)),
                             const SizedBox(height: 12),
                           ],
+                          // Bug real reportado en vivo: "el idioma me lo
+                          // solicita al final, debería solicitarlo al
+                          // principio para que el usuario comprenda la
+                          // información que se le solicita completar" —
+                          // este selector vivía como el ÚLTIMO campo del
+                          // formulario, así que alguien que no lee
+                          // español tenía que completar TODO el
+                          // formulario (en español) antes de poder
+                          // decir en qué idioma prefiere manejarse.
+                          // Movido a ser lo primero que se pregunta.
+                          Text(_t('register.languagePrompt')),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 8,
+                            children: const [
+                              ('es', 'Español'), ('en', 'English'), ('pt', 'Português'), ('fr', 'Français'),
+                            ].map((opt) {
+                              return ChoiceChip(
+                                label: Text(opt.$2),
+                                selected: _preferredLang == opt.$1,
+                                // setState (no setLocalState): el AppBar
+                                // vive AFUERA de este StatefulBuilder, así
+                                // que necesita el rebuild completo de la
+                                // pantalla para pasarse de idioma también.
+                                onSelected: (_) => setState(() => _preferredLang = opt.$1),
+                              );
+                            }).toList(),
+                          ),
+                          const SizedBox(height: 20),
                           TextField(
                             controller: _firstNameController,
-                            decoration: const InputDecoration(labelText: 'Nombre'),
+                            decoration: InputDecoration(labelText: _t('register.firstName')),
                             onChanged: (_) => setLocalState(() {}),
                           ),
                           const SizedBox(height: 12),
                           TextField(
                             controller: _lastNameController,
-                            decoration: const InputDecoration(labelText: 'Apellido'),
+                            decoration: InputDecoration(labelText: _t('register.lastName')),
                             onChanged: (_) => setLocalState(() {}),
                           ),
                           const SizedBox(height: 12),
                           TextField(
                             controller: _emailController,
                             keyboardType: TextInputType.emailAddress,
-                            decoration: const InputDecoration(labelText: 'Email'),
+                            decoration: InputDecoration(labelText: _t('register.email')),
                             onChanged: (_) => setLocalState(() {}),
                           ),
                           const SizedBox(height: 12),
@@ -141,10 +178,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             controller: _emailConfirmController,
                             keyboardType: TextInputType.emailAddress,
                             decoration: InputDecoration(
-                              labelText: 'Confirmar email',
-                              helperText: 'Repetilo para evitar errores de tipeo',
+                              labelText: _t('register.confirmEmail'),
+                              helperText: _t('register.confirmEmailHelper'),
                               errorText: _emailConfirmController.text.isNotEmpty && !_emailsMatch
-                                  ? 'No coincide con el email de arriba'
+                                  ? _t('register.confirmEmailMismatch')
                                   : null,
                             ),
                             onChanged: (_) => setLocalState(() {}),
@@ -154,14 +191,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             controller: _passwordController,
                             obscureText: _obscurePassword,
                             decoration: InputDecoration(
-                              labelText: 'Contraseña',
-                              helperText: 'Mínimo 8 caracteres',
+                              labelText: _t('register.password'),
+                              helperText: _t('register.passwordHelper'),
                               // Antes solo se deshabilitaba el botón sin
                               // explicar por qué — bug real reportado
                               // ("pongo una contraseña que no va y no me
                               // dice nada").
                               errorText: _passwordController.text.isNotEmpty && _passwordController.text.length < 8
-                                  ? 'Le faltan ${8 - _passwordController.text.length} caracteres'
+                                  ? _t('register.passwordMissingChars', params: {'n': '${8 - _passwordController.text.length}'})
                                   : null,
                               suffixIcon: IconButton(
                                 icon: Icon(_obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined),
@@ -174,14 +211,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           TextField(
                             controller: _phoneController,
                             keyboardType: TextInputType.phone,
-                            decoration: const InputDecoration(
-                              labelText: 'Celular (opcional)',
-                              helperText: 'Con código de país, ej. +54 9 11 1234-5678',
+                            decoration: InputDecoration(
+                              labelText: _t('register.phone'),
+                              helperText: _t('register.phoneHelper'),
                             ),
                             onChanged: (_) => setLocalState(() {}),
                           ),
                           const SizedBox(height: 20),
-                          Text('Documento de identidad', style: Theme.of(context).textTheme.titleSmall),
+                          Text(_t('register.documentSectionTitle'), style: Theme.of(context).textTheme.titleSmall),
                           // Corrección pedida por el usuario en vivo: el alta
                           // ya se identifica por email (único), así que "evitar
                           // duplicados" no es el motivo real que percibe el
@@ -190,48 +227,35 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           // ya contratada (ver core.partner_member_records /
                           // proposed-partner-matching-function.sql, matchea por
                           // doc_number_idx).
-                          const Text(
-                            'Lo pedimos para relacionar tu cuenta con la póliza de asistencia al viajero contratada.',
-                            style: TextStyle(fontSize: 12, color: Colors.grey),
+                          Text(
+                            _t('register.documentExplain'),
+                            style: const TextStyle(fontSize: 12, color: Colors.grey),
                           ),
                           const SizedBox(height: 8),
                           DropdownButtonFormField<String>(
                             initialValue: _docTypeId,
-                            decoration: const InputDecoration(labelText: 'Tipo de documento'),
+                            isExpanded: true,
+                            decoration: InputDecoration(labelText: _t('register.documentType')),
                             items: _docTypes
-                                .map((d) => DropdownMenuItem(value: d.id, child: Text(d.labelEs)))
+                                .map((d) => DropdownMenuItem(value: d.id, child: Text(d.label(_preferredLang), overflow: TextOverflow.ellipsis)))
                                 .toList(),
                             onChanged: (v) => setLocalState(() => _docTypeId = v),
                           ),
                           const SizedBox(height: 12),
                           TextField(
                             controller: _docNumberController,
-                            decoration: const InputDecoration(labelText: 'N° de documento'),
+                            decoration: InputDecoration(labelText: _t('register.documentNumber')),
                             onChanged: (_) => setLocalState(() {}),
                           ),
                           const SizedBox(height: 12),
                           DropdownButtonFormField<String>(
                             initialValue: _docCountryId,
-                            decoration: const InputDecoration(labelText: 'País emisor'),
+                            isExpanded: true,
+                            decoration: InputDecoration(labelText: _t('register.issuingCountry')),
                             items: _countries
-                                .map((c) => DropdownMenuItem(value: c.id, child: Text(c.labelEs)))
+                                .map((c) => DropdownMenuItem(value: c.id, child: Text(c.label(_preferredLang), overflow: TextOverflow.ellipsis)))
                                 .toList(),
                             onChanged: (v) => setLocalState(() => _docCountryId = v),
-                          ),
-                          const SizedBox(height: 16),
-                          const Text('Idioma / Language / Idioma / Langue'),
-                          const SizedBox(height: 8),
-                          Wrap(
-                            spacing: 8,
-                            children: const [
-                              ('es', 'Español'), ('en', 'English'), ('pt', 'Português'), ('fr', 'Français'),
-                            ].map((opt) {
-                              return ChoiceChip(
-                                label: Text(opt.$2),
-                                selected: _preferredLang == opt.$1,
-                                onSelected: (_) => setLocalState(() => _preferredLang = opt.$1),
-                              );
-                            }).toList(),
                           ),
                           const SizedBox(height: 20),
                           FilledButton(
@@ -242,7 +266,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                     width: 20,
                                     child: CircularProgressIndicator(strokeWidth: 2),
                                   )
-                                : const Text('Crear cuenta'),
+                                : Text(_t('register.submitButton')),
                           ),
                         ],
                       ),

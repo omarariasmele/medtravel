@@ -62,7 +62,7 @@ export class MeProfileController {
         `SELECT id, core.decrypt_pii(first_name) AS first_name,
                 core.decrypt_pii(last_name) AS last_name, birth_date, gender_id,
                 nationality_id, country_residence_id, preferred_lang, timezone,
-                photo_path, health_record_last_updated_at
+                photo_path, health_record_last_updated_at, blood_type_id
          FROM core.persons WHERE id = $1`,
         [context.personId],
       );
@@ -107,7 +107,8 @@ export class MeProfileController {
            birth_date     = COALESCE($4, birth_date),
            preferred_lang = COALESCE($5, preferred_lang),
            timezone       = COALESCE($6, timezone),
-           gender_id      = COALESCE($7, gender_id)
+           gender_id      = COALESCE($7, gender_id),
+           blood_type_id  = COALESCE($8, blood_type_id)
          WHERE id = $1`,
         [
           context.personId,
@@ -117,6 +118,7 @@ export class MeProfileController {
           dto.preferredLang ?? null,
           dto.timezone ?? null,
           dto.genderId ?? null,
+          dto.bloodTypeId ?? null,
         ],
       ),
     );

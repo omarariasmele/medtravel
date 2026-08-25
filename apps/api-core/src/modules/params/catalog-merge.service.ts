@@ -18,6 +18,7 @@ const MERGEABLE_DOMAINS: Record<string, { table: string; column: string }> = {
   CONDITION_CATALOG: { table: 'clinical.conditions', column: 'condition_catalog_id' },
   SURGERY_CATALOG: { table: 'clinical.surgeries', column: 'procedure_catalog_id' },
   IMPLANT_TYPE: { table: 'clinical.implants_devices', column: 'device_type_id' },
+  TREATMENT_TYPE: { table: 'clinical.treatments', column: 'treatment_catalog_id' },
 };
 
 /**

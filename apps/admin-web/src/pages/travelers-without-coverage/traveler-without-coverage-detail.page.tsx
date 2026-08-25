@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { AxiosError } from 'axios';
 import {
   Alert,
   Avatar,
@@ -27,6 +28,7 @@ import {
   Typography,
 } from '@mui/material';
 
+import { useAuth } from '../../auth/auth-context';
 import { apiClient } from '../../lib/api-client';
 import { labelFor, useCatalog } from '../../lib/catalog-hooks';
 import { usePageTitle } from '../../lib/page-title';
@@ -106,10 +108,42 @@ export function TravelerWithoutCoverageDetailPage() {
   const { personId } = useParams<{ personId: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { claims } = useAuth();
 
   const [hcOpen, setHcOpen] = useState(false);
   const [hcForm, setHcForm] = useState<HealthCoverageFormState>(EMPTY_HC_FORM);
   const [hcError, setHcError] = useState<string | null>(null);
+
+  // Pedido explícito del usuario: "en usuarios sin cobertura no
+  // pusiste el botón de borrar al usuario" — traveler-detail.page.tsx
+  // (viajeros CON cobertura) ya tiene esta "Zona de pruebas" desde
+  // antes; esta ficha (viajeros SIN cobertura todavía) es una pantalla
+  // aparte que nunca la tuvo. Mismo mecanismo: reset de ficha de salud
+  // + baja de cuenta completa, para poder reprobar desde cero con el
+  // mismo viajero de prueba.
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetConfirmText, setResetConfirmText] = useState('');
+  const resetMutation = useMutation({
+    mutationFn: async () => {
+      const { data } = await apiClient.delete(`/clinical/persons/${personId}/health-record`);
+      return data;
+    },
+    onSuccess: () => {
+      window.location.reload();
+    },
+  });
+
+  const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
+  const [deleteAccountConfirmText, setDeleteAccountConfirmText] = useState('');
+  const deleteAccountMutation = useMutation({
+    mutationFn: async () => {
+      const { data } = await apiClient.delete(`/identity/persons/${personId}/delete-test-traveler`);
+      return data;
+    },
+    onSuccess: () => {
+      navigate('/travelers-without-coverage');
+    },
+  });
 
   const personQuery = useQuery({
     queryKey: ['identity', 'persons', personId],
@@ -371,6 +405,151 @@ export function TravelerWithoutCoverageDetailPage() {
       </Card>
 
       <ClinicalHistorySection personId={person.id} />
+
+      {claims?.canManageConfig && (
+        <Card sx={{ mt: 2, borderColor: 'error.main', borderWidth: 1, borderStyle: 'solid' }}>
+          <CardContent>
+            <Typography variant="subtitle1" color="error" gutterBottom>
+              Zona de pruebas
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Borra TODAS las condiciones, alergias, medicamentos, cirugías e implantes de este viajero, y el
+              historial de charlas con el asistente de IA — para poder probar la carga desde cero. No se puede
+              deshacer.
+            </Typography>
+            <Button variant="outlined" color="error" onClick={() => setResetOpen(true)}>
+              Borrar antecedentes de salud
+            </Button>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 3, mb: 2 }}>
+              Da de baja la cuenta COMPLETA de este viajero (perfil, login, contactos, viajes, tokens
+              para compartir) — para poder registrarlo de cero con el mismo nombre. No se puede deshacer.
+            </Typography>
+            <Button variant="outlined" color="error" onClick={() => setDeleteAccountOpen(true)}>
+              Dar de baja cuenta completa
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      <Dialog
+        open={resetOpen}
+        onClose={() => {
+          setResetOpen(false);
+          setResetConfirmText('');
+        }}
+      >
+        <DialogTitle color="error">¿Borrar todos los antecedentes de salud?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            Se van a borrar de forma permanente todas las condiciones, alergias, medicamentos, cirugías e
+            implantes de {person?.firstName} {person?.lastName}, además del historial de charlas con el
+            asistente de IA. Esta acción no se puede deshacer.
+          </Typography>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            Escribí <strong>BORRAR</strong> para confirmar.
+          </Typography>
+          <TextField
+            fullWidth
+            size="small"
+            value={resetConfirmText}
+            onChange={(e) => setResetConfirmText(e.target.value)}
+            autoFocus
+          />
+          {resetMutation.isError && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              No se pudo borrar el historial de salud
+              {resetMutation.error instanceof AxiosError
+                ? ` (${resetMutation.error.response?.status ?? 'sin respuesta del servidor'}${
+                    resetMutation.error.response?.data?.message
+                      ? `: ${resetMutation.error.response.data.message}`
+                      : ''
+                  })`
+                : ''}
+              .
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              setResetOpen(false);
+              setResetConfirmText('');
+            }}
+          >
+            Cancelar
+          </Button>
+          <Button
+            variant="contained"
+            color="error"
+            disabled={resetConfirmText !== 'BORRAR' || resetMutation.isPending}
+            onClick={() => resetMutation.mutate()}
+          >
+            Borrar definitivamente
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={deleteAccountOpen}
+        onClose={() => {
+          setDeleteAccountOpen(false);
+          setDeleteAccountConfirmText('');
+        }}
+      >
+        <DialogTitle color="error">¿Dar de baja la cuenta completa?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            Se va a borrar de forma permanente el perfil, login, ficha de salud, contactos de emergencia,
+            documento, viajes, inscripciones de cobertura y tokens para compartir de{' '}
+            <strong>{person?.firstName} {person?.lastName}</strong>. Esta acción no se puede deshacer, y
+            la persona va a tener que registrarse de nuevo desde cero.
+          </Typography>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            Escribí el nombre completo (<strong>{person?.firstName} {person?.lastName}</strong>) para confirmar.
+          </Typography>
+          <TextField
+            fullWidth
+            size="small"
+            value={deleteAccountConfirmText}
+            onChange={(e) => setDeleteAccountConfirmText(e.target.value)}
+            autoFocus
+          />
+          {deleteAccountMutation.isError && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              No se pudo dar de baja la cuenta
+              {deleteAccountMutation.error instanceof AxiosError
+                ? ` (${deleteAccountMutation.error.response?.status ?? 'sin respuesta del servidor'}${
+                    deleteAccountMutation.error.response?.data?.message
+                      ? `: ${deleteAccountMutation.error.response.data.message}`
+                      : ''
+                  })`
+                : ''}
+              .
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              setDeleteAccountOpen(false);
+              setDeleteAccountConfirmText('');
+            }}
+          >
+            Cancelar
+          </Button>
+          <Button
+            variant="contained"
+            color="error"
+            disabled={
+              deleteAccountConfirmText !== `${person?.firstName} ${person?.lastName}` ||
+              deleteAccountMutation.isPending
+            }
+            onClick={() => deleteAccountMutation.mutate()}
+          >
+            Dar de baja definitivamente
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={hcOpen} onClose={() => setHcOpen(false)} fullWidth maxWidth="sm">
         <DialogTitle>Agregar seguro médico / obra social</DialogTitle>

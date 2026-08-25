@@ -110,6 +110,7 @@ const NAV_DOMAIN_LABELS: Record<string, string> = {
   LAB_INDICATOR: 'Indicadores de estudios',
   IMPLANT_TYPE: 'Tipos de implantes',
   SURGERY_CATALOG: 'Cirugías',
+  TREATMENT_TYPE: 'Tipos de tratamiento',
 };
 
 /**

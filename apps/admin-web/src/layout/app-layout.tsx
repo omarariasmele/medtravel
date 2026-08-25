@@ -44,6 +44,7 @@ import MedicationIcon from '@mui/icons-material/Medication';
 import ReportProblemIcon from '@mui/icons-material/ReportProblem';
 import ChecklistIcon from '@mui/icons-material/Checklist';
 import PublicIcon from '@mui/icons-material/Public';
+import VaccinesIcon from '@mui/icons-material/Vaccines';
 
 import { useAuth } from '../auth/auth-context';
 import { PageTitleContext } from '../lib/page-title';
@@ -83,6 +84,7 @@ const SYSTEM_TABLES = [
   { label: 'Indicadores de estudios', domain: 'LAB_INDICATOR', icon: <ScienceIcon /> },
   { label: 'Tipos de implantes', domain: 'IMPLANT_TYPE', icon: <MemoryIcon /> },
   { label: 'Cirugías', domain: 'SURGERY_CATALOG', icon: <HealingIcon /> },
+  { label: 'Tipos de tratamiento', domain: 'TREATMENT_TYPE', icon: <VaccinesIcon /> },
 ];
 
 export function AppLayout() {
@@ -230,7 +232,7 @@ export function AppLayout() {
               <ListItemIcon>
                 <ChecklistIcon />
               </ListItemIcon>
-              <ListItemText primary="Preguntas del asistente (beta)" />
+              <ListItemText primary="Preguntas del asistente (Estructurado)" />
             </ListItemButton>
           )}
           {claims?.canManageConfig && (

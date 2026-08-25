@@ -73,6 +73,7 @@ import { MedicationEntity } from '@modules/clinical/entities/medication.entity';
 import { SurgeryEntity } from '@modules/clinical/entities/surgery.entity';
 import { LabResultEntity } from '@modules/clinical/entities/lab-result.entity';
 import { ImplantDeviceEntity } from '@modules/clinical/entities/implant-device.entity';
+import { TreatmentEntity } from '@modules/clinical/entities/treatment.entity';
 import { VitalsHistoryEntity } from '@modules/clinical/entities/vitals-history.entity';
 import { VaccineEntity } from '@modules/clinical/entities/vaccine.entity';
 import { ClinicalDocumentEntity } from '@modules/clinical/entities/clinical-document.entity';
@@ -217,6 +218,7 @@ export const buildTypeOrmOptions = (
     SurgeryEntity,
     LabResultEntity,
     ImplantDeviceEntity,
+    TreatmentEntity,
     VitalsHistoryEntity,
     VaccineEntity,
     ClinicalDocumentEntity,

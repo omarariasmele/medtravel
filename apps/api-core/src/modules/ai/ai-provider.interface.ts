@@ -15,7 +15,8 @@ export type AIProposalType =
   | 'SURGERY'
   | 'VITALS'
   | 'LAB_RESULT'
-  | 'IMPLANT_DEVICE';
+  | 'IMPLANT_DEVICE'
+  | 'TREATMENT';
 
 /**
  * Datos de la propuesta en el MISMO shape que CreateMedicationDto/
@@ -30,6 +31,8 @@ export interface AIMedicationProposalData {
   prescribedDate?: string | null;
   isCurrent?: boolean;
   notes?: string;
+  /** Mismo motivo que AIConditionProposalData.sourceQuestionId — evita volver a preguntar en una consulta de seguimiento. */
+  sourceQuestionId?: string;
 }
 
 export interface AIAllergyProposalData {
@@ -37,6 +40,8 @@ export interface AIAllergyProposalData {
   allergenType: 'MEDICATION' | 'FOOD' | 'ENVIRONMENTAL' | 'OTHER';
   severity: 'MILD' | 'MODERATE' | 'SEVERE' | 'CRITICAL';
   notes?: string;
+  /** Mismo motivo que AIConditionProposalData.sourceQuestionId. */
+  sourceQuestionId?: string;
 }
 
 /**
@@ -78,6 +83,28 @@ export interface AIImplantDeviceProposalData {
   implantedAtRaw?: string;
   implantedAt?: string;
   notes?: string;
+  /** Mismo motivo que AIConditionProposalData.sourceQuestionId. */
+  sourceQuestionId?: string;
+}
+
+/**
+ * Pedido explícito del usuario: "para el caso de diálisis, como la
+ * tenemos que tratar ya que es un tratamiento" — un TRATAMIENTO
+ * (diálisis, quimioterapia, radioterapia, etc.) es un concepto médico
+ * distinto de una enfermedad/CONDITION: la enfermedad de fondo se
+ * pregunta aparte, esto es el procedimiento/terapia en curso o pasado.
+ * Mismo shape que AIConditionProposalData (statusCode reutiliza el
+ * dominio CONDITION_STATUS — ACTIVE/CHRONIC cubren "en curso",
+ * RESOLVED cubre "ya terminado" — y sourceQuestionId para el mismo
+ * chequeo anti-duplicado por pregunta).
+ */
+export interface AITreatmentProposalData {
+  treatmentName: string;
+  statusCode?: 'CHRONIC' | 'ACTIVE' | 'RESOLVED' | 'IN_REMISSION';
+  startedAtRaw?: string;
+  startedAt?: string;
+  notes?: string;
+  sourceQuestionId?: string;
 }
 
 export interface AISurgeryProposalData {
@@ -142,7 +169,8 @@ export interface AIProposalCandidate {
     | AISurgeryProposalData
     | AIVitalsProposalData
     | AILabResultProposalData
-    | AIImplantDeviceProposalData;
+    | AIImplantDeviceProposalData
+    | AITreatmentProposalData;
 }
 
 export interface AIChatResult {
@@ -215,6 +243,19 @@ export interface AIStructuredInterpretResult {
    */
   wantsToPause: boolean;
   /**
+   * Bug real reportado en vivo: la viajera le dijo a la IA que
+   * cerrara la charla SIN guardar nada de lo hablado, y la IA guardó
+   * igual — porque la única intención de cierre que existía era
+   * `wantsToPause` (pausar y GUARDAR lo confirmado hasta ahora), sin
+   * ninguna forma de distinguir "guardá y pausemos" de "cancelá todo,
+   * no guardes nada". Mismo criterio que wantsToPause (cualquier
+   * idioma, cualquier forma de decirlo — "cancelá todo", "no guardes
+   * nada de esto", "cerrá sin grabar"): cuando es true, el llamador
+   * descarta (REJECTED) todo lo pendiente de esta conversación en vez
+   * de confirmarlo.
+   */
+  wantsToDiscard: boolean;
+  /**
    * Pedido explícito del usuario: si en vez de contestar la persona
    * hace una pregunta ("¿qué es eso?", "¿por qué me preguntan esto?")
    * o dice algo que no se entiende bien, la IA tiene que poder
@@ -234,6 +275,28 @@ export interface AIStructuredInterpretResult {
    * vez de corregir en silencio.
    */
   correctedFrom: string | null;
+  /**
+   * Pedido explícito del usuario: "no podemos registrar cualquier cosa
+   * en la base de datos porque... el médico que atiende la emergencia
+   * no va a entender que dice la ficha de salud" — false SOLO cuando
+   * `detail` NO corresponde a ningún concepto médico real y reconocible
+   * (enfermedad, medicamento, alergia, cirugía, implante o resultado de
+   * análisis) — texto inventado, una palabra suelta sin sentido médico,
+   * algo de otro dominio. Con `applicable=true` pero `plausible=false`,
+   * el llamador NO guarda nada — pide que aclare, igual que `unclear`.
+   */
+  plausible: boolean;
+  /**
+   * Pedido explícito del usuario (mismo pedido que `plausible`): true
+   * cuando `detail` SÍ es un concepto médico real (`plausible=true`)
+   * pero de un tipo DISTINTO al que pide esta pregunta puntual — caso
+   * real: "colesterol alto" contestado a una pregunta de enfermedad es
+   * real, pero es un resultado de análisis (LAB_RESULT), no una
+   * condición (CONDITION). El llamador no lo guarda bajo el tipo fijo
+   * de esta pregunta — lo reclasifica vía interpretOpenEndedAnswer y
+   * vuelve a pedir la respuesta a ESTA pregunta puntual.
+   */
+  categoryMismatch: boolean;
   detail: string | null;
   dateRaw: string | null;
   date: string | null;
@@ -285,6 +348,8 @@ export interface AIMedicationSplitResult {
   applicable: boolean;
   unclear: boolean;
   wantsToPause: boolean;
+  /** Ver AIStructuredInterpretResult.wantsToDiscard — mismo criterio, para la pregunta de medicamentos. */
+  wantsToDiscard: boolean;
   clarification: string | null;
   /** Un ítem por medicamento mencionado — nunca un solo string con varios juntos. */
   medications: {
@@ -301,7 +366,42 @@ export interface AIMedicationSplitResult {
      */
     dateRaw: string | null;
     date: string | null;
+    /** Ver AIStructuredInterpretResult.plausible — mismo criterio, por medicamento (la lista puede traer varios, uno solo puede ser inventado/no-medicamento). */
+    plausible: boolean;
+    /** Ver AIStructuredInterpretResult.categoryMismatch — real pero no es un medicamento (ej. "colesterol alto" mezclado en la lista). */
+    categoryMismatch: boolean;
   }[];
+  provider: string;
+  model: string;
+  tokensInput: number;
+  tokensOutput: number;
+  estimatedCostUsd: number;
+  processingMs: number;
+}
+
+/**
+ * Pedido explícito del usuario: "si el usuario no tiene cargado su
+ * peso y altura y grupo sanguíneo, el estructurado lo debería
+ * solicitar" — a diferencia de CONDITION/SURGERY/etc. (un detalle +
+ * una fecha), esta pregunta especial pide hasta 3 valores juntos en
+ * una sola respuesta ("peso 80, altura 175, grupo O positivo"), así
+ * que necesita su propio intérprete en vez de reusar
+ * interpretStructuredAnswer. Solo se piden los campos que
+ * efectivamente faltan (ver AIService.getMissingVitalsQuestion) — los
+ * otros dos quedan en null sin que eso cuente como "no contestó".
+ */
+export interface AIVitalsInterpretResult {
+  /** Igual criterio que AIStructuredInterpretResult.unclear — ruido/pregunta del viajero en vez de una respuesta real. */
+  unclear: boolean;
+  clarification: string | null;
+  wantsToPause: boolean;
+  wantsToDiscard: boolean;
+  /** kg, o null si no lo mencionó (o no se le preguntó por ese campo). */
+  weightKg: number | null;
+  /** cm — la IA normaliza "1.75m"/"1,75"/"175" al mismo valor en centímetros. */
+  heightCm: number | null;
+  /** Código del dominio BLOOD_TYPE (ej. "O_POS") — null si no lo mencionó o no supo decirlo. */
+  bloodTypeCode: string | null;
   provider: string;
   model: string;
   tokensInput: number;
@@ -337,13 +437,48 @@ export interface AIFreeTextValidationResult {
 }
 
 /**
+ * Pedido explícito del usuario: "todo el sistema de IA del celular
+ * debería poder manejar bien todas las enfermedades existentes o
+ * análisis o estudios, o medicamentos, no podemos limitarlo a lo
+ * básico" — Estructurado/Formulario caminan una lista FIJA de ~26
+ * preguntas (ai.interview_questions), a diferencia de Clásico
+ * (Realtime), que reconoce cualquier antecedente porque es la IA la
+ * que decide, no una lista precargada. Esta pregunta de cierre (la
+ * ÚLTIMA de la lista, ver proposed-open-ended-question.sql) es la
+ * puerta de escape: en vez de forzar el detalle a UN proposalType fijo
+ * (como el resto de las preguntas, atadas a su proposal_type de la
+ * fila), interpreta la respuesta libre y puede generar CUALQUIER
+ * cantidad de antecedentes de CUALQUIER tipo (condición, cirugía,
+ * medicamento, alergia, implante, resultado de estudio) en una sola
+ * respuesta — mismo criterio de validación que el resto del sistema
+ * (nunca adivina, corrige términos médicos con confirmación, exige
+ * valor real para LAB_RESULT, etc.), reusando el mismo esquema de
+ * datos que ya usan Clásico y el chat principal (PROPOSAL_DATA_SCHEMA).
+ */
+export interface AIOpenEndedInterpretResult {
+  /** false si el viajero contestó que no tiene nada más para agregar. */
+  applicable: boolean;
+  /** Ver AIStructuredInterpretResult.unclear — mismo criterio acá. */
+  unclear: boolean;
+  clarification: string | null;
+  /** Uno o más antecedentes reconocidos en la respuesta — vacío si applicable=false o unclear=true. */
+  items: AIProposalCandidate[];
+  provider: string;
+  model: string;
+  tokensInput: number;
+  tokensOutput: number;
+  estimatedCostUsd: number;
+  processingMs: number;
+}
+
+/**
  * Contrato único que toca OpenAI (u otro proveedor a futuro) — el
  * resto del backend nunca importa el SDK del proveedor directamente
  * (MTA-103 §10: "AI Gateway como único módulo que toca el proveedor").
  */
 export interface AIProvider {
   readonly name: string;
-  synthesizeSpeech(text: string, voice: string): Promise<Buffer>;
+  synthesizeSpeech(text: string, voice: string, speed?: number): Promise<Buffer>;
   /**
    * Pedido explícito del usuario: que el diálogo de voz sea fluido —
    * hoy se espera el audio completo (varios segundos de síntesis en
@@ -351,8 +486,13 @@ export interface AIProvider {
    * crudo tal cual lo va generando OpenAI, para que el controller lo
    * transmita al cliente a medida que llega en vez de bufferear todo
    * primero (ver MeHealthAssistantController.speech).
+   *
+   * `speed`: pedido explícito del usuario ("el asistente estructurado
+   * habla muy despacio") — parámetro nativo de la API de OpenAI (0.25
+   * a 4.0, default 1.0), antes nunca se mandaba. Ver assistant.tts_
+   * speech_rate (params.app_settings).
    */
-  synthesizeSpeechStream(text: string, voice: string): Promise<ReadableStream<Uint8Array>>;
+  synthesizeSpeechStream(text: string, voice: string, speed?: number): Promise<ReadableStream<Uint8Array>>;
   chat(
     messages: AIChatMessage[],
     personContext?: string,
@@ -364,7 +504,7 @@ export interface AIProvider {
     messages: AIChatMessage[],
     caseContext: string,
   ): Promise<AIEmergencyChatResult>;
-  appHelpChat(question: string, scriptGuidance?: string): Promise<AIAppHelpResult>;
+  appHelpChat(question: string, scriptGuidance?: string, language?: SupportedLang): Promise<AIAppHelpResult>;
   interpretStructuredAnswer(
     question: { questionText: string; options?: string[] | null; asksDate: boolean },
     answerText: string,
@@ -391,7 +531,57 @@ export interface AIProvider {
     knownMedicationNames?: string[],
     language?: SupportedLang,
   ): Promise<AIMedicationSplitResult>;
+  /** Ver AIOpenEndedInterpretResult — pregunta de cierre de Estructurado/Formulario, cualquier tipo de antecedente en una sola respuesta. */
+  interpretOpenEndedAnswer(
+    answerText: string,
+    language?: SupportedLang,
+  ): Promise<AIOpenEndedInterpretResult>;
+  /** Ver AIVitalsInterpretResult — turno especial de peso/altura/grupo sanguíneo al arrancar Estructurado. */
+  interpretVitalsAnswer(
+    answerText: string,
+    /** Qué campos faltan y hay que pedir (ver AIService.getMissingVitalsQuestion) — la IA no debe inventar un valor para un campo que ya está cargado y no se preguntó. */
+    askedFields: { weight: boolean; height: boolean; bloodType: boolean },
+    language?: SupportedLang,
+  ): Promise<AIVitalsInterpretResult>;
   validateFreeTextEntries(
     entries: { id: string; text: string; kind: string; knownNames?: string[] }[],
   ): Promise<AIFreeTextValidationResult>;
+  /**
+   * Motor nuevo del modo Clásico (voz en tiempo real, OpenAI Realtime
+   * API) — pedido explícito del usuario tras varios bugs de voz en
+   * vivo (cuelgues de reconocimiento, ventana de silencio corta,
+   * pérdida de correcciones). Genera un token efímero de corta
+   * duración (`POST /v1/realtime/client_secrets`) que el celular usa
+   * para conectarse DIRECTO a OpenAI vía WebRTC — nuestra API key real
+   * nunca sale del servidor. `personContext` sigue el mismo criterio
+   * que `chat()` (qué ya está cargado, para no re-preguntarlo).
+   */
+  createRealtimeSession(
+    personContext: string | undefined,
+    language: SupportedLang | undefined,
+    voiceConfig: AIRealtimeVoiceConfig,
+  ): Promise<AIRealtimeSessionResult>;
+}
+
+/**
+ * Pedido explícito del usuario: toda la parametrización del motor
+ * Realtime editable desde admin-web (params.app_settings, ver
+ * proposed-realtime-voice-settings.sql) — mismo criterio que
+ * assistant.tts_* para el motor de texto.
+ */
+export interface AIRealtimeVoiceConfig {
+  voice: string;
+  /** Si no viene, el provider usa su propio default (env var / 'gpt-realtime'). */
+  model?: string;
+  silenceDurationMs: number;
+  vadThreshold: number;
+  prefixPaddingMs: number;
+}
+
+export interface AIRealtimeSessionResult {
+  /** Token efímero (`ek_...`) — el celular lo manda como Bearer al conectar por WebRTC, nunca la API key real. */
+  clientSecret: string;
+  /** Unix timestamp (segundos) en que el token deja de poder usarse para ABRIR una sesión nueva — una sesión ya abierta puede seguir. */
+  expiresAt: number;
+  model: string;
 }

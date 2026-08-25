@@ -22,6 +22,7 @@ import { TravelersOverviewController } from './travelers-overview.controller';
 import { TravelersWithoutTenantController } from './travelers-without-tenant.controller';
 import { PersonPhoneController } from './person-phone.controller';
 import { PersonSessionController } from './person-session.controller';
+import { DeleteTestTravelerController } from './delete-test-traveler.controller';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { PersonSessionController } from './person-session.controller';
     PersonPhoneController,
     PersonSessionController,
     IdentityResourceController,
+    DeleteTestTravelerController,
   ],
   exports: [TypeOrmModule],
 })

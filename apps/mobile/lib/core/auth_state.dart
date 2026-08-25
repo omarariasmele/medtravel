@@ -22,6 +22,16 @@ class AuthState extends ChangeNotifier {
   bool get isLoading => _isLoading;
   bool get emailVerified => _emailVerified;
 
+  /// Pedido explícito del usuario: "la app debería estar en el idioma
+  /// que seleccionó el usuario, así como todos los mensajes que
+  /// recibe" — idioma real de la app (no solo del asistente de IA),
+  /// leído una vez al bootstrap/login y disponible para cualquier
+  /// pantalla vía `context.watch<AuthState>().preferredLang`. Arranca en
+  /// 'es' hasta que se conoce el real (mismo criterio que
+  /// _emailVerified arriba: nunca bloquea, se corrige sola).
+  String _preferredLang = 'es';
+  String get preferredLang => _preferredLang;
+
   /// Pedido explícito del usuario: "la app hasta que no este validado
   /// el mail no deberia permitir su uso" — el router (ver router.dart)
   /// redirige a /verify-email mientras esto sea false, así que hay que
@@ -31,6 +41,12 @@ class AuthState extends ChangeNotifier {
     try {
       final response = await ApiClient.instance.dio.get('/me/profile');
       _emailVerified = response.data['email_verified'] as bool? ?? true;
+      // preferred_lang ya no debería venir con relleno de espacios
+      // (columna pasada a VARCHAR), pero el trim() se deja como red de
+      // seguridad barata — un idioma no reconocido nunca rompe nada,
+      // solo se ignora y sigue en el default.
+      final lang = (response.data['preferred_lang'] as String?)?.trim();
+      if (lang != null && lang.isNotEmpty) _preferredLang = lang;
     } catch (_) {
       // Si falla la carga (sin conexión, etc.) no se bloquea al
       // viajero por un problema de red — se reintenta la próxima vez.

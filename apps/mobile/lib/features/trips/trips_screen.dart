@@ -7,6 +7,7 @@ import '../../core/api_client.dart';
 import '../../core/catalog_service.dart';
 import '../../core/error_message.dart';
 import '../../core/remote_tts_player.dart';
+import '../../l10n/app_strings.dart';
 
 /// /me/trips (a diferencia de /operations/trips genérico) ya resuelve
 /// el memberId del viajero autenticado server-side (resolveMemberId) y
@@ -98,7 +99,7 @@ class _TripsScreenState extends State<TripsScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'No se pudieron cargar los viajes.';
+        _error = context.tr('trips.loadError');
         _loading = false;
       });
     }
@@ -135,34 +136,51 @@ class _TripsScreenState extends State<TripsScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(isEdit ? 'Editar viaje' : 'Nuevo viaje', style: Theme.of(ctx).textTheme.titleLarge),
+                Text(isEdit ? context.tr('trips.formEditTitle') : context.tr('trips.formNewTitle'), style: Theme.of(ctx).textTheme.titleLarge),
                 const SizedBox(height: 12),
-                TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Nombre del viaje (opcional)')),
+                TextField(controller: nameController, decoration: InputDecoration(labelText: context.tr('trips.tripNameLabel'))),
                 const SizedBox(height: 12),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: Text(start != null ? 'Desde: ${DateFormat('dd/MM/yyyy').format(start!)}' : 'Fecha de inicio'),
+                  title: Text(start != null ? context.tr('trips.startDateFrom', params: {'date': DateFormat('dd/MM/yyyy').format(start!)}) : context.tr('trips.startDateLabel')),
                   trailing: const Icon(Icons.calendar_today),
                   onTap: () async {
                     final picked = await showDatePicker(context: ctx, initialDate: start ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime(2100));
-                    if (picked != null) setSheetState(() => start = picked);
+                    if (picked == null) return;
+                    setSheetState(() => start = picked);
+                    // Pedido explícito del usuario: "como lo hacen las
+                    // plataformas web, sin tener que marcar fecha de
+                    // inicio, dar OK, y volver a entrar para marcar
+                    // fecha de fin" — apenas se confirma el inicio, se
+                    // encadena directo al selector de fin en vez de
+                    // volver al formulario y esperar un segundo toque.
+                    // Si ya había una fecha de fin cargada y sigue
+                    // siendo posterior al nuevo inicio, se respeta tal
+                    // cual (no hace falta tocarla de nuevo).
+                    if (!ctx.mounted) return;
+                    final endPicked = await showDatePicker(
+                      context: ctx,
+                      initialDate: (end != null && end!.isAfter(picked)) ? end! : picked,
+                      firstDate: picked,
+                      lastDate: DateTime(2100),
+                    );
+                    if (endPicked != null) setSheetState(() => end = endPicked);
                   },
                 ),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: Text(end != null ? 'Hasta: ${DateFormat('dd/MM/yyyy').format(end!)}' : 'Fecha de fin'),
+                  title: Text(end != null ? context.tr('trips.endDateUntil', params: {'date': DateFormat('dd/MM/yyyy').format(end!)}) : context.tr('trips.endDateLabel')),
                   trailing: const Icon(Icons.calendar_today),
                   onTap: () async {
-                    final picked = await showDatePicker(context: ctx, initialDate: end ?? start ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime(2100));
+                    final picked = await showDatePicker(context: ctx, initialDate: end ?? start ?? DateTime.now(), firstDate: start ?? DateTime(2020), lastDate: DateTime(2100));
                     if (picked != null) setSheetState(() => end = picked);
                   },
                 ),
                 const SizedBox(height: 16),
-                Text('Destinos (opcional)', style: Theme.of(ctx).textTheme.titleSmall),
-                const Text(
-                  'Podés cargar más de un país — el asistente va a poder avisarte vacunas, '
-                  'riesgos de salud y alertas de seguridad de cada uno.',
-                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                Text(context.tr('trips.destinationsOptional'), style: Theme.of(ctx).textTheme.titleSmall),
+                Text(
+                  context.tr('trips.destinationsHint'),
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
                 ),
                 for (var i = 0; i < destinations.length; i++)
                   Padding(
@@ -176,21 +194,22 @@ class _TripsScreenState extends State<TripsScreen> {
                             children: [
                               DropdownButtonFormField<String>(
                                 initialValue: destinations[i].countryId,
-                                decoration: const InputDecoration(labelText: 'País'),
-                                items: countries.map((c) => DropdownMenuItem(value: c.id, child: Text(c.labelEs))).toList(),
+                                isExpanded: true,
+                                decoration: InputDecoration(labelText: context.tr('trips.countryLabel')),
+                                items: countries.map((c) => DropdownMenuItem(value: c.id, child: Text(c.label(context.lang), overflow: TextOverflow.ellipsis))).toList(),
                                 onChanged: (v) => setSheetState(() => destinations[i].countryId = v),
                               ),
                               const SizedBox(height: 8),
                               TextField(
                                 controller: destinations[i].cityController,
-                                decoration: const InputDecoration(labelText: 'Ciudad (opcional)'),
+                                decoration: InputDecoration(labelText: context.tr('trips.cityLabel')),
                               ),
                             ],
                           ),
                         ),
                         IconButton(
                           icon: const Icon(Icons.remove_circle_outline),
-                          tooltip: 'Quitar destino',
+                          tooltip: context.tr('trips.removeDestination'),
                           onPressed: destinations.length == 1
                               ? null
                               : () => setSheetState(() => destinations.removeAt(i)),
@@ -203,7 +222,7 @@ class _TripsScreenState extends State<TripsScreen> {
                   child: TextButton.icon(
                     onPressed: () => setSheetState(() => destinations.add(_DestinationEntry())),
                     icon: const Icon(Icons.add),
-                    label: const Text('Agregar otro destino'),
+                    label: Text(context.tr('trips.addAnotherDestination')),
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -217,7 +236,7 @@ class _TripsScreenState extends State<TripsScreen> {
                   onPressed: () async {
                     if (start == null || end == null) {
                       ScaffoldMessenger.of(ctx).showSnackBar(
-                        const SnackBar(content: Text('Elegí la fecha de inicio y la fecha de fin.')),
+                        SnackBar(content: Text(context.tr('trips.pickDatesError'))),
                       );
                       return;
                     }
@@ -231,6 +250,7 @@ class _TripsScreenState extends State<TripsScreen> {
                       'tripEnd': end!.toIso8601String().split('T').first,
                       'destinations': destinationPayload,
                     };
+                    final saveTripErrorFallback = context.tr('trips.saveTripError');
                     try {
                       if (isEdit) {
                         await ApiClient.instance.dio.patch('/me/trips/${existing['id']}', data: data);
@@ -246,12 +266,12 @@ class _TripsScreenState extends State<TripsScreen> {
                       // excepción quedaba sin mostrarse en ningún lado.
                       if (ctx.mounted) {
                         ScaffoldMessenger.of(ctx).showSnackBar(
-                          SnackBar(content: Text(dioErrorMessage(e, 'No se pudo guardar el viaje.'))),
+                          SnackBar(content: Text(dioErrorMessage(e, saveTripErrorFallback))),
                         );
                       }
                     }
                   },
-                  child: const Text('Guardar'),
+                  child: Text(context.tr('trips.saveButton')),
                 ),
               ],
             ),
@@ -300,9 +320,9 @@ class _TripsScreenState extends State<TripsScreen> {
       showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Info del destino'),
-          content: Text(dioErrorMessage(error!, 'No se pudo obtener la información de este destino.')),
-          actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cerrar'))],
+          title: Text(context.tr('trips.destinationInfoTooltip')),
+          content: Text(dioErrorMessage(error!, context.tr('trips.destinationInfoError'))),
+          actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: Text(context.tr('trips.close')))],
         ),
       );
       return;
@@ -322,13 +342,13 @@ class _TripsScreenState extends State<TripsScreen> {
       final country = c as Map<String, dynamic>;
       final label = country['countryLabel'] as String? ?? '';
       final sections = [
-        ('Vacunas', country['vaccinations'] as String?),
-        ('Riesgos de salud', country['healthRisks'] as String?),
-        ('Alertas de seguridad', country['securityAlerts'] as String?),
-        ('Tips', country['generalTips'] as String?),
+        (context.tr('trips.vaccinations'), country['vaccinations'] as String?),
+        (context.tr('trips.healthRisks'), country['healthRisks'] as String?),
+        (context.tr('trips.securityAlerts'), country['securityAlerts'] as String?),
+        (context.tr('trips.tips'), country['generalTips'] as String?),
       ].where((s) => (s.$2 ?? '').trim().isNotEmpty).toList();
       if (sections.isEmpty) {
-        speakableParts.add('$label: todavía no hay información cargada.');
+        speakableParts.add(context.tr('trips.noInfoYetFor', params: {'place': label}));
         continue;
       }
       for (var i = 0; i < sections.length; i++) {
@@ -359,7 +379,7 @@ class _TripsScreenState extends State<TripsScreen> {
         builder: (ctx, setDialogState) => AlertDialog(
           title: Row(
             children: [
-              Expanded(child: Text('Info del destino\n$place', style: Theme.of(ctx).textTheme.titleMedium)),
+              Expanded(child: Text('${context.tr('trips.destinationInfoTooltip')}\n$place', style: Theme.of(ctx).textTheme.titleMedium)),
               if (voiceLoading)
                 const Padding(
                   padding: EdgeInsets.all(12),
@@ -368,7 +388,7 @@ class _TripsScreenState extends State<TripsScreen> {
               else
                 IconButton(
                   icon: Icon(voiceEnabled ? Icons.volume_up : Icons.volume_off),
-                  tooltip: voiceEnabled ? 'Silenciar' : 'Activar voz',
+                  tooltip: voiceEnabled ? context.tr('trips.mute') : context.tr('trips.enableVoice'),
                   onPressed: () {
                     if (voiceEnabled) {
                       _tts.stop();
@@ -399,15 +419,15 @@ class _TripsScreenState extends State<TripsScreen> {
                     const SizedBox(height: 8),
                     () {
                       final sections = [
-                        ('Vacunas', c['vaccinations'] as String?),
-                        ('Riesgos de salud', c['healthRisks'] as String?),
-                        ('Alertas de seguridad', c['securityAlerts'] as String?),
-                        ('Tips', c['generalTips'] as String?),
+                        (context.tr('trips.vaccinations'), c['vaccinations'] as String?),
+                        (context.tr('trips.healthRisks'), c['healthRisks'] as String?),
+                        (context.tr('trips.securityAlerts'), c['securityAlerts'] as String?),
+                        (context.tr('trips.tips'), c['generalTips'] as String?),
                       ].where((s) => (s.$2 ?? '').trim().isNotEmpty).toList();
                       if (sections.isEmpty) {
-                        return const Padding(
-                          padding: EdgeInsets.only(bottom: 12),
-                          child: Text('Todavía no hay información cargada para este destino.'),
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Text(context.tr('trips.noInfoYet')),
                         );
                       }
                       return Column(
@@ -432,8 +452,7 @@ class _TripsScreenState extends State<TripsScreen> {
                   ],
                   const Divider(height: 24),
                   Text(
-                    'Información general — no reemplaza fuentes oficiales (consulado, ministerio de salud). '
-                    'Confirmá antes de viajar.',
+                    context.tr('trips.disclaimer'),
                     style: Theme.of(ctx).textTheme.bodySmall?.copyWith(color: Colors.grey),
                   ),
                 ],
@@ -446,7 +465,7 @@ class _TripsScreenState extends State<TripsScreen> {
                 _tts.stop();
                 Navigator.of(ctx).pop();
               },
-              child: const Text('Cerrar'),
+              child: Text(context.tr('trips.close')),
             ),
           ],
         ),
@@ -458,11 +477,11 @@ class _TripsScreenState extends State<TripsScreen> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return Scaffold(appBar: AppBar(title: const Text('Mis viajes')), body: const Center(child: CircularProgressIndicator()));
+      return Scaffold(appBar: AppBar(title: Text(context.tr('trips.title'))), body: const Center(child: CircularProgressIndicator()));
     }
     if (_error != null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Mis viajes')),
+        appBar: AppBar(title: Text(context.tr('trips.title'))),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -473,7 +492,7 @@ class _TripsScreenState extends State<TripsScreen> {
                 const SizedBox(height: 12),
                 Text(_error!, textAlign: TextAlign.center),
                 const SizedBox(height: 16),
-                OutlinedButton(onPressed: _load, child: const Text('Reintentar')),
+                OutlinedButton(onPressed: _load, child: Text(context.tr('common.retry'))),
               ],
             ),
           ),
@@ -482,12 +501,12 @@ class _TripsScreenState extends State<TripsScreen> {
     }
     final filteredTrips = _filteredTrips;
     final emptyMessage = switch (_filter) {
-      _TripFilter.open => 'No tenés viajes planificados.',
-      _TripFilter.closed => 'No tenés viajes cumplidos todavía.',
-      _TripFilter.all => 'Todavía no cargaste ningún viaje.',
+      _TripFilter.open => context.tr('trips.emptyPlanned'),
+      _TripFilter.closed => context.tr('trips.emptyDone'),
+      _TripFilter.all => context.tr('trips.emptyAll'),
     };
     return Scaffold(
-      appBar: AppBar(title: const Text('Mis viajes')),
+      appBar: AppBar(title: Text(context.tr('trips.title'))),
       body: Column(
         children: [
           Padding(
@@ -497,11 +516,25 @@ class _TripsScreenState extends State<TripsScreen> {
               // líneas porque el tamaño de letra por defecto no entra en un
               // tercio del ancho — se reduce solo acá (no cambia el resto de
               // la app) para que las 3 etiquetas entren en una sola línea.
-              style: SegmentedButton.styleFrom(textStyle: const TextStyle(fontSize: 12)),
-              segments: const [
-                ButtonSegment(value: _TripFilter.open, label: Text('Planificados')),
-                ButtonSegment(value: _TripFilter.closed, label: Text('Cumplidos')),
-                ButtonSegment(value: _TripFilter.all, label: Text('Todos')),
+              // Bajar solo la fuente no alcanzó ("Planificados" seguía
+              // partiéndose en dos líneas) — el padding interno de cada
+              // segmento (16px a cada lado por default) le sacaba más
+              // ancho todavía a la etiqueta más larga. Con padding chico
+              // y densidad compacta entran los tres textos en una línea.
+              style: SegmentedButton.styleFrom(
+                textStyle: const TextStyle(fontSize: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                visualDensity: VisualDensity.compact,
+              ),
+              // El tilde de seleccionado le robaba ancho a la etiqueta y
+              // seguía cortando "Planificados" en dos líneas. Se saca el
+              // ícono y queda solo el color de fondo como indicador de
+              // selección (pedido explícito en vivo).
+              showSelectedIcon: false,
+              segments: [
+                ButtonSegment(value: _TripFilter.open, label: Text(context.tr('trips.filterPlanned'))),
+                ButtonSegment(value: _TripFilter.closed, label: Text(context.tr('trips.filterDone'))),
+                ButtonSegment(value: _TripFilter.all, label: Text(context.tr('trips.filterAll'))),
               ],
               selected: {_filter},
               onSelectionChanged: (s) => setState(() => _filter = s.first),
@@ -527,7 +560,7 @@ class _TripsScreenState extends State<TripsScreen> {
                       .join(' · ');
                   final tripName = t['trip_name'] as String?;
                   final autoDetected = tripName == 'Viaje detectado por evento';
-                  final title = place.isNotEmpty ? place : (tripName ?? 'Viaje');
+                  final title = place.isNotEmpty ? place : (tripName ?? context.tr('trips.defaultName'));
                   // Bug real reportado en vivo: se mostraba la fecha cruda
                   // del backend (ej. "2026-08-13T03:00:00.000Z") en vez de
                   // un formato legible — mismo criterio dd/MM/yyyy que ya
@@ -539,7 +572,7 @@ class _TripsScreenState extends State<TripsScreen> {
                       : '${t['trip_start']} → ${t['trip_end']}';
                   final subtitleParts = <String>[
                     dateRange,
-                    if (place.isNotEmpty && autoDetected) 'Ubicación detectada al reportar una emergencia',
+                    if (place.isNotEmpty && autoDetected) context.tr('trips.autoDetectedLocation'),
                     if (place.isNotEmpty && !autoDetected && tripName != null && tripName.isNotEmpty) tripName,
                   ];
                   return ListTile(
@@ -552,12 +585,12 @@ class _TripsScreenState extends State<TripsScreen> {
                         if (destinations.isNotEmpty)
                           IconButton(
                             icon: const Icon(Icons.health_and_safety_outlined),
-                            tooltip: 'Info del destino',
+                            tooltip: context.tr('trips.destinationInfoTooltip'),
                             onPressed: () => _showDestinationInfo(t['id'] as String, title),
                           ),
                         IconButton(
                           icon: const Icon(Icons.edit_outlined),
-                          tooltip: 'Editar viaje',
+                          tooltip: context.tr('trips.editTripTooltip'),
                           onPressed: () => _openForm(t),
                         ),
                       ],

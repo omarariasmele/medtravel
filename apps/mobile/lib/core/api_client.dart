@@ -55,6 +55,21 @@ class ApiClient {
         // operador/staff no debe poder loguearse desde la app del
         // viajero (son poblaciones de usuario separadas).
         headers: {'X-Client-App': 'mobile'},
+        // Bug real reportado en vivo: el asistente de voz en tiempo
+        // real decía "problema técnico, no se pudo guardar" — pero el
+        // log del servidor mostraba el INSERT + COMMIT exitoso cada
+        // vez. Sin timeout acá, Dio esperaba indefinidamente una
+        // respuesta que a veces nunca llegaba (típico de `adb reverse`
+        // sobre USB: el túnel puede quedar "medio abierto" sin cerrar
+        // la conexión prolijamente) — el viajero terminaba hablando de
+        // nuevo mucho antes de que Dio se diera por vencido, generando
+        // reintentos (y filas duplicadas) sin necesidad. Con un límite
+        // razonable, una conexión realmente colgada falla rápido y cae
+        // en el reintento normal (ver withRealtimeNetworkRetry) en vez
+        // de quedarse esperando en silencio.
+        connectTimeout: const Duration(seconds: 15),
+        receiveTimeout: const Duration(seconds: 15),
+        sendTimeout: const Duration(seconds: 15),
       ),
     );
     _allowPinnedDemoCertificate(_dio);
@@ -106,11 +121,30 @@ class ApiClient {
   /// el APK cada vez — antes había que elegir la URL en tiempo de
   /// compilación con --dart-define. Ahora se detecta sola al arrancar:
   /// si localhost:3000 responde (típico con el cable + adb reverse
-  /// activo), se usa esa; si no, se cae al dominio público. Timeout
-  /// corto a propósito — no vale la pena demorar el arranque de la app
-  /// más de medio segundo para decidir esto.
+  /// activo), se usa esa; si no, se cae al dominio público.
+  ///
+  /// Bug real reportado en vivo: "borro algo y lo confirmo pero no se
+  /// borra" — confirmado con logs del backend local, el pedido nunca
+  /// llegó. Causa: esto probaba UNA sola vez con 500ms de timeout al
+  /// arrancar la app — si en ESE instante puntual el backend local
+  /// estaba reiniciando (`nest start --watch` recompilando tras un
+  /// cambio de código) o el túnel `adb reverse` todavía no estaba
+  /// activo, la detección fallaba y la app quedaba pegada al dominio
+  /// público por el resto de esa sesión — sin volver a intentar, ni
+  /// avisar. Ahora reintenta una vez más tras una pausa corta antes de
+  /// resignarse al público — cubre el caso típico de desarrollo donde
+  /// el backend está reiniciando en el momento exacto en que la app
+  /// arranca, sin demorar el arranque en el caso normal (responde al
+  /// primer intento).
   Future<void> autoDetectBaseUrl() async {
     if (_apiBaseUrlOverride.isNotEmpty) return;
+    if (await _probeLocalBackend()) return;
+    await Future.delayed(const Duration(milliseconds: 800));
+    if (await _probeLocalBackend()) return;
+    _dio.options.baseUrl = _publicBaseUrl;
+  }
+
+  Future<bool> _probeLocalBackend() async {
     try {
       final probe = Dio(BaseOptions(
         baseUrl: _localBaseUrl,
@@ -118,11 +152,10 @@ class ApiClient {
         receiveTimeout: const Duration(milliseconds: 500),
       ));
       final response = await probe.get('/health');
-      if (response.statusCode == 200) return; // ya está en _localBaseUrl
+      return response.statusCode == 200;
     } catch (_) {
-      // localhost no respondió — seguimos abajo con el dominio público.
+      return false;
     }
-    _dio.options.baseUrl = _publicBaseUrl;
   }
 
   /// El refresh token es de un solo uso — el backend lo rota en la

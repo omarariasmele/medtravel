@@ -27,7 +27,16 @@ CREATE TABLE IF NOT EXISTS params.app_settings (
 GRANT SELECT, INSERT, UPDATE ON params.app_settings TO app_runtime, test_runner;
 
 INSERT INTO params.app_settings (setting_key, setting_value, description_es) VALUES
-  ('assistant.tts_speech_rate', '0.55', 'Velocidad de lectura en voz alta del asistente de salud (0.0 lento a 1.0 rápido)'),
+  -- Bug real reportado en vivo: "habla muy despacio, ¿cómo hacemos
+  -- para que hable más rápido?" — la causa real (confirmada con
+  -- logcat) era que este valor nunca se mandaba como "speed" a la API
+  -- de OpenAI (gpt-4o-mini-tts, el camino REAL de síntesis — ver
+  -- AIService.getTtsSpeed/synthesizeSpeechStream); solo llegaba a
+  -- afectar el motor nativo del teléfono, usado nada más si OpenAI
+  -- falla. 1.0 = velocidad normal tanto para OpenAI (0.25-4.0) como
+  -- para el motor nativo en Android — 1.3-1.5 se nota bien más rápido
+  -- sin perder claridad, en los dos.
+  ('assistant.tts_speech_rate', '1.35', 'Velocidad de lectura en voz alta del asistente de salud (Estructurado/Formulario). Controla la síntesis real de OpenAI (0.25 a 4.0, 1.0 = normal) y también el motor nativo del teléfono si OpenAI falla. Probado: 1.3-1.5 se nota bien más rápido sin perder claridad.'),
   ('assistant.tts_pitch', '1.0', 'Tono de la voz del asistente de salud (1.0 = normal)'),
   ('assistant.tts_pause_seconds', '3', 'Segundos de silencio antes de dar por terminado lo que dice el viajero (Android no baja de 1-3s aunque se ponga menos)'),
   ('assistant.tts_listen_seconds', '60', 'Segundos máximos de escucha continua por turno del viajero'),

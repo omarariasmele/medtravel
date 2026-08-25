@@ -7,7 +7,15 @@ import { mapPgError, isSkippableConflict } from '@common/database/pg-error.mappe
 import { CatalogResolutionService } from '@modules/params/catalog-resolution.service';
 
 import { AIAllergyProposalData, AIChatMessage, AIProposalCandidate, SupportedLang } from './ai-provider.interface';
-import { OpenAIProvider } from './providers/openai.provider';
+import {
+  OpenAIProvider,
+  REALTIME_USD_PER_1M_AUDIO_INPUT_TOKENS,
+  REALTIME_USD_PER_1M_AUDIO_OUTPUT_TOKENS,
+  REALTIME_USD_PER_1M_CACHED_AUDIO_INPUT_TOKENS,
+  REALTIME_USD_PER_1M_TEXT_INPUT_TOKENS,
+  REALTIME_USD_PER_1M_TEXT_OUTPUT_TOKENS,
+  REALTIME_VALID_VOICES,
+} from './providers/openai.provider';
 
 export const FALLBACK_ANSWER_HEALTH_CHAT =
   'El asistente de carga de ficha médica todavía no está configurado en este ambiente. ' +
@@ -87,19 +95,39 @@ export class AIService {
    * el llamado falla, el caller (mobile) cae al motor del dispositivo —
    * por eso acá se propaga el error tal cual, sin fallback silencioso.
    */
-  async synthesizeSpeech(text: string, voice: string): Promise<Buffer> {
+  async synthesizeSpeech(text: string, voice: string, speed?: number): Promise<Buffer> {
     if (!this.config.get<boolean>('AI_ENABLED')) {
       throw new BadRequestException('El asistente de IA no está habilitado');
     }
-    return this.provider.synthesizeSpeech(text, voice);
+    return this.provider.synthesizeSpeech(text, voice, speed);
   }
 
   /** Ver AIProvider.synthesizeSpeechStream — versión en streaming del método de arriba, para diálogo de voz más fluido. */
-  async synthesizeSpeechStream(text: string, voice: string): Promise<ReadableStream<Uint8Array>> {
+  async synthesizeSpeechStream(text: string, voice: string, speed?: number): Promise<ReadableStream<Uint8Array>> {
     if (!this.config.get<boolean>('AI_ENABLED')) {
       throw new BadRequestException('El asistente de IA no está habilitado');
     }
-    return this.provider.synthesizeSpeechStream(text, voice);
+    return this.provider.synthesizeSpeechStream(text, voice, speed ?? (await this.getTtsSpeed()));
+  }
+
+  /**
+   * Pedido explícito del usuario: "el asistente estructurado habla muy
+   * despacio" — la API de OpenAI (gpt-4o-mini-tts) soporta "speed"
+   * (0.25 a 4.0, default 1.0) y antes nunca se mandaba, dejando sin
+   * efecto real assistant.tts_speech_rate (params.app_settings) — ese
+   * parámetro solo llegaba a afectar al motor nativo del teléfono
+   * (fallback si esto falla, ver comentario de synthesizeSpeech). Se
+   * lee acá mismo (no en el controller) para no tener que cablear
+   * ParamsModule/AppSettingsService en MeModule solo para esto.
+   */
+  private async getTtsSpeed(): Promise<number | undefined> {
+    const [row] = await this.txManager.runInTransaction((queryRunner) =>
+      queryRunner.query(
+        `SELECT setting_value FROM params.app_settings WHERE setting_key = 'assistant.tts_speech_rate'`,
+      ),
+    );
+    const parsed = row?.setting_value ? Number.parseFloat(row.setting_value) : NaN;
+    return Number.isNaN(parsed) ? undefined : parsed;
   }
 
   /**
@@ -436,6 +464,615 @@ export class AIService {
     });
   }
 
+  /**
+   * Motor nuevo del modo Clásico (voz en tiempo real, OpenAI Realtime
+   * API) — pedido explícito del usuario tras varios bugs de voz en
+   * vivo del motor de texto (cuelgues de reconocimiento, ventana de
+   * silencio corta, pérdida de correcciones). El celular llama a esto
+   * UNA vez al entrar a la pantalla, arma la conexión WebRTC directo
+   * con OpenAI usando el token efímero devuelto acá, y va posteando
+   * cada antecedente que la IA guarda a
+   * POST /me/health-assistant/realtime-proposals (ver
+   * confirmRealtimeProposal) — reusa el MISMO conversationId para que
+   * todo quede junto en el historial, igual que Clásico/Estructurado.
+   * Sigue tageado `intake_model = 'CLASSIC'` (mismo valor de siempre,
+   * ver startConversation): el motor cambia, la categoría de cara al
+   * reporting de costo no.
+   */
+  async createRealtimeSession(personId: string): Promise<{
+    conversationId: string;
+    clientSecret: string;
+    expiresAt: number;
+    model: string;
+  }> {
+    return this.txManager.runInTransaction(async (queryRunner) => {
+      const conversationId = await this.startConversation(queryRunner, personId);
+      const personContext = await this.getPersonContext(queryRunner, personId);
+      const language = await this.getPersonLanguage(queryRunner, personId);
+      // Pedido explícito del usuario: toda la parametrización del
+      // motor Realtime editable desde admin-web sin recompilar la app
+      // — mismo criterio que assistant.tts_* para el motor de texto
+      // (ver proposed-realtime-voice-settings.sql).
+      const settingsRows = await queryRunner.query(
+        `SELECT setting_key, setting_value FROM params.app_settings WHERE setting_key LIKE 'assistant.realtime_%'`,
+      );
+      const settings = Object.fromEntries(
+        settingsRows.map((r: { setting_key: string; setting_value: string }) => [r.setting_key, r.setting_value]),
+      ) as Record<string, string | undefined>;
+      // Ver el comentario de REALTIME_VALID_VOICES en openai.provider.ts:
+      // un valor mal configurado acá (ej. una voz que solo existe para
+      // la API de texto a voz normal, no para Realtime) no puede
+      // tumbar la conexión de voz para TODOS los viajeros — se valida
+      // acá antes de mandarlo, con el mismo fallback 'marin' de
+      // siempre si lo configurado no es una voz real de Realtime.
+      const configuredVoice = settings['assistant.realtime_voice'];
+      const voice = (REALTIME_VALID_VOICES as readonly string[]).includes(configuredVoice ?? '')
+        ? configuredVoice!
+        : 'marin';
+      if (configuredVoice && configuredVoice !== voice) {
+        this.logger.warn(
+          `createRealtimeSession: assistant.realtime_voice="${configuredVoice}" no es válida para la API Realtime, usando "${voice}"`,
+        );
+      }
+      const session = await this.provider.createRealtimeSession(personContext, language, {
+        voice,
+        model: settings['assistant.realtime_model'] ?? undefined,
+        silenceDurationMs: Number(settings['assistant.realtime_silence_duration_ms']) || 900,
+        vadThreshold: Number(settings['assistant.realtime_vad_threshold']) || 0.5,
+        prefixPaddingMs: Number(settings['assistant.realtime_prefix_padding_ms']) || 300,
+      });
+      return {
+        conversationId,
+        clientSecret: session.clientSecret,
+        expiresAt: session.expiresAt,
+        model: session.model,
+      };
+    });
+  }
+
+  /**
+   * Solo estos nombres pueden aparecer en ai.proposals.resulting_record_table
+   * (los escribe applyConfirmedProposal más abajo, nunca vienen de
+   * afuera) — allowlist explícita antes de interpolar el nombre de
+   * tabla en SQL crudo (ver saveRealtimeProposal/discardRealtimeConversation),
+   * para no confiar ciegamente en un valor aunque hoy sea siempre propio.
+   *
+   * Bug real reportado en vivo: "No se pudo cerrar sin guardar:
+   * DioException... status code 500" — con "permiso denegado a la
+   * tabla vitals_history" en el log del backend. clinical.vitals_history
+   * es DELIBERADAMENTE de solo inserción (005_clinical.sql: GRANT
+   * SELECT, INSERT nomás, sin UPDATE/DELETE, más las políticas RLS
+   * vitals_no_update/vitals_no_delete) — es un historial real, nunca se
+   * borra ni se corrige una medición ya tomada, se agrega una nueva.
+   * Por eso NO está en esta lista: cualquier intento de dar de baja una
+   * fila de vitals_history (para "reemplazarla" al corregir, o para
+   * descartarla) siempre va a fallar por permisos — mejor no
+   * intentarlo (ver los dos usos de este set más abajo) que reventar
+   * con un 500. Las correcciones de VITALS dentro de la misma charla
+   * se resuelven agregando una fila nueva (la lectura de "último valor
+   * por campo" ya usada en getPersonContext hace el resto solo); un
+   * "descartar todo" no puede deshacer una medición de VITALS ya
+   * tomada — queda en el historial, mismo criterio que tendría cargarla
+   * a mano y arrepentirse.
+   */
+  private static readonly CLINICAL_RESULT_TABLES = new Set([
+    'clinical.medications',
+    'clinical.allergies',
+    'clinical.conditions',
+    'clinical.implants_devices',
+    'clinical.surgeries',
+    'clinical.lab_results',
+    'clinical.treatments',
+  ]);
+
+  /**
+   * El celular llama a esto cada vez que la IA (motor Realtime, ver
+   * createRealtimeSession) llama a la tool save_health_proposal.
+   *
+   * Bug real reportado en vivo: "a medida que se va confirmando debería
+   * ir guardando y no esperar al final" — antes cada antecedente quedaba
+   * PENDING_CONFIRMATION hasta el cierre de la charla entera
+   * (close_realtime_interview -> confirm-all), así que un guardado final
+   * fallido (ver el bug de fecha "2020-01" ya arreglado) podía perder
+   * TODA la charla, no solo un dato. Ahora cada antecedente se aplica
+   * DE UNA a la Ficha de Salud real, en su propia transacción.
+   *
+   * Si el viajero corrige o amplía algo que YA se aplicó en ESTA MISMA
+   * conversación (mismo criterio de "mismo antecedente" que
+   * mergeKeyFor/AIService.mergeKeyFor usa para el modelo de texto), se
+   * da de baja la versión anterior y se aplica la combinada — nunca
+   * queda un antecedente duplicado por corregir algo en la misma
+   * charla. LAB_RESULT no necesita este tratamiento especial: ya tiene
+   * su propia detección de "mismo estudio" (fecha+nombre) dentro de
+   * applyConfirmedProposal.
+   */
+  async saveRealtimeProposal(
+    personId: string,
+    conversationId: string,
+    candidate: AIProposalCandidate,
+  ) {
+    return this.txManager.runInTransaction(async (queryRunner) => {
+      const [conv] = await queryRunner.query(
+        `SELECT id FROM ai.conversations WHERE id = $1 AND person_id = $2`,
+        [conversationId, personId],
+      );
+      if (!conv) {
+        throw new NotFoundException('Conversación no encontrada, o no pertenece a tu cuenta.');
+      }
+
+      const [messageRow] = await this.insertMessage(queryRunner, {
+        conversationId,
+        personId,
+        sender: 'ASSISTANT',
+        message: `Antecedente registrado por voz (${candidate.proposalType}).`,
+        provider: 'openai-realtime',
+        model: this.config.get<string>('OPENAI_REALTIME_MODEL') ?? 'gpt-realtime',
+      });
+
+      const proposalType = candidate.proposalType;
+      const rawData = candidate.data as unknown as Record<string, unknown>;
+
+      type PreviousConfirmed = { id: string; json_data: Record<string, unknown>; resulting_record_id: string; resulting_record_table: string };
+      let previousConfirmed: PreviousConfirmed | undefined;
+      // VITALS no tiene un "nombre" para mergeKeyFor (no es CONDITION/
+      // MEDICATION/etc.) — el equivalente ahí es "el último VITALS ya
+      // aplicado en esta misma charla" (mismo criterio que el bloque
+      // VITALS de confirmAllProposalsInTx).
+      if (proposalType === 'VITALS') {
+        [previousConfirmed] = await queryRunner.query(
+          `SELECT id, json_data, resulting_record_id, resulting_record_table
+           FROM ai.proposals
+           WHERE conversation_id = $1 AND person_id = $2 AND proposal_type = 'VITALS' AND status = 'CONFIRMED'
+           ORDER BY created_at DESC LIMIT 1`,
+          [conversationId, personId],
+        );
+      } else {
+        const mergeKey = AIService.mergeKeyFor({ proposal_type: proposalType, json_data: rawData });
+        if (mergeKey != null) {
+          const sameType: PreviousConfirmed[] = await queryRunner.query(
+            `SELECT id, json_data, resulting_record_id, resulting_record_table
+             FROM ai.proposals
+             WHERE conversation_id = $1 AND person_id = $2 AND proposal_type = $3 AND status = 'CONFIRMED'`,
+            [conversationId, personId, proposalType],
+          );
+          previousConfirmed = sameType.find(
+            (p) => AIService.mergeKeyFor({ proposal_type: proposalType, json_data: p.json_data }) === mergeKey,
+          );
+        }
+      }
+
+      const dataToApply: Record<string, unknown> = previousConfirmed
+        ? {
+            ...previousConfirmed.json_data,
+            ...Object.fromEntries(Object.entries(rawData).filter(([, v]) => v != null)),
+          }
+        : rawData;
+
+      const [proposalRow] = await this.insertProposals(
+        queryRunner,
+        conversationId,
+        messageRow.id,
+        personId,
+        [{ proposalType, confidence: candidate.confidence, data: dataToApply as never }],
+        'openai-realtime',
+        this.config.get<string>('OPENAI_REALTIME_MODEL') ?? 'gpt-realtime',
+      );
+
+      await queryRunner.query(`SAVEPOINT realtime_apply`);
+      try {
+        if (previousConfirmed && AIService.CLINICAL_RESULT_TABLES.has(previousConfirmed.resulting_record_table)) {
+          await queryRunner.query(
+            `UPDATE ${previousConfirmed.resulting_record_table} SET deleted_at = NOW() WHERE id = $1`,
+            [previousConfirmed.resulting_record_id],
+          );
+        }
+        const applied = await this.applyConfirmedProposal(queryRunner, personId, {
+          id: proposalRow.id,
+          proposal_type: proposalType,
+          json_data: dataToApply,
+        });
+        await queryRunner.query(`RELEASE SAVEPOINT realtime_apply`);
+        await queryRunner.query(
+          `UPDATE ai.proposals
+           SET status = 'CONFIRMED', confirmed_at = NOW(), resulting_record_id = $2, resulting_record_table = $3
+           WHERE id = $1`,
+          [proposalRow.id, applied.resultingId, applied.resultingTable],
+        );
+        if (previousConfirmed) {
+          await queryRunner.query(
+            `UPDATE ai.proposals SET resulting_record_id = $2, resulting_record_table = $3 WHERE id = $1`,
+            [previousConfirmed.id, applied.resultingId, applied.resultingTable],
+          );
+        }
+        return { ...proposalRow, data: dataToApply, applied: true };
+      } catch (error) {
+        await queryRunner.query(`ROLLBACK TO SAVEPOINT realtime_apply`);
+        const reason =
+          error instanceof ConditionConflictError
+            ? `Ya tenías "${error.existingConditionName}" cargada`
+            : isSkippableConflict(error);
+        if (reason == null) throw error;
+        await queryRunner.query(
+          `UPDATE ai.proposals SET status = 'REJECTED', rejected_at = NOW() WHERE id = $1`,
+          [proposalRow.id],
+        );
+        return { ...proposalRow, data: dataToApply, applied: false, reason };
+      }
+    });
+  }
+
+  /**
+   * Equivalente Realtime de la tool discard_realtime_interview (ver
+   * openai.provider.ts) — el viajero pidió explícitamente cerrar sin
+   * guardar nada. IMPORTANTE: esto NO es lo mismo que
+   * rejectAllPendingProposals (usado por el popup "Descartar" genérico
+   * de las otras tres modalidades) — aquel solo descarta proposals
+   * PENDING_CONFIRMATION, pero con el guardado inmediato de
+   * saveRealtimeProposal ya no queda nada pendiente: los antecedentes
+   * de esta charla ya están CONFIRMED y aplicados de verdad a
+   * clinical.*. Acá hay que deshacerlos: dar de baja (soft-delete) cada
+   * registro clínico resultante de ESTA conversación y marcar sus
+   * proposals REJECTED. Deliberadamente se creó como método aparte en
+   * vez de generalizar rejectAllPendingProposalsInTx, para no arriesgar
+   * que el popup "Descartar" de Estructurado/Formulario empiece a
+   * deshacer antecedentes ya confirmados de una pausa anterior en esos
+   * modelos (ahí "Descartar" siempre debe limitarse a lo pendiente).
+   */
+  async discardRealtimeConversation(personId: string, conversationId: string) {
+    return this.txManager.runInTransaction(async (queryRunner) => {
+      const [conv] = await queryRunner.query(
+        `SELECT id FROM ai.conversations WHERE id = $1 AND person_id = $2`,
+        [conversationId, personId],
+      );
+      if (!conv) {
+        throw new NotFoundException('Conversación no encontrada, o no pertenece a tu cuenta.');
+      }
+
+      const rows: Array<{ id: string; resulting_record_id: string | null; resulting_record_table: string | null }> =
+        await queryRunner.query(
+          `SELECT id, resulting_record_id, resulting_record_table
+           FROM ai.proposals
+           WHERE conversation_id = $1 AND person_id = $2 AND status IN ('CONFIRMED', 'PENDING_CONFIRMATION')`,
+          [conversationId, personId],
+        );
+
+      for (const row of rows) {
+        if (
+          row.resulting_record_table &&
+          row.resulting_record_id &&
+          AIService.CLINICAL_RESULT_TABLES.has(row.resulting_record_table)
+        ) {
+          await queryRunner.query(
+            `UPDATE ${row.resulting_record_table} SET deleted_at = NOW() WHERE id = $1`,
+            [row.resulting_record_id],
+          );
+        }
+      }
+
+      await queryRunner.query(
+        `UPDATE ai.proposals
+         SET status = 'REJECTED', rejected_at = NOW()
+         WHERE conversation_id = $1 AND person_id = $2 AND status IN ('CONFIRMED', 'PENDING_CONFIRMATION')`,
+        [conversationId, personId],
+      );
+
+      return { discarded: rows.length };
+    });
+  }
+
+  /**
+   * Tabla/columna de nombre/catálogo por tipo de antecedente editable
+   * por voz — pedido explícito del usuario: "el usuario le hace una
+   * pregunta... quiere cambiar algo de lo que tiene cargado o bien
+   * eliminarlo... para que el modelo clásico tenga la posibilidad de
+   * que el usuario modifique sus antecedentes hablando con la IA". Solo
+   * los 5 tipos con un "nombre" reconocible por voz — VITALS y
+   * LAB_RESULT quedan fuera de esta vuelta (VITALS no tiene un nombre
+   * para buscar por voz; LAB_RESULT ya tiene su propia corrección por
+   * fecha+nombre dentro de applyConfirmedProposal).
+   */
+  private static readonly VOICE_EDITABLE_RECORD_TYPES: Record<
+    'CONDITION' | 'ALLERGY' | 'MEDICATION' | 'SURGERY' | 'IMPLANT_DEVICE' | 'TREATMENT',
+    { table: string; nameColumn: string; catalogDomain: string; activeFilter: string }
+  > = {
+    CONDITION: { table: 'clinical.conditions', nameColumn: 'condition_name', catalogDomain: 'CONDITION_CATALOG', activeFilter: 'AND active = TRUE' },
+    ALLERGY: { table: 'clinical.allergies', nameColumn: 'allergen_name', catalogDomain: 'ALLERGEN', activeFilter: '' },
+    MEDICATION: { table: 'clinical.medications', nameColumn: 'generic_name', catalogDomain: 'MEDICATION', activeFilter: 'AND active = TRUE AND is_current = TRUE' },
+    SURGERY: { table: 'clinical.surgeries', nameColumn: 'procedure_name', catalogDomain: 'SURGERY_CATALOG', activeFilter: '' },
+    IMPLANT_DEVICE: { table: 'clinical.implants_devices', nameColumn: 'device_name', catalogDomain: 'IMPLANT_TYPE', activeFilter: '' },
+    TREATMENT: { table: 'clinical.treatments', nameColumn: 'treatment_name', catalogDomain: 'TREATMENT_TYPE', activeFilter: 'AND active = TRUE' },
+  };
+
+  /**
+   * El celular llama a esto cuando la IA (motor Realtime) llama a la
+   * tool edit_or_delete_health_record — a diferencia de
+   * save_health_proposal (que agrega antecedentes nuevos o corrige algo
+   * dicho en ESTA MISMA charla, ver mergeKeyFor en saveRealtimeProposal),
+   * esto modifica o elimina un antecedente YA CONFIRMADO, de cualquier
+   * charla anterior (o de esta misma). Busca por nombre — la IA no
+   * maneja IDs, solo dice "cómo se llama" el antecedente tal como lo
+   * mencionó el viajero, y acá se resuelve contra lo que el viajero
+   * tiene realmente cargado (comparación sin acentos/mayúsculas, con
+   * fallback a coincidencia parcial).
+   */
+  async editOrDeleteHealthRecordByVoice(
+    personId: string,
+    conversationId: string,
+    params: {
+      recordType: 'CONDITION' | 'ALLERGY' | 'MEDICATION' | 'SURGERY' | 'IMPLANT_DEVICE' | 'TREATMENT';
+      matchName: string;
+      action: 'UPDATE' | 'DELETE';
+      data?: Record<string, unknown> | null;
+    },
+  ) {
+    return this.txManager.runInTransaction(async (queryRunner) => {
+      const [conv] = await queryRunner.query(
+        `SELECT id FROM ai.conversations WHERE id = $1 AND person_id = $2`,
+        [conversationId, personId],
+      );
+      if (!conv) {
+        throw new NotFoundException('Conversación no encontrada, o no pertenece a tu cuenta.');
+      }
+
+      // Pedido explícito del usuario: ninguna fecha (tampoco al
+      // corregir una por voz) puede ser futura ni anterior al
+      // nacimiento — ver el comentario grande en normalizeDateOrNull.
+      const [birthRow] = await queryRunner.query(
+        `SELECT birth_date FROM core.persons WHERE id = $1`,
+        [personId],
+      );
+      const birthDate: string | null = birthRow?.birth_date
+        ? (birthRow.birth_date instanceof Date ? birthRow.birth_date.toISOString().slice(0, 10) : String(birthRow.birth_date))
+        : null;
+
+      const config = AIService.VOICE_EDITABLE_RECORD_TYPES[params.recordType];
+      const candidates: Array<{ id: string; name: string }> = await queryRunner.query(
+        `SELECT id, core.decrypt_pii(${config.nameColumn}) AS name
+         FROM ${config.table}
+         WHERE person_id = $1 AND deleted_at IS NULL ${config.activeFilter}`,
+        [personId],
+      );
+
+      const norm = (v: string) => AIService.stripAccents(v.toLowerCase().trim());
+      const target = norm(params.matchName);
+      const match =
+        candidates.find((c) => norm(c.name) === target) ??
+        candidates.find((c) => norm(c.name).includes(target) || target.includes(norm(c.name)));
+
+      if (!match) {
+        throw new NotFoundException(
+          candidates.length
+            ? `No encontré "${params.matchName}" cargado. Lo que sí tenés cargado es: ${candidates.map((c) => c.name).join(', ')}.`
+            : 'No tenés ningún antecedente de ese tipo cargado todavía.',
+        );
+      }
+
+      if (params.action === 'DELETE') {
+        await queryRunner.query(`UPDATE ${config.table} SET deleted_at = NOW() WHERE id = $1`, [match.id]);
+        await this.insertMessage(queryRunner, {
+          conversationId,
+          personId,
+          sender: 'ASSISTANT',
+          message: `Antecedente eliminado por voz: ${match.name} (${params.recordType}).`,
+          provider: 'openai-realtime',
+          model: this.config.get<string>('OPENAI_REALTIME_MODEL') ?? 'gpt-realtime',
+        });
+        return { action: 'DELETE' as const, recordType: params.recordType, name: match.name };
+      }
+
+      const data = params.data ?? {};
+      // Solo se resuelve contra el catálogo si el viajero mencionó un
+      // nombre nuevo (está corrigiendo el nombre) — si no, se conserva
+      // el catalog_id que ya tenía.
+      const newNameField = AIService.NAME_FIELD_BY_RECORD_TYPE[params.recordType];
+      const newName = data[newNameField] as string | undefined;
+      const newCatalogId = newName
+        ? (await this.catalogResolution.resolveOrCreate(config.catalogDomain, newName)).id
+        : null;
+
+      switch (params.recordType) {
+        case 'CONDITION':
+          await queryRunner.query(
+            `UPDATE clinical.conditions SET
+               condition_name = COALESCE(core.encrypt_pii($2), condition_name),
+               condition_catalog_id = COALESCE($3, condition_catalog_id),
+               status_id = CASE WHEN $4::text IS NULL THEN status_id ELSE params.catalog_id('CONDITION_STATUS', $4) END,
+               diagnosed_at = COALESCE($5::date, diagnosed_at),
+               notes = COALESCE(core.encrypt_pii($6), notes)
+             WHERE id = $1`,
+            [match.id, newName ?? null, newCatalogId, data.statusCode ?? null, AIService.normalizeDateOrNull(data.diagnosedDate, birthDate), data.notes ?? null],
+          );
+          break;
+        case 'ALLERGY':
+          await queryRunner.query(
+            `UPDATE clinical.allergies SET
+               allergen_name = COALESCE(core.encrypt_pii($2), allergen_name),
+               allergen_catalog_id = COALESCE($3, allergen_catalog_id),
+               allergen_type_id = CASE WHEN $4::text IS NULL THEN allergen_type_id ELSE params.catalog_id('ALLERGEN_TYPE', $4) END,
+               severity_id = CASE WHEN $5::text IS NULL THEN severity_id ELSE params.catalog_id('REACTION_SEVERITY', $5) END,
+               notes = COALESCE(core.encrypt_pii($6), notes)
+             WHERE id = $1`,
+            [match.id, newName ?? null, newCatalogId, data.allergenType ?? null, data.severity ?? null, data.notes ?? null],
+          );
+          break;
+        case 'MEDICATION':
+          await queryRunner.query(
+            `UPDATE clinical.medications SET
+               generic_name = COALESCE(core.encrypt_pii($2), generic_name),
+               medication_catalog_id = COALESCE($3, medication_catalog_id),
+               brand_name = COALESCE(core.encrypt_pii($4), brand_name),
+               manufacturer = COALESCE(core.encrypt_pii($5), manufacturer),
+               dose_amount = COALESCE($6, dose_amount),
+               dose_unit_id = CASE WHEN $7::text IS NULL THEN dose_unit_id ELSE params.catalog_id('DOSE_UNIT', $7) END,
+               prescribed_date = COALESCE($8::date, prescribed_date),
+               is_current = COALESCE($9, is_current),
+               notes = COALESCE(core.encrypt_pii($10), notes)
+             WHERE id = $1`,
+            [
+              match.id, newName ?? null, newCatalogId,
+              data.brandName ?? null, data.manufacturer ?? null, data.doseAmount ?? null, data.doseUnit ?? null,
+              AIService.normalizeDateOrNull(data.prescribedDate, birthDate), data.isCurrent ?? null, data.notes ?? null,
+            ],
+          );
+          break;
+        case 'SURGERY':
+          await queryRunner.query(
+            `UPDATE clinical.surgeries SET
+               procedure_name = COALESCE(core.encrypt_pii($2), procedure_name),
+               procedure_catalog_id = COALESCE($3, procedure_catalog_id),
+               performed_at = COALESCE($4::date, performed_at),
+               notes = COALESCE(core.encrypt_pii($5), notes)
+             WHERE id = $1`,
+            [match.id, newName ?? null, newCatalogId, AIService.normalizeDateOrNull(data.performedDate, birthDate), data.notes ?? null],
+          );
+          break;
+        case 'IMPLANT_DEVICE':
+          await queryRunner.query(
+            `UPDATE clinical.implants_devices SET
+               device_name = COALESCE(core.encrypt_pii($2), device_name),
+               device_type_id = COALESCE($3, device_type_id),
+               implanted_at = COALESCE($4::date, implanted_at),
+               notes = COALESCE(core.encrypt_pii($5), notes)
+             WHERE id = $1`,
+            [match.id, newName ?? null, newCatalogId, AIService.normalizeDateOrNull(data.implantedAt, birthDate), data.notes ?? null],
+          );
+          break;
+        case 'TREATMENT':
+          await queryRunner.query(
+            `UPDATE clinical.treatments SET
+               treatment_name = COALESCE(core.encrypt_pii($2), treatment_name),
+               treatment_catalog_id = COALESCE($3, treatment_catalog_id),
+               status_id = CASE WHEN $4::text IS NULL THEN status_id ELSE params.catalog_id('CONDITION_STATUS', $4) END,
+               started_at = COALESCE($5::date, started_at),
+               notes = COALESCE(core.encrypt_pii($6), notes)
+             WHERE id = $1`,
+            [match.id, newName ?? null, newCatalogId, data.statusCode ?? null, AIService.normalizeDateOrNull(data.startedAt, birthDate), data.notes ?? null],
+          );
+          break;
+      }
+
+      await this.insertMessage(queryRunner, {
+        conversationId,
+        personId,
+        sender: 'ASSISTANT',
+        message: `Antecedente modificado por voz: ${match.name} (${params.recordType}).`,
+        provider: 'openai-realtime',
+        model: this.config.get<string>('OPENAI_REALTIME_MODEL') ?? 'gpt-realtime',
+      });
+
+      return { action: 'UPDATE' as const, recordType: params.recordType, name: newName ?? match.name };
+    });
+  }
+
+  private static readonly NAME_FIELD_BY_RECORD_TYPE: Record<
+    'CONDITION' | 'ALLERGY' | 'MEDICATION' | 'SURGERY' | 'IMPLANT_DEVICE' | 'TREATMENT',
+    string
+  > = {
+    CONDITION: 'conditionName',
+    ALLERGY: 'allergenName',
+    MEDICATION: 'genericName',
+    SURGERY: 'procedureName',
+    IMPLANT_DEVICE: 'deviceName',
+    TREATMENT: 'treatmentName',
+  };
+
+  /**
+   * Bug real reportado en vivo: "el costo de hoy sale en cero cuando hoy
+   * estuvimos trabajando con la IA y más con el modo clásico modificado"
+   * — el motor Realtime nunca registraba tokens/costo en ai.messages
+   * (a diferencia de Clásico/Estructurado, que sí lo hacen en cada turno),
+   * así que el dashboard de consumo mostraba $0 para toda la actividad
+   * real del día. El celular llama a esto cada vez que llega un evento
+   * response.done con datos de uso (ver RealtimeVoiceEngine._handleUsage)
+   * — se inserta como un mensaje más de auditoría, mismo criterio que
+   * usan los otros modelos, con el pricing REAL de gpt-realtime (ver
+   * REALTIME_USD_PER_1M_* en openai.provider.ts, verificado contra la
+   * página oficial de precios — el audio cuesta bastante más que el
+   * texto, así que no se puede reusar el cálculo de los otros modelos).
+   */
+  async recordRealtimeUsage(
+    personId: string,
+    conversationId: string,
+    usage: {
+      textInputTokens: number;
+      audioInputTokens: number;
+      cachedInputTokens: number;
+      textOutputTokens: number;
+      audioOutputTokens: number;
+      totalInputTokens: number;
+      totalOutputTokens: number;
+    },
+  ) {
+    return this.txManager.runInTransaction(async (queryRunner) => {
+      const [conv] = await queryRunner.query(
+        `SELECT id FROM ai.conversations WHERE id = $1 AND person_id = $2`,
+        [conversationId, personId],
+      );
+      if (!conv) {
+        throw new NotFoundException('Conversación no encontrada, o no pertenece a tu cuenta.');
+      }
+
+      // El audio cacheado (turnos anteriores reenviados como contexto)
+      // sale mucho más barato — se resta del audio "normal" para no
+      // cobrarlo dos veces, mismo criterio con el que OpenAI reporta
+      // input_token_details (cached_tokens ya está incluido en audio_tokens).
+      const uncachedAudioInput = Math.max(0, usage.audioInputTokens - usage.cachedInputTokens);
+      const estimatedCostUsd =
+        (usage.textInputTokens / 1_000_000) * REALTIME_USD_PER_1M_TEXT_INPUT_TOKENS +
+        (uncachedAudioInput / 1_000_000) * REALTIME_USD_PER_1M_AUDIO_INPUT_TOKENS +
+        (usage.cachedInputTokens / 1_000_000) * REALTIME_USD_PER_1M_CACHED_AUDIO_INPUT_TOKENS +
+        (usage.textOutputTokens / 1_000_000) * REALTIME_USD_PER_1M_TEXT_OUTPUT_TOKENS +
+        (usage.audioOutputTokens / 1_000_000) * REALTIME_USD_PER_1M_AUDIO_OUTPUT_TOKENS;
+
+      await this.insertMessage(queryRunner, {
+        conversationId,
+        personId,
+        sender: 'ASSISTANT',
+        message: '(uso de tokens de voz — Realtime)',
+        provider: 'openai-realtime',
+        model: this.config.get<string>('OPENAI_REALTIME_MODEL') ?? 'gpt-realtime',
+        tokensInput: usage.totalInputTokens,
+        tokensOutput: usage.totalOutputTokens,
+        estimatedCostUsd,
+      });
+    });
+  }
+
+  /**
+   * Bug real reportado en vivo: el dashboard de Consumo de IA mostraba
+   * "Mensajes hoy: 0" con "4 conversaciones activas" el mismo día —
+   * ai.get_platform_summary() cuenta mensajes_hoy filtrando
+   * sender = 'USER' (ver proposed-ai-consumption-dashboard-fns.sql), y
+   * el motor Realtime nunca insertaba esa fila: lo que dice el viajero
+   * solo se mostraba en pantalla del celular (ver onUserTranscript en
+   * RealtimeVoiceEngine), nunca se mandaba al backend como mensaje —
+   * a diferencia de Clásico (texto) y Estructurado, que sí lo hacen en
+   * cada turno. Mismo motivo por el que "Consumo por viajero" mostraba
+   * 0 mensajes para Marcelo con costo y tokens reales. Se llama en
+   * paralelo (fire-and-forget del lado del celular, no bloquea la
+   * conversación de voz) cada vez que llega una transcripción del
+   * viajero.
+   */
+  async recordRealtimeUserMessage(personId: string, conversationId: string, text: string) {
+    return this.txManager.runInTransaction(async (queryRunner) => {
+      const [conv] = await queryRunner.query(
+        `SELECT id FROM ai.conversations WHERE id = $1 AND person_id = $2`,
+        [conversationId, personId],
+      );
+      if (!conv) {
+        throw new NotFoundException('Conversación no encontrada, o no pertenece a tu cuenta.');
+      }
+      await this.insertMessage(queryRunner, {
+        conversationId,
+        personId,
+        sender: 'USER',
+        message: text,
+        provider: 'openai-realtime',
+        model: this.config.get<string>('OPENAI_REALTIME_MODEL') ?? 'gpt-realtime',
+      });
+    });
+  }
+
   // ══════════════════════════════════════════════════════════
   // MODELO FORMULARIO — pedido explícito del usuario: una TERCERA forma
   // de cargar la Ficha de Salud, junto al Clásico (charla libre) y el
@@ -502,12 +1139,20 @@ export class AIService {
     return `${birthYear + age}-01-01`;
   }
 
-  /** parseFormDate + fallback a fecha relativa por edad (ver resolveAgeRelativeDate). */
+  /**
+   * parseFormDate + fallback a fecha relativa por edad (ver
+   * resolveAgeRelativeDate) + la MISMA validación de plausibilidad que
+   * normalizeDateOrNull (ver isPlausibleResolvedDate) — pedido
+   * explícito del usuario: "no debería pasar en ningún caso... que
+   * ponga una fecha futura o antes del nacimiento de la persona". Un
+   * resultado futuro o anterior al nacimiento se trata igual que uno
+   * no parseable (undefined) — nunca se guarda como si fuera un dato
+   * real, sin importar si el TEXTO en sí tenía buen formato.
+   */
   private static parseFormDateWithAge(raw: string | undefined, birthDate: string | null | undefined): string | undefined {
-    const direct = AIService.parseFormDate(raw);
-    if (direct) return direct;
-    if (!raw) return undefined;
-    return AIService.resolveAgeRelativeDate(raw, birthDate);
+    const direct = AIService.parseFormDate(raw) ?? (raw ? AIService.resolveAgeRelativeDate(raw, birthDate) : undefined);
+    if (!direct) return undefined;
+    return AIService.isPlausibleResolvedDate(direct, birthDate) ? direct : undefined;
   }
 
   /**
@@ -561,6 +1206,37 @@ export class AIService {
     ptInr: ['pt-inr', 'inr', 'protrombina'],
     aptt: ['aptt', 'ttpa'],
   };
+
+  /**
+   * Bug real reportado en vivo: "Hubo un inconveniente al registrar el
+   * dato del colesterol alto" — el motor Realtime no usa json_schema en
+   * modo strict para save_health_proposal (a diferencia del modelo
+   * Clásico de texto), así que el modelo NO está obligado a respetar la
+   * forma exacta del schema. Esta vez mandó customValues como un objeto
+   * suelto ({"descripcion": "colesterol elevado detectado"}) en vez del
+   * array de {name, value} esperado — el spread `...(data.customValues
+   * ?? [])` de más abajo tiraba "is not iterable" (TypeError sin
+   * capturar → 500), y el antecedente se perdía entero después de 3
+   * reintentos fallidos, sin ningún camino para guardarlo igual. Acá se
+   * normaliza cualquier forma razonable en vez de asumir que ya viene
+   * bien: un array ya válido se limpia, un objeto suelto se convierte a
+   * pares {name, value} (conservando el dato en vez de perderlo), y
+   * cualquier otra cosa (string, número, null) se descarta en silencio.
+   */
+  private static normalizeCustomValues(raw: unknown): { name: string; value: string }[] {
+    if (Array.isArray(raw)) {
+      return raw
+        .filter((cv): cv is Record<string, unknown> => cv != null && typeof cv === 'object')
+        .map((cv) => ({ name: String(cv['name'] ?? '').trim(), value: String(cv['value'] ?? '').trim() }))
+        .filter((cv) => cv.name.length > 0 && cv.value.length > 0);
+    }
+    if (raw != null && typeof raw === 'object') {
+      return Object.entries(raw as Record<string, unknown>)
+        .map(([name, value]) => ({ name: name.trim(), value: String(value ?? '').trim() }))
+        .filter((cv) => cv.name.length > 0 && cv.value.length > 0);
+    }
+    return [];
+  }
 
   private static dedupeLabCustomValues(
     data: Record<string, unknown>,
@@ -683,6 +1359,15 @@ export class AIService {
       let validationProvider = 'form';
       let validationModel = 'form';
       const corrections: { original: string; corrected: string }[] = [];
+      // Pedido explícito del usuario: "no podemos registrar cualquier
+      // cosa... el médico que atiende la emergencia no va a entender
+      // qué dice la ficha de salud" — bug real encontrado revisando
+      // este método: "invalid" ya lo calculaba la IA, pero nunca se
+      // usaba para IMPEDIR el guardado — un entry inválido caía en el
+      // fallback de resolvedText() y se guardaba con el texto crudo
+      // original igual. Acá sí se usa: invalidIds bloquea que ese
+      // campo se guarde tal cual (ver más abajo, por tipo).
+      const invalidIds = new Set<string>();
 
       if (freeTextEntries.length > 0) {
         const validation = await this.provider.validateFreeTextEntries(freeTextEntries);
@@ -701,13 +1386,23 @@ export class AIService {
           processingMs: validation.processingMs,
         });
         for (const entry of validation.entries) {
-          if (entry.invalid) continue;
+          if (entry.invalid) {
+            invalidIds.add(entry.id);
+            continue;
+          }
           correctedById.set(entry.id, entry.corrected);
           const original = freeTextEntries.find((e) => e.id === entry.id)?.text;
           if (entry.wasCorrected && original) corrections.push({ original, corrected: entry.corrected });
         }
       }
       const resolvedText = (id: string, fallback: string) => correctedById.get(id) ?? fallback;
+      // Se muestra al viajero qué NO se guardó y por qué — transparencia
+      // en vez de descartarlo en silencio (mismo criterio que corrections).
+      const skipped: { text: string; kind: string }[] = [];
+      const trackSkipped = (id: string) => {
+        const entry = freeTextEntries.find((e) => e.id === id);
+        if (entry) skipped.push({ text: entry.text, kind: entry.kind });
+      };
 
       const candidates: AIProposalCandidate[] = [];
 
@@ -749,26 +1444,57 @@ export class AIService {
       // haya cargado.
       const conditionQuestionIds = form.conditions.map((c) => c.questionId).filter((id): id is string => !!id);
       const conditionLabelById = new Map<string, string>();
+      // Pedido explícito del usuario: "para el caso de diálisis... es
+      // un tratamiento" — DIALYSIS ya no es proposal_type CONDITION
+      // (ver proposed-treatment-type.sql), pero el móvil sigue
+      // mandando su respuesta dentro de form.conditions (el Formulario
+      // agrupa ahí toda pregunta de sí/no fija que no sea medicamento/
+      // alergia/cirugía/implante). Sin este chequeo se guardaría igual
+      // como CONDITION, exactamente el bug que se está corrigiendo.
+      const proposalTypeById = new Map<string, string>();
       if (conditionQuestionIds.length > 0) {
         const rows = await queryRunner.query(
-          `SELECT id, condition_label FROM ai.interview_questions WHERE id = ANY($1)`,
+          `SELECT id, condition_label, proposal_type FROM ai.interview_questions WHERE id = ANY($1)`,
           [conditionQuestionIds],
         );
         for (const row of rows) {
           if (row.condition_label) conditionLabelById.set(row.id, row.condition_label);
+          proposalTypeById.set(row.id, row.proposal_type);
         }
       }
 
       form.conditions.forEach((c, i) => {
-        const detail = resolvedText(`condition_${i}`, c.detail ?? '').trim();
+        // Si el detalle libre no pasó la validación (ej. "colesterol
+        // alto" — real, pero no es una enfermedad), se ignora el
+        // detalle y se guarda con el nombre de la pregunta/categoría
+        // (fallbackLabel) — nunca se guarda el detalle inválido.
+        const detailId = `condition_${i}`;
+        if (invalidIds.has(detailId)) trackSkipped(detailId);
+        const detail = invalidIds.has(detailId) ? '' : resolvedText(detailId, c.detail ?? '').trim();
         const fallbackLabel = (c.questionId && conditionLabelById.get(c.questionId)) ||
           c.label.replace(/\s*\([^)]*\)\s*$/, '').trim();
-        const conditionName = detail || fallbackLabel;
+        const name = detail || fallbackLabel;
+
+        if (c.questionId && proposalTypeById.get(c.questionId) === 'TREATMENT') {
+          candidates.push({
+            proposalType: 'TREATMENT',
+            confidence: 0.9,
+            data: {
+              treatmentName: name,
+              statusCode: AIService.inferChronicStatus(c.label),
+              startedAtRaw: c.dateRaw,
+              startedAt: AIService.parseFormDateWithAge(c.dateRaw, birthDate),
+              sourceQuestionId: c.questionId,
+            },
+          });
+          return;
+        }
+
         candidates.push({
           proposalType: 'CONDITION',
           confidence: 0.9,
           data: {
-            conditionName,
+            conditionName: name,
             statusCode: AIService.inferChronicStatus(c.label),
             diagnosedDateRaw: c.dateRaw,
             diagnosedDate: AIService.parseFormDateWithAge(c.dateRaw, birthDate),
@@ -777,12 +1503,18 @@ export class AIService {
         });
       });
 
+      // Alergia/medicamento/cirugía/implante no tienen un fallbackLabel
+      // como CONDITION (todo el proposal ES ese nombre libre) — si no
+      // pasó la validación, no hay nada válido que guardar: se omite el
+      // candidate entero en vez de guardarlo con el texto crudo.
       form.allergies.forEach((a, i) => {
+        const id = `allergy_${i}`;
+        if (invalidIds.has(id)) { trackSkipped(id); return; }
         candidates.push({
           proposalType: 'ALLERGY',
           confidence: 0.9,
           data: {
-            allergenName: resolvedText(`allergy_${i}`, a.name),
+            allergenName: resolvedText(id, a.name),
             allergenType: a.allergenType as AIAllergyProposalData['allergenType'],
             severity: a.severity as AIAllergyProposalData['severity'],
           },
@@ -790,13 +1522,15 @@ export class AIService {
       });
 
       form.medications.forEach((m, i) => {
+        const id = `medication_${i}`;
+        if (invalidIds.has(id)) { trackSkipped(id); return; }
         candidates.push({
           proposalType: 'MEDICATION',
           confidence: 0.9,
           data: (() => {
             const dose = AIService.parseDoseText(m.dose);
             return {
-              genericName: resolvedText(`medication_${i}`, m.name),
+              genericName: resolvedText(id, m.name),
               prescribedDateRaw: m.sinceRaw,
               prescribedDate: AIService.parseFormDateWithAge(m.sinceRaw, birthDate),
               doseAmount: dose?.amount,
@@ -808,11 +1542,13 @@ export class AIService {
       });
 
       form.surgeries.forEach((s, i) => {
+        const id = `surgery_${i}`;
+        if (invalidIds.has(id)) { trackSkipped(id); return; }
         candidates.push({
           proposalType: 'SURGERY',
           confidence: 0.9,
           data: {
-            procedureName: resolvedText(`surgery_${i}`, s.name),
+            procedureName: resolvedText(id, s.name),
             performedDateRaw: s.dateRaw,
             performedDate: AIService.parseFormDateWithAge(s.dateRaw, birthDate),
           },
@@ -820,11 +1556,13 @@ export class AIService {
       });
 
       form.implants.forEach((im, i) => {
+        const id = `implant_${i}`;
+        if (invalidIds.has(id)) { trackSkipped(id); return; }
         candidates.push({
           proposalType: 'IMPLANT_DEVICE',
           confidence: 0.9,
           data: {
-            deviceName: resolvedText(`implant_${i}`, im.name),
+            deviceName: resolvedText(id, im.name),
             implantedAtRaw: im.dateRaw,
             implantedAt: AIService.parseFormDateWithAge(im.dateRaw, birthDate),
           },
@@ -835,7 +1573,7 @@ export class AIService {
         queryRunner, conversationId, userMessage.id, personId, candidates, validationProvider, validationModel,
       );
 
-      return { conversationId, proposals: proposalRows, corrections };
+      return { conversationId, proposals: proposalRows, corrections, skipped };
     });
   }
 
@@ -878,6 +1616,23 @@ export class AIService {
         input.conditionName,
       );
       const diagnosedDate = AIService.parseFormDateWithAge(input.dateRaw, birthDate);
+      // Pedido explícito del usuario: "no tiene que solo aislar los
+      // casos con falla de fecha sino que tiene que informar el
+      // problema al usuario para que lo corrija" — antes, una fecha
+      // con mal formato o implausible (futura, o anterior al
+      // nacimiento) simplemente no se guardaba (diagnosedDate quedaba
+      // undefined) y el COALESCE de abajo conservaba la fecha VIEJA en
+      // silencio — el viajero corregía la fecha en pantalla, tocaba
+      // guardar, y la ficha se quedaba con el dato de antes sin ningún
+      // aviso de que su corrección no había entrado. Ahora, si SÍ
+      // escribió algo en el campo de fecha pero no se pudo resolver a
+      // una fecha real y plausible, se corta acá con un error claro en
+      // vez de guardar en silencio como si nada.
+      if (input.dateRaw?.trim() && !diagnosedDate) {
+        throw new BadRequestException(
+          'La fecha ingresada no es válida — no puede ser una fecha futura, anterior al nacimiento, ni tener un formato irreconocible. Corregila e intentá de nuevo.',
+        );
+      }
 
       await queryRunner.query(
         `UPDATE clinical.conditions
@@ -960,6 +1715,7 @@ export class AIService {
                     UNION ALL SELECT 1 FROM clinical.medications WHERE person_id = p.id AND deleted_at IS NULL AND active = TRUE
                     UNION ALL SELECT 1 FROM clinical.surgeries WHERE person_id = p.id AND deleted_at IS NULL
                     UNION ALL SELECT 1 FROM clinical.implants_devices WHERE person_id = p.id AND deleted_at IS NULL AND active = TRUE
+                    UNION ALL SELECT 1 FROM clinical.treatments WHERE person_id = p.id AND deleted_at IS NULL AND active = TRUE
                   ) AS has_data
            FROM core.persons p WHERE p.id = $1`,
           [personId],
@@ -1018,20 +1774,26 @@ export class AIService {
            ) AS setting_value`,
           [greetingKey, greetingKeyBase],
         );
+        // Pedido explícito del usuario: "no queda bien siempre
+        // preguntar [indicar sí o no], solo haría la pregunta" — se
+        // avisa UNA sola vez acá, al arrancar, en vez de repetirlo en
+        // cada pregunta de sí/no de toda la entrevista (ver
+        // formatStructuredQuestion).
+        const yesNoHint = AIService.t('structuredYesNoHint', language);
         const greetingTemplate = greetingSetting?.setting_value ?? (
           needsReminder
             ? 'Hola {firstName}, soy su asistente virtual de Historial de Salud.\n\n' +
               'Veo que la última actualización fue el {lastUpdated} — ya pasó un buen tiempo. ¿Tenés alguna ' +
-              'novedad de salud para contarme?\n\nVoy a repasar tus datos y saltear lo que ya está confirmado.'
+              `novedad de salud para contarme?\n\nVoy a repasar tus datos y saltear lo que ya está confirmado. ${yesNoHint}`
             : hasExistingData
               ? 'Hola {firstName}, soy su asistente virtual de Historial de Salud.\n\n' +
                 'Ya tenés datos cargados — la última actualización fue el {lastUpdated}. Esto va a funcionar ' +
                 'como una actualización: voy a saltear lo que ya está confirmado y solo preguntarte por lo que ' +
-                'falta o cambió.\n\nComenzaremos a repasar sus datos de salud.'
+                `falta o cambió.\n\nComenzaremos a repasar sus datos de salud. ${yesNoHint}`
               : 'Hola {firstName}, soy su asistente virtual para confeccionar su historia clínica de salud.\n\n' +
                 'Estos datos son total y absolutamente confidenciales y solo podrán ser utilizados por usted en ' +
                 'caso de requerir atención médica durante su viaje, y con el objetivo de facilitar el acceso a ' +
-                'una correcta atención.\n\nComenzaremos a registrar sus datos de salud.'
+                `una correcta atención.\n\nComenzaremos a registrar sus datos de salud. ${yesNoHint}`
         );
         const dateLocale = { es: 'es-AR', en: 'en-US', pt: 'pt-BR', fr: 'fr-FR' }[language];
         const lastUpdated = person?.health_record_last_updated_at
@@ -1040,9 +1802,28 @@ export class AIService {
         const greeting = greetingTemplate
           .replaceAll('{firstName}', firstName)
           .replaceAll('{lastUpdated}', lastUpdated);
-        const reply = firstQuestion
-          ? `${greeting}\n\n${this.formatStructuredQuestion(firstQuestion, language)}`
-          : `${greeting}\n\nNo hay preguntas configuradas todavía.`;
+
+        // Pedido explícito del usuario: "si el usuario no tiene cargado
+        // su peso y altura y grupo sanguíneo, el estructurado lo
+        // debería solicitar... esto lo hace bien el formulario" — se
+        // resuelve ANTES de la primera pregunta normal (pending_step=
+        // 'VITALS_INTAKE'), guardando en answers qué campos se
+        // preguntaron para que handleVitalsAnswer sepa qué esperar y
+        // current_question_id ya apunta a la primera pregunta real de
+        // ai.interview_questions para retomarla apenas se conteste esto.
+        const missingVitals = await this.getMissingVitalsQuestion(queryRunner, personId, language);
+        if (missingVitals) {
+          await queryRunner.query(
+            `UPDATE ai.interview_sessions SET pending_step = 'VITALS_INTAKE', answers = $2 WHERE conversation_id = $1`,
+            [convId, JSON.stringify({ question: missingVitals.question, fields: missingVitals.fields })],
+          );
+        }
+
+        const reply = missingVitals
+          ? `${greeting}\n\n${missingVitals.question}`
+          : firstQuestion
+            ? `${greeting}\n\n${this.formatStructuredQuestion(firstQuestion, language)}`
+            : `${greeting}\n\nNo hay preguntas configuradas todavía.`;
         // (el cliente móvil hace una pausa antes de leer la última
         // parte — ver health_assistant_screen.dart::_startConversation)
 
@@ -1055,7 +1836,7 @@ export class AIService {
           model: null,
         });
 
-        const firstOptions = firstQuestion && firstQuestion.proposal_type !== 'MEDICATION'
+        const firstOptions = !missingVitals && firstQuestion && firstQuestion.proposal_type !== 'OPEN_ENDED' && !(firstQuestion.proposal_type === 'MEDICATION' && !firstQuestion.asks_date)
           ? AIService.yesNoOptions(language)
           : null;
         return { conversationId: convId, reply, interviewComplete: false, options: firstOptions, pauseRequested: false };
@@ -1082,6 +1863,16 @@ export class AIService {
         provider: 'structured',
         model: null,
       });
+
+      // Turno especial de peso/altura/grupo sanguíneo (ver
+      // getMissingVitalsQuestion/handleVitalsAnswer) — se resuelve ACÁ,
+      // ANTES del chequeo de current_question_id de abajo: durante este
+      // turno current_question_id ya apunta a la PRÓXIMA pregunta real
+      // (a la que hay que volver después), no a "la pregunta actual"
+      // que el resto de este método asume.
+      if (session.pending_step === 'VITALS_INTAKE') {
+        return this.handleVitalsAnswer(queryRunner, conversationId, personId, userMessage.id, session, answerText, language);
+      }
 
       if (!session.current_question_id) {
         // Ya se había llegado al cierre — este turno es la respuesta a
@@ -1180,7 +1971,11 @@ export class AIService {
         const detail = pending.detail ?? null;
         const dateRaw = pending.dateRaw ?? null;
         const date = pending.date ?? null;
-        const missingDetail = currentQuestion.free_text_enabled && !detail;
+        // Ver el comentario grande en el chequeo equivalente de más
+        // abajo (turno inicial) — condition_label es el respaldo que
+        // hace que NO haga falta insistir en un "¿Cuál?" para
+        // preguntas simples de sí/no como hipertensión.
+        const missingDetail = currentQuestion.free_text_enabled && !currentQuestion.condition_label && !detail;
         const missingDate = currentQuestion.asks_date && !dateRaw && !date;
 
         if (missingDetail || missingDate) {
@@ -1228,8 +2023,24 @@ export class AIService {
           detail?: string | null;
           dateRaw?: string | null;
           date?: string | null;
+          dateAttempts?: number;
+          detailAttempts?: number;
         };
-        const needsDetail = currentQuestion.free_text_enabled && !priorAnswers.detail;
+        // Bug real reportado en vivo: "Epoc enero 2020 si me pregunta
+        // por hipertensión" — dijo "Sí" a "¿Tiene hipertensión
+        // arterial?" y en vez de pasar directo a pedir la fecha,
+        // insistía con "¿Cuál, y en qué fecha aproximada?" — hipertensión
+        // no tiene "cuál" (no es como diabetes, con subtipos reales),
+        // pero el código exigía un detalle igual solo porque
+        // free_text_enabled es true en TODAS las preguntas de condición
+        // (para poder aceptar detalle opcional si lo dan, ej. "hipertensión
+        // secundaria"), sin distinguir cuándo es realmente necesario.
+        // condition_label (cargado para casi todas menos las que sí
+        // necesitan "cuál" — diabetes, alergias, cirugías, anticoagulante)
+        // es el nombre de respaldo ya pensado justo para este caso — ver
+        // buildStructuredProposal. Si existe, el detalle es opcional, no
+        // obligatorio.
+        const needsDetail = currentQuestion.free_text_enabled && !currentQuestion.condition_label && !priorAnswers.detail;
 
         let finalDetail = priorAnswers.detail ?? null;
         let finalDateRaw = priorAnswers.dateRaw ?? null;
@@ -1262,6 +2073,7 @@ export class AIService {
               questionText: currentQuestion.question_text,
               options: currentQuestion.options,
               asksDate: currentQuestion.asks_date,
+              expectedKind: AIService.expectedKindLabel(currentQuestion.proposal_type),
             },
             answerText,
             knownNames,
@@ -1279,6 +2091,17 @@ export class AIService {
             estimatedCostUsd: llmResult.estimatedCostUsd,
             processingMs: llmResult.processingMs,
           });
+          // Bug real reportado en vivo: la viajera pidió cerrar SIN
+          // guardar nada, y se guardaba igual — antes no había ninguna
+          // intención distinta de "wantsToPause" (que siempre guarda).
+          if (llmResult.wantsToDiscard) {
+            await this.rejectAllPendingProposalsInTx(queryRunner, personId, conversationId);
+            const reply = AIService.t('discardedAll', language);
+            await this.insertMessage(queryRunner, {
+              conversationId, personId, sender: 'ASSISTANT', message: reply, provider: 'structured', model: null,
+            });
+            return { conversationId, reply, interviewComplete: true, options: null, pauseRequested: true };
+          }
           // Pedido explícito del usuario: la IA entiende "quiero pausar"
           // en cualquier idioma/forma en vez de una lista de frases fijas
           // — se confirma todo lo pendiente EN ESTA MISMA transacción y
@@ -1292,16 +2115,29 @@ export class AIService {
             return { conversationId, reply, interviewComplete: true, options: null, pauseRequested: true };
           }
           if (!llmResult.unclear && llmResult.applicable && llmResult.detail) {
-            finalDetail = llmResult.detail;
-            finalDateRaw ??= llmResult.dateRaw;
-            finalDate ??= llmResult.date;
-            if (llmResult.correctedFrom) {
-              correctionNotice = AIService.t('correctionNotice', language)
-                .replace('{detail}', llmResult.detail)
-                .replace('{original}', llmResult.correctedFrom);
+            if (!llmResult.plausible) {
+              // Pedido explícito del usuario: no se guarda nada que no
+              // sea un concepto médico real — mismo criterio que unclear.
+              clarification = AIService.t('notPlausible', language);
+            } else if (llmResult.categoryMismatch) {
+              // Real, pero de otro tipo (ej. "colesterol alto" en una
+              // pregunta de enfermedad) — se reclasifica aparte y esta
+              // pregunta puntual sigue sin contestar.
+              clarification = await this.handleCategoryMismatch(
+                queryRunner, conversationId, personId, userMessage.id, answerText, language,
+              );
+            } else {
+              finalDetail = llmResult.detail;
+              finalDateRaw ??= llmResult.dateRaw;
+              finalDate ??= AIService.reconcileDate(llmResult.dateRaw, llmResult.date);
+              if (llmResult.correctedFrom) {
+                correctionNotice = AIService.t('correctionNotice', language)
+                  .replace('{detail}', llmResult.detail)
+                  .replace('{original}', llmResult.correctedFrom);
+              }
             }
           }
-          clarification = llmResult.clarification;
+          clarification ??= llmResult.clarification;
         } else {
           const followupParsed = this.parseFollowupAnswer(currentQuestion, answerText, priorAnswers, birthDate);
           finalDetail ??= followupParsed.detail;
@@ -1314,7 +2150,15 @@ export class AIService {
         // sigue sin haber detalle (no matcheó ninguna opción, o la IA
         // lo marcó unclear/no aplicable), se vuelve a pedir en vez de
         // guardar algo dudoso.
-        if (currentQuestion.free_text_enabled && !finalDetail) {
+        //
+        // Bug real reportado en vivo (mismo criterio que dateAttempts
+        // más abajo): sin límite, una respuesta que nunca matchea podía
+        // dejar este "¿Cuál?" pidiéndose para siempre. Al segundo
+        // intento fallido se deja de insistir y se guarda con lo que
+        // haya — buildStructuredProposal ya tiene su propio fallback
+        // (condition_label, o si no, el texto de la pregunta pelado).
+        const detailAttempts = priorAnswers.detailAttempts ?? 0;
+        if (currentQuestion.free_text_enabled && !currentQuestion.condition_label && !finalDetail && detailAttempts < 2) {
           // Bug real reportado en vivo: la respuesta salía "sin lógica"
           // — cuando la IA ya devuelve su PROPIA pregunta de aclaración
           // completa (ej. "¿Tuvo alguna enfermedad cardiovascular? ¿Qué
@@ -1328,6 +2172,12 @@ export class AIService {
           await this.insertMessage(queryRunner, {
             conversationId, personId, sender: 'ASSISTANT', message: reply, provider: 'structured', model: null,
           });
+          await queryRunner.query(
+            `UPDATE ai.interview_sessions SET answers = $2 WHERE id = $1`,
+            [session.id, JSON.stringify({
+              detail: finalDetail, dateRaw: finalDateRaw, date: finalDate, detailAttempts: detailAttempts + 1,
+            })],
+          );
           return { conversationId, reply, interviewComplete: false, options: currentQuestion.options ?? null, pauseRequested: false };
         }
 
@@ -1338,7 +2188,17 @@ export class AIService {
         // por separado. Con el detalle ya resuelto pero la fecha
         // todavía pendiente, se sigue en FOLLOWUP y se pide puntualmente
         // la fecha en el próximo turno, en vez de guardarlo sin ella.
-        const stillMissingDate = currentQuestion.asks_date && !finalDateRaw && !finalDate;
+        // Bug real reportado en vivo: "se queda colgado cuando le digo
+        // la fecha... se volvió loco, repite y repite" — una fecha que
+        // el parser determinístico no reconoce (algún formato raro que
+        // ni el arreglo de arriba cubre) volvía a pedirse PARA SIEMPRE,
+        // sin ningún límite ni explicación. dateAttempts cuenta cuántas
+        // veces YA se le pidió la fecha en este mismo antecedente — al
+        // segundo intento fallido se deja de insistir y se guarda sin
+        // fecha (mismo criterio de todo el archivo: mejor el
+        // antecedente sin fecha que trabar la charla entera).
+        const dateAttempts = priorAnswers.dateAttempts ?? 0;
+        const stillMissingDate = currentQuestion.asks_date && !finalDateRaw && !finalDate && dateAttempts < 2;
         if (stillMissingDate) {
           // Bug real reportado en vivo: si se corrigió un typo (ej.
           // "asmita" -> "Asma"), el aviso "decime si me equivoqué" iba
@@ -1354,7 +2214,9 @@ export class AIService {
           }
           await queryRunner.query(
             `UPDATE ai.interview_sessions SET answers = $2 WHERE id = $1`,
-            [session.id, JSON.stringify({ detail: finalDetail, dateRaw: finalDateRaw, date: finalDate })],
+            [session.id, JSON.stringify({
+              detail: finalDetail, dateRaw: finalDateRaw, date: finalDate, dateAttempts: dateAttempts + 1,
+            })],
           );
           const reply = this.formatFollowupPrompt(false, true, null, language);
           await this.insertMessage(queryRunner, {
@@ -1403,7 +2265,73 @@ export class AIService {
       // interpretMedicationAnswer, que separa y corrige cada nombre —
       // el "saysNone" determinístico se mantiene primero para no
       // gastar un llamado a IA en el caso más común ("no tomo nada").
-      if (currentQuestion.proposal_type === 'MEDICATION') {
+      //
+      // Bug real reportado en vivo: "le escribo cualquier cosa y no
+      // corrige nada... empezó a pedir diabetes en vez de la fecha" —
+      // "¿Se encuentra actualmente tomando medicación anticoagulante?"
+      // (proposal_type MEDICATION, igual que "¿Qué medicamentos
+      // toma?") caía en esta rama de "pregunta abierta" sin sí/no ni
+      // botones ni fecha, aunque está redactada como sí/no y SÍ pide
+      // fecha (asks_date=true) — quedaba pegada a la siguiente
+      // pregunta sin sentido. La única pregunta realmente abierta
+      // ("¿Qué medicamentos toma?") es la única con asks_date=false —
+      // se usa esa distinción (ya existente en el dato) en vez de
+      // agregar una columna nueva.
+      // Pedido explícito del usuario: "todo el sistema de IA del celular
+      // debería poder manejar bien todas las enfermedades existentes o
+      // análisis o estudios, o medicamentos, no podemos limitarlo a lo
+      // básico" — pregunta de cierre abierta (proposal_type OPEN_ENDED,
+      // ver proposed-open-ended-question.sql), clasifica libremente
+      // cualquier cosa que mencione en el proposalType correcto (ver
+      // interpretOpenEndedAnswer) en vez de forzar un solo tipo fijo
+      // como el resto de la tabla.
+      if (currentQuestion.proposal_type === 'OPEN_ENDED') {
+        const normalized = AIService.stripAccents(answerText.trim().toLowerCase());
+        const saysNone = !normalized || /^(no|nada|ninguno|ninguna|nada mas|nada más|no tengo nada|no hay nada|eso es todo|nada que agregar)\b/.test(normalized);
+        if (saysNone) {
+          return this.advanceToNextQuestion(queryRunner, conversationId, personId, session, currentQuestion, language);
+        }
+
+        const llmResult = await this.provider.interpretOpenEndedAnswer(answerText, language);
+        await this.insertMessage(queryRunner, {
+          conversationId,
+          personId,
+          sender: 'ASSISTANT',
+          message: '(interpretación IA de la pregunta abierta)',
+          provider: llmResult.provider,
+          model: llmResult.model,
+          tokensInput: llmResult.tokensInput,
+          tokensOutput: llmResult.tokensOutput,
+          estimatedCostUsd: llmResult.estimatedCostUsd,
+          processingMs: llmResult.processingMs,
+        });
+
+        if (llmResult.unclear) {
+          const intro = llmResult.clarification ?? AIService.t('didntUnderstand', language);
+          const reply = `${intro} ${this.formatStructuredQuestion(currentQuestion, language)}`;
+          await this.insertMessage(queryRunner, {
+            conversationId, personId, sender: 'ASSISTANT', message: reply, provider: 'structured', model: null,
+          });
+          return { conversationId, reply, interviewComplete: false, options: null, pauseRequested: false };
+        }
+
+        if (!llmResult.applicable || !llmResult.items.length) {
+          return this.advanceToNextQuestion(queryRunner, conversationId, personId, session, currentQuestion, language);
+        }
+
+        await this.insertProposals(
+          queryRunner,
+          conversationId,
+          userMessage.id,
+          personId,
+          llmResult.items,
+          'structured',
+          'structured',
+        );
+        return this.advanceToNextQuestion(queryRunner, conversationId, personId, session, currentQuestion, language);
+      }
+
+      if (currentQuestion.proposal_type === 'MEDICATION' && !currentQuestion.asks_date) {
         const normalized = AIService.stripAccents(answerText.trim().toLowerCase());
         const saysNone = !normalized || /^(no|ninguno|ninguna|no tomo|no uso|no consumo)\b/.test(normalized);
         if (saysNone) {
@@ -1424,6 +2352,15 @@ export class AIService {
           estimatedCostUsd: llmResult.estimatedCostUsd,
           processingMs: llmResult.processingMs,
         });
+
+        if (llmResult.wantsToDiscard) {
+          await this.rejectAllPendingProposalsInTx(queryRunner, personId, conversationId);
+          const reply = AIService.t('discardedAll', language);
+          await this.insertMessage(queryRunner, {
+            conversationId, personId, sender: 'ASSISTANT', message: reply, provider: 'structured', model: null,
+          });
+          return { conversationId, reply, interviewComplete: true, options: null, pauseRequested: true };
+        }
 
         if (llmResult.wantsToPause) {
           await this.confirmAllProposalsInTx(queryRunner, personId, conversationId);
@@ -1447,14 +2384,39 @@ export class AIService {
           return this.advanceToNextQuestion(queryRunner, conversationId, personId, session, currentQuestion, language);
         }
 
+        // Pedido explícito del usuario: "no podemos registrar cualquier
+        // cosa... el médico que atiende la emergencia no va a entender
+        // qué dice la ficha de salud" — mismo criterio que
+        // interpretStructuredAnswer: lo inventado/sin sentido se
+        // descarta, y lo real pero de OTRO tipo (ej. "colesterol alto"
+        // mezclado en la lista) se reclasifica aparte en vez de
+        // guardarse como si fuera un medicamento.
+        const implausible = llmResult.medications.filter((m) => !m.plausible);
+        const mismatched = llmResult.medications.filter((m) => m.plausible && m.categoryMismatch);
+        const realMedications = llmResult.medications.filter((m) => m.plausible && !m.categoryMismatch);
+
+        let mismatchNotice: string | null = null;
+        for (const m of mismatched) {
+          const notice = await this.handleCategoryMismatch(
+            queryRunner, conversationId, personId, userMessage.id, m.name, language,
+          );
+          if (notice) mismatchNotice = mismatchNotice ? `${mismatchNotice} ${notice}` : notice;
+        }
+        // Los implausibles simplemente no se guardan — no hay nada
+        // real que reclasificar (ruido, invención).
+
+        if (!realMedications.length) {
+          return this.advanceToNextQuestion(queryRunner, conversationId, personId, session, currentQuestion, language, mismatchNotice);
+        }
+
         // Si corrigió algún nombre, primero se confirma (mismo criterio
         // que condiciones/cirugías) — recién con el sí se guarda cada
         // medicamento como un proposal SEPARADO.
-        const anyCorrected = llmResult.medications.some((m) => m.correctedFrom);
+        const anyCorrected = realMedications.some((m) => m.correctedFrom);
         if (anyCorrected) {
           return this.askToConfirmMedications(
             queryRunner, conversationId, personId, session,
-            llmResult.medications.map((m) => ({ name: m.name, dateRaw: m.dateRaw, date: m.date })), language,
+            realMedications.map((m) => ({ name: m.name, dateRaw: m.dateRaw, date: m.date })), language,
           );
         }
 
@@ -1463,7 +2425,7 @@ export class AIService {
         // dateRaw/date en null sin importar lo que haya dicho el
         // viajero (interpretMedicationAnswer ahora sí la extrae por
         // medicamento, ver AIMedicationSplitResult).
-        const candidates = llmResult.medications.map((m) =>
+        const candidates = realMedications.map((m) =>
           this.buildStructuredProposal(currentQuestion, { detail: m.name, dateRaw: m.dateRaw, date: m.date }),
         );
         await this.insertProposals(
@@ -1475,7 +2437,7 @@ export class AIService {
           'structured',
           'structured',
         );
-        return this.advanceToNextQuestion(queryRunner, conversationId, personId, session, currentQuestion, language);
+        return this.advanceToNextQuestion(queryRunner, conversationId, personId, session, currentQuestion, language, mismatchNotice);
       }
 
       // Turno normal: se pidió "indique sí o no" — hay que resolver eso
@@ -1493,6 +2455,7 @@ export class AIService {
             questionText: currentQuestion.question_text,
             options: currentQuestion.options,
             asksDate: currentQuestion.asks_date,
+            expectedKind: AIService.expectedKindLabel(currentQuestion.proposal_type),
           },
           answerText,
           knownNames,
@@ -1510,6 +2473,17 @@ export class AIService {
           estimatedCostUsd: llmResult.estimatedCostUsd,
           processingMs: llmResult.processingMs,
         });
+
+        // Mismo criterio que en FOLLOWUP: la IA entiende "cerrá sin
+        // guardar nada" y descarta todo lo pendiente en vez de guardarlo.
+        if (llmResult.wantsToDiscard) {
+          await this.rejectAllPendingProposalsInTx(queryRunner, personId, conversationId);
+          const reply = AIService.t('discardedAll', language);
+          await this.insertMessage(queryRunner, {
+            conversationId, personId, sender: 'ASSISTANT', message: reply, provider: 'structured', model: null,
+          });
+          return { conversationId, reply, interviewComplete: true, options: null, pauseRequested: true };
+        }
 
         // Mismo criterio que en FOLLOWUP: la IA entiende "quiero pausar"
         // en cualquier idioma/forma, aprovechando este mismo llamado —
@@ -1544,12 +2518,37 @@ export class AIService {
           });
           return {
             conversationId, reply, interviewComplete: false,
-            options: currentQuestion.proposal_type !== 'MEDICATION' ? AIService.yesNoOptions(language) : null,
+            options: !(currentQuestion.proposal_type === 'MEDICATION' && !currentQuestion.asks_date) ? AIService.yesNoOptions(language) : null,
             pauseRequested: false,
           };
         }
 
-        parsed = { applicable: llmResult.applicable, detail: llmResult.detail, dateRaw: llmResult.dateRaw, date: llmResult.date };
+        // Pedido explícito del usuario: no se guarda nada que no sea un
+        // concepto médico real y del tipo que pide esta pregunta puntual
+        // (ver handleCategoryMismatch/AIStructuredInterpretResult.plausible) —
+        // mismo mecanismo de "repetir la pregunta" que unclear, con un
+        // mensaje distinto según el motivo.
+        if (llmResult.applicable && llmResult.detail && (!llmResult.plausible || llmResult.categoryMismatch)) {
+          const intro = !llmResult.plausible
+            ? AIService.t('notPlausible', language)
+            : await this.handleCategoryMismatch(queryRunner, conversationId, personId, userMessage.id, answerText, language);
+          const reply = `${intro ?? AIService.t('didntUnderstand', language)} ${this.formatStructuredQuestion(currentQuestion, language)}`;
+          await this.insertMessage(queryRunner, {
+            conversationId, personId, sender: 'ASSISTANT', message: reply, provider: 'structured', model: null,
+          });
+          return {
+            conversationId, reply, interviewComplete: false,
+            options: !(currentQuestion.proposal_type === 'MEDICATION' && !currentQuestion.asks_date) ? AIService.yesNoOptions(language) : null,
+            pauseRequested: false,
+          };
+        }
+
+        parsed = {
+          applicable: llmResult.applicable,
+          detail: llmResult.detail,
+          dateRaw: llmResult.dateRaw,
+          date: AIService.reconcileDate(llmResult.dateRaw, llmResult.date),
+        };
         if (llmResult.correctedFrom && llmResult.detail) {
           correctionNotice = AIService.t('correctionNotice', language)
             .replace('{detail}', llmResult.detail)
@@ -1561,7 +2560,10 @@ export class AIService {
         return this.advanceToNextQuestion(queryRunner, conversationId, personId, session, currentQuestion, language);
       }
 
-      const missingDetail = currentQuestion.free_text_enabled && !parsed.detail;
+      // Ver el comentario grande en needsDetail (turno de seguimiento,
+      // más arriba) — condition_label como respaldo evita pedir un
+      // "¿Cuál?" innecesario para preguntas simples de sí/no.
+      const missingDetail = currentQuestion.free_text_enabled && !currentQuestion.condition_label && !parsed.detail;
       const missingDate = currentQuestion.asks_date && !parsed.dateRaw && !parsed.date;
 
       if (missingDetail || missingDate) {
@@ -1624,6 +2626,179 @@ export class AIService {
     });
   }
 
+  /**
+   * Pedido explícito del usuario: "si el usuario no tiene cargado su
+   * peso y altura y grupo sanguíneo, el estructurado lo debería
+   * solicitar para poder registrarlo, esto lo hace bien el
+   * formulario" — mismo criterio de "último valor no nulo por campo"
+   * que ya usa getPersonContext (clinical.vitals_history es
+   * append-only, una carga puede traer solo peso, otra solo grupo
+   * sanguíneo). Solo arma la pregunta por lo que REALMENTE falta —
+   * si ya hay altura cargada pero no peso ni grupo, pregunta solo esos
+   * dos. Devuelve null si los tres ya están.
+   */
+  private async getMissingVitalsQuestion(
+    queryRunner: QueryRunner,
+    personId: string,
+    language: SupportedLang,
+  ): Promise<{ question: string; fields: { weight: boolean; height: boolean; bloodType: boolean } } | null> {
+    // Bug real reportado en vivo: "ya lo he registrado, no está
+    // tomando lo que tiene registrado" — el grupo sanguíneo ya no vive
+    // en vitals_history (ver applyConfirmedProposal/VITALS y
+    // proposed-blood-type-persons-and-clinical-dates.sql: pasó a
+    // core.persons.blood_type_id, un solo valor fijo, no histórico),
+    // pero este chequeo seguía mirando la ubicación vieja — así que
+    // SIEMPRE lo daba por faltante, aunque ya estuviera cargado.
+    const [row] = await queryRunner.query(
+      `SELECT
+         (SELECT weight_kg FROM clinical.vitals_history
+          WHERE person_id = $1 AND deleted_at IS NULL AND weight_kg IS NOT NULL
+          ORDER BY measured_at DESC LIMIT 1) AS weight_kg,
+         (SELECT height_cm FROM clinical.vitals_history
+          WHERE person_id = $1 AND deleted_at IS NULL AND height_cm IS NOT NULL
+          ORDER BY measured_at DESC LIMIT 1) AS height_cm,
+         (SELECT blood_type_id FROM core.persons WHERE id = $1) AS blood_type_id`,
+      [personId],
+    );
+    const fields = {
+      weight: row?.weight_kg == null,
+      height: row?.height_cm == null,
+      bloodType: row?.blood_type_id == null,
+    };
+    if (!fields.weight && !fields.height && !fields.bloodType) return null;
+
+    const fieldLabels: string[] = [];
+    if (fields.weight) fieldLabels.push(AIService.t('vitalsFieldWeight', language));
+    if (fields.height) fieldLabels.push(AIService.t('vitalsFieldHeight', language));
+    if (fields.bloodType) fieldLabels.push(AIService.t('vitalsFieldBloodType', language));
+    const andWord = AIService.t('andWord', language);
+    const fieldsText = fieldLabels.length === 1
+      ? fieldLabels[0]
+      : `${fieldLabels.slice(0, -1).join(', ')} ${andWord} ${fieldLabels[fieldLabels.length - 1]}`;
+    const question = AIService.t('vitalsQuestion', language).replace('{fields}', fieldsText);
+    return { question, fields };
+  }
+
+  /**
+   * Turno de peso/altura/grupo sanguíneo (pending_step='VITALS_INTAKE',
+   * ver structuredIntakeChat y getMissingVitalsQuestion) — se resuelve
+   * ANTES de la primera pregunta normal de ai.interview_questions,
+   * nunca a mitad de la entrevista. Guarda lo que haya podido
+   * interpretar (aunque falte alguno de los campos pedidos) vía el
+   * MISMO camino de proposals que usa Formulario para VITALS
+   * (applyConfirmedProposal), y recién ahí sigue a la primera pregunta
+   * real que ya se había resuelto al arrancar la conversación.
+   */
+  private async handleVitalsAnswer(
+    queryRunner: QueryRunner,
+    conversationId: string,
+    personId: string,
+    userMessageId: string,
+    session: { id: string; current_question_id: string | null; answers: Record<string, unknown> },
+    answerText: string,
+    language: SupportedLang,
+  ): Promise<{ conversationId: string; reply: string; interviewComplete: boolean; options: string[] | null; pauseRequested: boolean }> {
+    const askedFields = (session.answers as { fields?: { weight: boolean; height: boolean; bloodType: boolean } })?.fields
+      ?? { weight: true, height: true, bloodType: true };
+
+    const llmResult = await this.provider.interpretVitalsAnswer(answerText, askedFields, language);
+    await this.insertMessage(queryRunner, {
+      conversationId,
+      personId,
+      sender: 'ASSISTANT',
+      message: '(interpretación IA de peso/altura/grupo sanguíneo)',
+      provider: llmResult.provider,
+      model: llmResult.model,
+      tokensInput: llmResult.tokensInput,
+      tokensOutput: llmResult.tokensOutput,
+      estimatedCostUsd: llmResult.estimatedCostUsd,
+      processingMs: llmResult.processingMs,
+    });
+
+    if (llmResult.wantsToDiscard) {
+      await this.rejectAllPendingProposalsInTx(queryRunner, personId, conversationId);
+      const reply = AIService.t('discardedAll', language);
+      await this.insertMessage(queryRunner, {
+        conversationId, personId, sender: 'ASSISTANT', message: reply, provider: 'structured', model: null,
+      });
+      return { conversationId, reply, interviewComplete: true, options: null, pauseRequested: true };
+    }
+    if (llmResult.wantsToPause) {
+      await this.confirmAllProposalsInTx(queryRunner, personId, conversationId);
+      const reply = AIService.t('savedSoFar', language);
+      await this.insertMessage(queryRunner, {
+        conversationId, personId, sender: 'ASSISTANT', message: reply, provider: 'structured', model: null,
+      });
+      return { conversationId, reply, interviewComplete: true, options: null, pauseRequested: true };
+    }
+    if (llmResult.unclear) {
+      const intro = llmResult.clarification ?? AIService.t('didntUnderstand', language);
+      const question = (session.answers as { question?: string })?.question ?? '';
+      const reply = `${intro} ${question}`.trim();
+      await this.insertMessage(queryRunner, {
+        conversationId, personId, sender: 'ASSISTANT', message: reply, provider: 'structured', model: null,
+      });
+      return { conversationId, reply, interviewComplete: false, options: null, pauseRequested: false };
+    }
+
+    if (llmResult.weightKg != null || llmResult.heightCm != null || llmResult.bloodTypeCode != null) {
+      const [candidate] = await this.insertProposals(
+        queryRunner, conversationId, userMessageId, personId,
+        [{
+          proposalType: 'VITALS',
+          confidence: 0.9,
+          data: {
+            weightKg: llmResult.weightKg ?? undefined,
+            heightCm: llmResult.heightCm ?? undefined,
+            bloodTypeCode: llmResult.bloodTypeCode ?? undefined,
+          },
+        }],
+        'structured', 'structured',
+      );
+      void candidate;
+    }
+
+    const nextQuestion = session.current_question_id
+      ? await this.getQuestionById(queryRunner, session.current_question_id)
+      : null;
+    return this.presentStructuredQuestion(queryRunner, conversationId, personId, session, nextQuestion, language);
+  }
+
+  /**
+   * Deja la sesión apuntando a [question] (o cierra la entrevista si es
+   * null) y arma el mensaje/opciones para ese turno — cuerpo compartido
+   * entre advanceToNextQuestion (que primero busca cuál es "la
+   * siguiente") y handleVitalsAnswer (que ya sabe cuál es, la que
+   * había quedado guardada en current_question_id antes del turno
+   * especial de vitales).
+   */
+  private async presentStructuredQuestion(
+    queryRunner: QueryRunner,
+    conversationId: string,
+    personId: string,
+    session: { id: string },
+    question: { id: string; proposal_type: string; asks_date: boolean; [key: string]: unknown } | null,
+    language: SupportedLang,
+    replyPrefix?: string | null,
+  ): Promise<{ conversationId: string; reply: string; interviewComplete: boolean; options: string[] | null; pauseRequested: boolean }> {
+    await queryRunner.query(
+      `UPDATE ai.interview_sessions SET current_question_id = $2, pending_step = 'YES_NO', answers = '{}' WHERE id = $1`,
+      [session.id, question?.id ?? null],
+    );
+    const questionText = question
+      ? this.formatStructuredQuestion(question as never, language)
+      : AIService.t('saveAllQuestion', language);
+    const reply = replyPrefix ? `${replyPrefix} ${questionText}` : questionText;
+    await this.insertMessage(queryRunner, {
+      conversationId, personId, sender: 'ASSISTANT', message: reply, provider: 'structured', model: null,
+    });
+    const options = question && question.proposal_type !== 'OPEN_ENDED'
+      && !(question.proposal_type === 'MEDICATION' && !question.asks_date)
+      ? AIService.yesNoOptions(language)
+      : null;
+    return { conversationId, reply, interviewComplete: !question, options, pauseRequested: false };
+  }
+
   private async advanceToNextQuestion(
     queryRunner: QueryRunner,
     conversationId: string,
@@ -1631,6 +2806,7 @@ export class AIService {
     session: { id: string },
     currentQuestion: { display_order: number },
     language: SupportedLang = 'es',
+    replyPrefix?: string | null,
   ): Promise<{ conversationId: string; reply: string; interviewComplete: boolean; options: string[] | null; pauseRequested: boolean }> {
     const nextQuestion = await this.getNextActiveQuestion(queryRunner, personId, currentQuestion.display_order);
     await queryRunner.query(
@@ -1640,9 +2816,25 @@ export class AIService {
       [session.id, nextQuestion?.id ?? null],
     );
 
-    const reply = nextQuestion
+    const nextQuestionText = nextQuestion
       ? this.formatStructuredQuestion(nextQuestion, language)
       : AIService.t('saveAllQuestion', language);
+    // Pedido explícito del usuario: "en el caso de medicamentos y
+    // alergias debería decir qué tiene registrado antes de preguntar
+    // si tiene otro" — a diferencia de las preguntas de enfermedad
+    // (que se saltean directo si ya están confirmadas, ver
+    // SKIP_IF_ALREADY_HAS_SQL), estas dos siempre se repiten (son
+    // preguntas abiertas — "algo más" es una respuesta válida) así
+    // que en vez de saltearlas se avisa qué ya está anotado primero.
+    const existingSummary = nextQuestion
+      ? await this.getExistingItemsSummary(queryRunner, personId, nextQuestion, language)
+      : null;
+    // Pedido explícito del usuario: el aviso de reclasificación
+    // (handleCategoryMismatch) tiene que ir EN el mismo mensaje que se
+    // devuelve este turno, no en un mensaje aparte que el cliente
+    // podría no mostrar de inmediato.
+    const prefix = [replyPrefix, existingSummary].filter((p): p is string => !!p).join(' ');
+    const reply = prefix ? `${prefix} ${nextQuestionText}` : nextQuestionText;
     await this.insertMessage(queryRunner, {
       conversationId,
       personId,
@@ -1652,10 +2844,49 @@ export class AIService {
       model: null,
     });
 
-    const nextOptions = nextQuestion && nextQuestion.proposal_type !== 'MEDICATION'
+    const nextOptions = nextQuestion && nextQuestion.proposal_type !== 'OPEN_ENDED' && !(nextQuestion.proposal_type === 'MEDICATION' && !nextQuestion.asks_date)
       ? AIService.yesNoOptions(language)
       : null;
     return { conversationId, reply, interviewComplete: !nextQuestion, options: nextOptions, pauseRequested: false };
+  }
+
+  /**
+   * Pedido explícito del usuario: "en el caso de medicamentos y
+   * alergias debería decir qué tiene registrado antes de preguntar si
+   * tiene otro tipo de alergia o toma algún otro medicamento" — solo
+   * aplica a las dos preguntas abiertas (la de medicamentos SIN fecha
+   * — la única realmente abierta, ver el criterio ya usado en
+   * formatStructuredQuestion — y la de alergias); el resto de
+   * preguntas de enfermedad ya se saltean directo si están
+   * confirmadas, no hace falta anunciarlas.
+   */
+  private async getExistingItemsSummary(
+    queryRunner: QueryRunner,
+    personId: string,
+    question: { proposal_type: string; asks_date?: boolean },
+    language: SupportedLang,
+  ): Promise<string | null> {
+    if (question.proposal_type === 'MEDICATION' && !question.asks_date) {
+      const rows = await queryRunner.query(
+        `SELECT core.decrypt_pii(generic_name) AS name FROM clinical.medications
+         WHERE person_id = $1 AND active = TRUE AND is_current = TRUE AND deleted_at IS NULL`,
+        [personId],
+      );
+      if (!rows.length) return null;
+      return AIService.t('existingMedicationsNotice', language)
+        .replace('{names}', rows.map((r: { name: string }) => r.name).join(', '));
+    }
+    if (question.proposal_type === 'ALLERGY') {
+      const rows = await queryRunner.query(
+        `SELECT core.decrypt_pii(allergen_name) AS name FROM clinical.allergies
+         WHERE person_id = $1 AND active = TRUE AND deleted_at IS NULL`,
+        [personId],
+      );
+      if (!rows.length) return null;
+      return AIService.t('existingAllergiesNotice', language)
+        .replace('{names}', rows.map((r: { name: string }) => r.name).join(', '));
+    }
+    return null;
   }
 
   /**
@@ -1768,8 +2999,14 @@ export class AIService {
    * resto del modelo Estructurado.
    */
   private static readonly UI_STRINGS: Record<string, Record<SupportedLang, string>> = {
+    structuredYesNoHint: {
+      es: 'A lo largo de la charla, cuando la pregunta se responda con sí o no, contestá simplemente "sí" o "no".',
+      en: 'Throughout the chat, when a question can be answered with yes or no, just answer "yes" or "no".',
+      pt: 'Ao longo da conversa, quando a pergunta puder ser respondida com sim ou não, responda apenas "sim" ou "não".',
+      fr: 'Pendant la conversation, quand la question se répond par oui ou non, répondez simplement « oui » ou « non ».',
+    },
     yesNoSuffix: {
-      es: 'Indique sí o no.', en: 'Please answer yes or no.',
+      es: 'Indicar sí o no.', en: 'Please answer yes or no.',
       pt: 'Responda sim ou não.', fr: 'Répondez oui ou non.',
     },
     yesLabel: { es: 'Sí', en: 'Yes', pt: 'Sim', fr: 'Oui' },
@@ -1792,16 +3029,61 @@ export class AIService {
       es: 'No entendí bien tu respuesta.', en: "I didn't quite understand your answer.",
       pt: 'Não entendi bem sua resposta.', fr: "Je n'ai pas bien compris votre réponse.",
     },
+    /**
+     * Pedido explícito del usuario: "no podemos registrar cualquier
+     * cosa... el médico que atiende la emergencia no va a entender qué
+     * dice la ficha de salud" — se usa cuando plausible=false (lo que
+     * dijo no corresponde a ningún concepto médico real).
+     */
+    notPlausible: {
+      es: 'Eso no me suena a un dato médico real — decime con otras palabras qué es, o si preferís lo dejamos así.',
+      en: "That doesn't sound like a real medical term — tell me in other words what it is, or we can leave it as is.",
+      pt: 'Isso não parece um dado médico real — me diga com outras palavras o que é, ou se preferir deixamos assim.',
+      fr: "Cela ne ressemble pas à un terme médical réel — dites-moi avec d'autres mots de quoi il s'agit, ou on peut laisser ainsi.",
+    },
+    /** {items} se reemplaza — ver handleCategoryMismatch más abajo. */
+    categoryMismatchNotice: {
+      es: 'Anoté {items} por separado, donde corresponde. Volviendo a esta pregunta:',
+      en: "I noted {items} separately, under the right category. Back to this question:",
+      pt: 'Anotei {items} separadamente, na categoria certa. Voltando a esta pergunta:',
+      fr: "J'ai noté {items} séparément, dans la bonne catégorie. Pour en revenir à cette question :",
+    },
     savedSoFar: {
       es: 'Listo, guardé todo lo que contestaste hasta ahora. Podés retomar cuando quieras.',
       en: "Done — I've saved everything you answered so far. You can pick up again whenever you like.",
       pt: 'Pronto — salvei tudo o que você respondeu até agora. Você pode continuar quando quiser.',
       fr: "C'est fait — j'ai enregistré tout ce que vous avez répondu jusqu'ici. Vous pouvez reprendre quand vous voulez.",
     },
+    // Bug real reportado en vivo: la viajera le dijo a la IA que
+    // cerrara SIN guardar nada, y igual guardó lo que tenía
+    // registrado — porque antes no existía ninguna intención
+    // distinta de "wantsToPause" (que siempre guarda). Este mensaje
+    // confirma lo contrario: que NO se guardó nada.
+    discardedAll: {
+      es: 'Listo, no guardé nada de lo que hablamos en esta conversación.',
+      en: "Done — I haven't saved anything from this conversation.",
+      pt: 'Pronto — não salvei nada desta conversa.',
+      fr: "C'est fait — je n'ai rien enregistré de cette conversation.",
+    },
     saveAllQuestion: {
       es: '¿Guardamos todo esto en su Historial de Salud?', en: 'Shall we save all of this to your Health Record?',
       pt: 'Salvamos tudo isso no seu Histórico de Saúde?', fr: 'Enregistrons-nous tout cela dans votre Dossier de Santé ?',
     },
+    /**
+     * Pedido explícito del usuario: "si el usuario no tiene cargado su
+     * peso y altura y grupo sanguíneo, el estructurado lo debería
+     * solicitar, esto lo hace bien el formulario" — {fields} se arma
+     * dinámicamente con vitalsField* de abajo, uniendo solo lo que
+     * realmente falta (ver getMissingVitalsQuestion).
+     */
+    vitalsQuestion: {
+      es: '¿Cuál es tu {fields}?', en: "What's your {fields}?",
+      pt: 'Qual é o seu {fields}?', fr: 'Quel est votre {fields} ?',
+    },
+    vitalsFieldWeight: { es: 'peso (en kg)', en: 'weight (in kg)', pt: 'peso (em kg)', fr: 'poids (en kg)' },
+    vitalsFieldHeight: { es: 'altura (en cm)', en: 'height (in cm)', pt: 'altura (em cm)', fr: 'taille (en cm)' },
+    vitalsFieldBloodType: { es: 'grupo sanguíneo', en: 'blood type', pt: 'tipo sanguíneo', fr: 'groupe sanguin' },
+    andWord: { es: 'y', en: 'and', pt: 'e', fr: 'et' },
     confirmAllQuestion: {
       es: '¿Confirmamos todo? Decime sí o no.', en: 'Shall we confirm everything? Say yes or no.',
       pt: 'Confirmamos tudo? Diga sim ou não.', fr: 'Confirmons-nous tout ? Dites oui ou non.',
@@ -1825,6 +3107,19 @@ export class AIService {
       en: 'I noted these medications separately: {names} — is that correct?',
       pt: 'Anotei estes medicamentos separadamente: {names} — está correto?',
       fr: 'J\'ai noté ces médicaments séparément : {names} — est-ce correct ?',
+    },
+    /** {names} se reemplaza — ver getExistingItemsSummary. */
+    existingMedicationsNotice: {
+      es: 'Ya tenés registrado: {names}.',
+      en: 'You already have on file: {names}.',
+      pt: 'Você já tem registrado: {names}.',
+      fr: 'Tu as déjà enregistré : {names}.',
+    },
+    existingAllergiesNotice: {
+      es: 'Ya tenés registrado: {names}.',
+      en: 'You already have on file: {names}.',
+      pt: 'Você já tem registrado: {names}.',
+      fr: 'Tu as déjà enregistré : {names}.',
     },
   };
 
@@ -1859,6 +3154,13 @@ export class AIService {
     return null;
   }
 
+  // Pedido explícito del usuario: "revisa bien que no se duplique
+  // antecedentes en los formularios cuando hace las consultas y se
+  // pone lo mismo" — antes solo CONDITION/SURGERY saltaban la
+  // pregunta ya contestada en una consulta de seguimiento;
+  // MEDICATION/ALLERGY/IMPLANT_DEVICE/TREATMENT se volvían a preguntar
+  // siempre (ver proposed-source-question-tracking-extended.sql /
+  // proposed-treatment-type.sql, que les agregan source_question_id).
   private static readonly SKIP_IF_ALREADY_HAS_SQL = `
     AND NOT EXISTS (
       SELECT 1 FROM clinical.conditions c
@@ -1869,6 +3171,26 @@ export class AIService {
       SELECT 1 FROM clinical.surgeries s
       WHERE s.person_id = $1 AND s.deleted_at IS NULL
         AND q.proposal_type = 'SURGERY' AND s.source_question_id = q.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM clinical.medications m
+      WHERE m.person_id = $1 AND m.deleted_at IS NULL AND m.active = TRUE
+        AND q.proposal_type = 'MEDICATION' AND m.source_question_id = q.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM clinical.allergies al
+      WHERE al.person_id = $1 AND al.deleted_at IS NULL AND al.active = TRUE
+        AND q.proposal_type = 'ALLERGY' AND al.source_question_id = q.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM clinical.implants_devices d
+      WHERE d.person_id = $1 AND d.deleted_at IS NULL AND d.active = TRUE
+        AND q.proposal_type = 'IMPLANT_DEVICE' AND d.source_question_id = q.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM clinical.treatments t
+      WHERE t.person_id = $1 AND t.deleted_at IS NULL AND t.active = TRUE
+        AND q.proposal_type = 'TREATMENT' AND t.source_question_id = q.id
     )
   `;
 
@@ -1915,11 +3237,17 @@ export class AIService {
     displayOrder: number;
   }[]> {
     return this.txManager.runInTransaction(async (queryRunner) => {
+      // Pedido explícito del usuario: "en formulario no va la pregunta
+      // final abierta, porque es un formulario estático que si
+      // queremos más preguntas tenemos que agregar en la tabla lo que
+      // se necesite" — OPEN_ENDED (interpretación libre por IA) solo
+      // tiene sentido en el turno conversacional de Estructurado, el
+      // Formulario nunca la debe listar como campo.
       const rows = await queryRunner.query(
         `SELECT id, code, group_label, question_text, free_text_enabled, options,
                 asks_date, proposal_type, catalog_domain_code, display_order
          FROM ai.interview_questions
-         WHERE active = TRUE
+         WHERE active = TRUE AND proposal_type != 'OPEN_ENDED'
          ORDER BY display_order ASC`,
       );
       return rows.map((r: Record<string, unknown>) => ({
@@ -1994,6 +3322,7 @@ export class AIService {
       question_text_pt?: string | null;
       question_text_fr?: string | null;
       proposal_type: string;
+      asks_date?: boolean;
     },
     language: SupportedLang = 'es',
   ): string {
@@ -2002,10 +3331,83 @@ export class AIService {
       language === 'pt' ? (question.question_text_pt ?? question.question_text) :
       language === 'fr' ? (question.question_text_fr ?? question.question_text) :
       question.question_text;
-    if (question.proposal_type === 'MEDICATION') {
-      return text;
+    // Ver el comentario de "asks_date" en el chequeo equivalente más
+    // arriba (turno inicial) — misma distinción: la única pregunta de
+    // medicamentos realmente abierta es la única sin fecha.
+    // Pedido explícito del usuario: "no queda bien siempre preguntar
+    // [indicar sí o no], solo haría la pregunta" — antes esto se
+    // repetía en TODAS las preguntas de sí/no, una por una, durante
+    // toda la entrevista. Se avisa UNA sola vez al arrancar la charla
+    // (ver el saludo inicial más arriba) en vez de en cada pregunta;
+    // yesNoSuffix se sigue usando aparte cuando la respuesta no se
+    // entendió (ahí sí conviene recordarlo, es correctivo puntual, no
+    // ruido repetido).
+    return text;
+  }
+
+  /** Descripción en español de lo que espera cada proposal_type — para el chequeo de plausible/categoryMismatch en interpretStructuredAnswer. */
+  private static expectedKindLabel(proposalType: string): string {
+    switch (proposalType) {
+      case 'CONDITION': return 'una enfermedad o condición de salud';
+      case 'MEDICATION': return 'un medicamento';
+      case 'ALLERGY': return 'una alergia';
+      case 'SURGERY': return 'una cirugía o procedimiento';
+      case 'IMPLANT_DEVICE': return 'un implante o dispositivo médico';
+      case 'TREATMENT': return 'un tratamiento (ej. diálisis, quimioterapia) — NUNCA una enfermedad';
+      default: return 'un dato médico';
     }
-    return `${text} ${AIService.t('yesNoSuffix', language)}`;
+  }
+
+  /** Nombre corto para mostrar en el aviso de handleCategoryMismatch — un campo por tipo de proposal. */
+  private static shortProposalLabel(item: AIProposalCandidate): string {
+    const d = item.data as Record<string, unknown>;
+    const name =
+      (d.conditionName as string) ?? (d.genericName as string) ?? (d.allergenName as string) ??
+      (d.procedureName as string) ?? (d.deviceName as string) ?? (d.treatmentName as string) ?? (d.labName as string) ?? null;
+    if (name) return name;
+    if (item.proposalType === 'LAB_RESULT') return 'un resultado de análisis';
+    if (item.proposalType === 'VITALS') return 'un dato';
+    return item.proposalType.toLowerCase();
+  }
+
+  /**
+   * Pedido explícito del usuario: "no podemos registrar cualquier cosa
+   * en la base de datos porque... el médico que atiende la emergencia
+   * no va a entender qué dice la ficha de salud" — cuando
+   * interpretStructuredAnswer marca categoryMismatch=true (ej.
+   * "colesterol alto" contestado a una pregunta de enfermedad), en vez
+   * de forzarlo bajo el tipo fijo de esa pregunta, se reclasifica con
+   * el MISMO clasificador libre de la pregunta abierta de cierre
+   * (interpretOpenEndedAnswer — ver openai.provider.ts) y se guarda
+   * bajo el tipo correcto. Devuelve el aviso para mostrarle al viajero
+   * antes de volver a pedirle la respuesta a la pregunta original (lo
+   * que dijo no la contestó, así que no se da por respondida).
+   */
+  private async handleCategoryMismatch(
+    queryRunner: QueryRunner,
+    conversationId: string,
+    personId: string,
+    messageId: string,
+    answerText: string,
+    language: SupportedLang,
+  ): Promise<string | null> {
+    const llmResult = await this.provider.interpretOpenEndedAnswer(answerText, language);
+    await this.insertMessage(queryRunner, {
+      conversationId,
+      personId,
+      sender: 'ASSISTANT',
+      message: '(reclasificación IA — categoría distinta a la pregunta)',
+      provider: llmResult.provider,
+      model: llmResult.model,
+      tokensInput: llmResult.tokensInput,
+      tokensOutput: llmResult.tokensOutput,
+      estimatedCostUsd: llmResult.estimatedCostUsd,
+      processingMs: llmResult.processingMs,
+    });
+    if (!llmResult.applicable || !llmResult.items.length) return null;
+    await this.insertProposals(queryRunner, conversationId, messageId, personId, llmResult.items, 'structured', 'structured');
+    const names = llmResult.items.map((item) => AIService.shortProposalLabel(item)).join(', ');
+    return AIService.t('categoryMismatchNotice', language).replace('{items}', names);
   }
 
   /**
@@ -2052,6 +3454,113 @@ export class AIService {
     return text.replace(/[áéíóúñüÁÉÍÓÚÑÜ]/g, (c) => AIService.ACCENT_MAP[c] ?? c);
   }
 
+  /**
+   * Bug real reportado en vivo: el motor Realtime mandó "2020-01" (mes/año,
+   * sin día) como prescribedDate de un medicamento — el prompt de texto
+   * (SYSTEM_PROMPT) le pide a la IA convertir fechas imprecisas a fecha
+   * completa "con el día 1 si faltaba precisión", pero acá no hay ninguna
+   * garantía real de que el modelo (cualquier proveedor, cualquier
+   * versión) lo respete siempre. El INSERT reventó con un 500 crudo
+   * (Postgres rechaza "2020-01" para ::date) y la viajera vio un error
+   * técnico en pantalla — toda la transacción de confirmAllProposalsInTx
+   * se cortó, así que NADA de esa charla quedó guardado, no solo ese
+   * medicamento. Se normaliza acá, en el único lugar donde estos campos
+   * tocan la base, para que ningún proveedor de IA pueda tirar abajo el
+   * guardado por una fecha mal formada — "AAAA-MM" y "AAAA" se completan
+   * con día/mes 01 (mismo criterio ya usado en el prompt), y cualquier
+   * otra cosa no parseable se guarda como null (mejor sin fecha que
+   * perder todo el antecedente).
+   */
+  /**
+   * Extraído del cuerpo de confirmAllProposalsInTx (que lo usaba solo
+   * ahí, como closure) para poder reusarlo también en el guardado
+   * inmediato del motor Realtime (ver saveRealtimeProposal) — mismo
+   * criterio en los dos lugares: dos proposals del mismo tipo con el
+   * mismo nombre (y misma fecha para cirugía/implante) son el MISMO
+   * antecedente, aunque se hayan dicho en turnos distintos.
+   */
+  private static mergeKeyFor(proposal: { proposal_type: string; json_data: Record<string, unknown> }): string | null {
+    const data = proposal.json_data;
+    const norm = (v: unknown) => AIService.stripAccents(String(v ?? '').toLowerCase().trim());
+    switch (proposal.proposal_type) {
+      case 'CONDITION':
+        return `CONDITION|${norm(data.conditionName)}`;
+      case 'MEDICATION':
+        return `MEDICATION|${norm(data.genericName)}`;
+      case 'ALLERGY':
+        return `ALLERGY|${norm(data.allergenName)}`;
+      case 'SURGERY':
+        return `SURGERY|${norm(data.procedureName)}|${norm(data.performedDate ?? data.performedDateRaw)}`;
+      case 'IMPLANT_DEVICE':
+        return `IMPLANT_DEVICE|${norm(data.deviceName)}|${norm(data.implantedAt ?? data.implantedAtRaw)}`;
+      case 'TREATMENT':
+        return `TREATMENT|${norm(data.treatmentName)}`;
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Pedido explícito del usuario: "tiene que poner la fecha
+   * correctamente no cualquier cosa, por ejemplo que ponga una fecha
+   * futura o antes del nacimiento de la persona... la validación es
+   * para todo el proyecto no solo para el de formulario". Este es el
+   * ÚNICO punto por el que pasa CUALQUIER fecha de antecedente clínico
+   * antes de guardarse de verdad, sin importar qué modalidad la
+   * resolvió (Clásico, Estructurado, Formulario, o una edición por voz
+   * — ver los ~12 llamados a normalizeDateOrNull en este archivo), así
+   * que validar acá cubre las tres modalidades con un solo cambio. Un
+   * valor implausible (futuro, o anterior al nacimiento si se conoce
+   * la fecha) se trata igual que un valor no parseable — nunca se
+   * guarda como si fuera un dato real. [[caso real reportado en vivo:
+   * "15/*12/2021" con un caracter suelto — ya lo frena el parseo de
+   * abajo, esto agrega la segunda mitad del pedido: fechas CON buen
+   * formato pero imposibles.]]
+   * Bug real reportado en vivo (segunda vuelta): "el usuario puede
+   * poner solo el año en el caso del clásico y el estructurado" — año
+   * solo (ej. "1983") ya se resolvía a 1° de enero de ese año (ver
+   * abajo); la validación de plausibilidad tiene que aceptar eso
+   * igual, no exigir día/mes que la persona nunca dio.
+   */
+  /**
+   * Compartido por normalizeDateOrNull Y parseFormDateWithAge — antes
+   * cada familia de parseo de fechas (una para los proposals de IA, otra
+   * para el Formulario/quick-edit) tenía que repetir este mismo chequeo
+   * por separado. Factoreado acá para no tener la regla de "futura o
+   * antes de nacer" escrita dos veces con riesgo de que se corrija en
+   * una sola.
+   */
+  private static isPlausibleResolvedDate(resolved: string, birthDate?: string | null): boolean {
+    const resolvedDate = new Date(`${resolved}T00:00:00Z`);
+    if (Number.isNaN(resolvedDate.getTime())) return false;
+    // Margen de 1 día para no rechazar "hoy" por diferencia de huso
+    // horario entre el celular y el servidor.
+    const tomorrow = new Date();
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    if (resolvedDate.getTime() > tomorrow.getTime()) return false;
+    if (birthDate) {
+      const birth = new Date(`${birthDate.slice(0, 10)}T00:00:00Z`);
+      if (!Number.isNaN(birth.getTime()) && resolvedDate.getTime() < birth.getTime()) return false;
+    }
+    return true;
+  }
+
+  private static normalizeDateOrNull(value: unknown, birthDate?: string | null): string | null {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    let resolved: string | null = null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) resolved = trimmed;
+    else if (/^\d{4}-\d{2}$/.test(trimmed)) resolved = `${trimmed}-01`;
+    else if (/^\d{4}$/.test(trimmed)) resolved = `${trimmed}-01-01`;
+    else {
+      const parsed = new Date(trimmed);
+      resolved = Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+    }
+    if (!resolved) return null;
+    return AIService.isPlausibleResolvedDate(resolved, birthDate) ? resolved : null;
+  }
+
   // \b no es Unicode-aware en JS por defecto, así que "sí" (con tilde)
   // no matcheaba contra \bsi\b — bug confirmado, mismo que ya se había
   // encontrado y arreglado del lado del cliente móvil. Se normalizan
@@ -2060,8 +3569,85 @@ export class AIService {
     /\b(si|ok|okay|dale|correcto|correcta|confirmo|confirmar|confirmado|confirma|acepto|aceptar|acepta|exacto|afirmativo|listo|asi es|perfecto)\b/i;
   private static readonly NEGATIVE_RE =
     /\b(no|nunca|jamas|cancelar|rechazar|incorrecto|negativo|para nada)\b/i;
-  private static readonly YEAR_RE = /\b(19|20)\d{2}\b/;
-  private static readonly FULL_DATE_RE = /\b(\d{1,2})[/-](\d{1,2})[/-]((?:19|20)\d{2})\b/;
+  // Bug real reportado en vivo: "se queda colgado cuando le digo la
+  // fecha" — confirmado que "10 de enero del 83" y "10/1/83" NUNCA
+  // matcheaban ninguno de estos dos regex (exigían año de 4 dígitos
+  // sí o sí, y no había ningún parseo de mes escrito), así que
+  // dateRaw/date quedaban null para siempre y el turno de seguimiento
+  // volvía a pedir la fecha en loop infinito — sin ningún aviso de qué
+  // estaba mal. Ahora los dos aceptan año de 2 dígitos también
+  // (ver expandTwoDigitYear), y se agrega MONTH_NAME_RE para fechas
+  // escritas con el nombre del mes en español.
+  private static readonly YEAR_RE = /\b((?:19|20)\d{2}|\d{2})\b/;
+  private static readonly FULL_DATE_RE = /\b(\d{1,2})[/-](\d{1,2})[/-]((?:19|20)\d{2}|\d{2})\b/;
+  private static readonly MONTH_NAMES: Record<string, string> = {
+    enero: '01', febrero: '02', marzo: '03', abril: '04', mayo: '05', junio: '06',
+    julio: '07', agosto: '08', septiembre: '09', setiembre: '09', octubre: '10',
+    noviembre: '11', diciembre: '12',
+  };
+  private static readonly MONTH_NAME_RE =
+    /\b(\d{1,2})\s*(?:de\s*)?(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)\s*(?:de|del)?\s*((?:19|20)\d{2}|\d{2})\b/i;
+
+  /** Año de 2 dígitos -> 4 dígitos, con la misma lógica que cualquier
+   * planilla (pivote sobre el año actual): "83" en 2026 es 1983, no
+   * 2083 — nadie reporta un antecedente médico del futuro. */
+  private static expandTwoDigitYear(yy: number): number {
+    const currentYY = new Date().getFullYear() % 100;
+    return yy <= currentYY + 10 ? 2000 + yy : 1900 + yy;
+  }
+
+  private static normalizeYear(rawYear: string): string {
+    if (rawYear.length === 4) return rawYear;
+    return String(AIService.expandTwoDigitYear(Number(rawYear)));
+  }
+
+  /** Único punto de parseo de fecha en texto libre — usado tanto por
+   * tryDeterministicParse (primer turno) como por parseFollowupAnswer
+   * (turno de seguimiento), para no duplicar la misma lógica dos veces
+   * con el riesgo de que se corrija en un solo lado la próxima vez. */
+  private static extractDateFromText(text: string): { dateRaw: string; date: string } | null {
+    const fullDate = AIService.FULL_DATE_RE.exec(text);
+    if (fullDate) {
+      const year = AIService.normalizeYear(fullDate[3]);
+      return {
+        dateRaw: fullDate[0],
+        date: `${year}-${fullDate[2].padStart(2, '0')}-${fullDate[1].padStart(2, '0')}`,
+      };
+    }
+    const monthName = AIService.MONTH_NAME_RE.exec(text);
+    if (monthName) {
+      const year = AIService.normalizeYear(monthName[3]);
+      const month = AIService.MONTH_NAMES[AIService.stripAccents(monthName[2].toLowerCase())];
+      return {
+        dateRaw: monthName[0],
+        date: `${year}-${month}-${monthName[1].padStart(2, '0')}`,
+      };
+    }
+    const year = AIService.YEAR_RE.exec(text);
+    if (year) {
+      return { dateRaw: year[0], date: `${AIService.normalizeYear(year[1])}-01-01` };
+    }
+    return null;
+  }
+
+  /**
+   * Bug real reportado en vivo: caso angioplastia — respuesta combinada
+   * ("angioplastia del 91") va por el camino de la IA (interpretStructuredAnswer),
+   * que a veces devuelve dateRaw="91" tal cual lo dijo el viajero pero
+   * "date" en null (no tiene el mismo pivote de año de 2 dígitos que
+   * expandTwoDigitYear/normalizeYear, y el prompt no le exige inventar
+   * el siglo). Como dateRaw ya no es null, ni "missingDate" ni
+   * "stillMissingDate" detectan que falta la fecha, así que nunca se
+   * vuelve a pedir Y el antecedente se guarda sin fecha real — el "91"
+   * se pierde en silencio. Se reintenta con el parseo determinístico
+   * (mismo que ya resuelve "10/1/83" y "10 de enero del 83" sin IA)
+   * ANTES de dar la fecha por perdida.
+   */
+  private static reconcileDate(dateRaw: string | null, date: string | null): string | null {
+    if (date) return date;
+    if (!dateRaw) return null;
+    return AIService.extractDateFromText(dateRaw)?.date ?? null;
+  }
 
   // Bug real reportado en vivo: en el turno de seguimiento (ya se dijo
   // "sí"), si la persona se da cuenta que se equivocó y quiere volver
@@ -2192,26 +3778,20 @@ export class AIService {
     let dateRaw: string | null = null;
     let date: string | null = null;
     if (question.asks_date) {
-      const fullDate = AIService.FULL_DATE_RE.exec(text);
-      if (fullDate) {
-        dateRaw = fullDate[0];
-        date = `${fullDate[3]}-${fullDate[2].padStart(2, '0')}-${fullDate[1].padStart(2, '0')}`;
+      const extracted = AIService.extractDateFromText(text);
+      if (extracted) {
+        dateRaw = extracted.dateRaw;
+        date = extracted.date;
       } else {
-        const year = AIService.YEAR_RE.exec(text);
-        if (year) {
-          dateRaw = year[0];
-          date = `${year[0]}-01-01`;
-        } else {
-          // Pedido explícito del usuario: "esto debería estar en
-          // cualquier indicación... alguien puede decir que toma un
-          // medicamento desde los 10 años" — sin fecha ni año
-          // explícitos, se prueba una expresión relativa a la edad
-          // contra la fecha de nacimiento ya conocida del viajero.
-          const resolved = AIService.resolveAgeRelativeDate(text, birthDate);
-          if (resolved) {
-            dateRaw = text;
-            date = resolved;
-          }
+        // Pedido explícito del usuario: "esto debería estar en
+        // cualquier indicación... alguien puede decir que toma un
+        // medicamento desde los 10 años" — sin fecha ni año
+        // explícitos, se prueba una expresión relativa a la edad
+        // contra la fecha de nacimiento ya conocida del viajero.
+        const resolved = AIService.resolveAgeRelativeDate(text, birthDate);
+        if (resolved) {
+          dateRaw = text;
+          date = resolved;
         }
       }
     }
@@ -2228,7 +3808,7 @@ export class AIService {
    * deja sin fecha (mejor el antecedente sin fecha que no cargarlo).
    */
   private parseFollowupAnswer(
-    question: { free_text_enabled: boolean; options: string[] | null; asks_date: boolean },
+    question: { free_text_enabled: boolean; options: string[] | null; asks_date: boolean; condition_label?: string | null },
     answerText: string,
     priorAnswers: { detail?: string | null; dateRaw?: string | null; date?: string | null },
     birthDate?: string,
@@ -2236,34 +3816,30 @@ export class AIService {
     const text = answerText.trim();
     if (!text) return { detail: null, dateRaw: null, date: null };
 
-    const needsDetail = question.free_text_enabled && !priorAnswers.detail;
+    // Ver el comentario grande en needsDetail del llamador — mismo
+    // criterio: con condition_label de respaldo, el detalle es
+    // opcional, no hace falta separarlo del texto.
+    const needsDetail = question.free_text_enabled && !question.condition_label && !priorAnswers.detail;
     const needsDate = question.asks_date && !priorAnswers.dateRaw && !priorAnswers.date;
 
     let dateRaw: string | null = null;
     let date: string | null = null;
     let remainder = text;
     if (needsDate) {
-      const fullDate = AIService.FULL_DATE_RE.exec(text);
-      if (fullDate) {
-        dateRaw = fullDate[0];
-        date = `${fullDate[3]}-${fullDate[2].padStart(2, '0')}-${fullDate[1].padStart(2, '0')}`;
-        remainder = text.replace(fullDate[0], '');
+      const extracted = AIService.extractDateFromText(text);
+      if (extracted) {
+        dateRaw = extracted.dateRaw;
+        date = extracted.date;
+        remainder = text.replace(extracted.dateRaw, '');
       } else {
-        const year = AIService.YEAR_RE.exec(text);
-        if (year) {
-          dateRaw = year[0];
-          date = `${year[0]}-01-01`;
-          remainder = text.replace(year[0], '');
-        } else {
-          // Mismo criterio que tryDeterministicParse: "desde los 10
-          // años" también tiene que resolverse contra la fecha de
-          // nacimiento ya conocida, no quedar como texto crudo.
-          const resolved = AIService.resolveAgeRelativeDate(text, birthDate);
-          if (resolved) {
-            dateRaw = text;
-            date = resolved;
-            remainder = '';
-          }
+        // Mismo criterio que tryDeterministicParse: "desde los 10
+        // años" también tiene que resolverse contra la fecha de
+        // nacimiento ya conocida, no quedar como texto crudo.
+        const resolved = AIService.resolveAgeRelativeDate(text, birthDate);
+        if (resolved) {
+          dateRaw = text;
+          date = resolved;
+          remainder = '';
         }
       }
     }
@@ -2352,19 +3928,35 @@ export class AIService {
             genericName: label,
             prescribedDateRaw: parsed.dateRaw ?? undefined,
             prescribedDate: parsed.date ?? undefined,
+            sourceQuestionId: question.id,
           },
         };
       case 'IMPLANT_DEVICE':
         return {
           ...base,
           proposalType: 'IMPLANT_DEVICE',
-          data: { deviceName: label, implantedAtRaw: parsed.dateRaw ?? undefined, implantedAt: parsed.date ?? undefined },
+          data: {
+            deviceName: label, implantedAtRaw: parsed.dateRaw ?? undefined, implantedAt: parsed.date ?? undefined,
+            sourceQuestionId: question.id,
+          },
+        };
+      case 'TREATMENT':
+        return {
+          ...base,
+          proposalType: 'TREATMENT',
+          data: {
+            treatmentName: label,
+            startedAtRaw: parsed.dateRaw ?? undefined,
+            startedAt: parsed.date ?? undefined,
+            statusCode: AIService.inferChronicStatus(question.question_text),
+            sourceQuestionId: question.id,
+          },
         };
       default:
         return {
           ...base,
           proposalType: 'ALLERGY',
-          data: { allergenName: label, allergenType: 'OTHER', severity: 'MODERATE' },
+          data: { allergenName: label, allergenType: 'OTHER', severity: 'MODERATE', sourceQuestionId: question.id },
         };
     }
   }
@@ -2468,6 +4060,12 @@ export class AIService {
         newDateRaw: string | null;
       };
     }> = [];
+    // Ver el comentario grande en applyConfirmedProposal: cuando una
+    // fecha de antecedente NUEVO no es válida (futura o anterior al
+    // nacimiento), el registro se guarda igual pero sin fecha — antes
+    // esto no se avisaba en ningún lado. Se juntan acá los avisos de
+    // todo el lote para que la app los muestre todos juntos.
+    const dateWarnings: string[] = [];
     let savepointCounter = 0;
 
     const runOne = async (proposal: {
@@ -2479,7 +4077,9 @@ export class AIService {
       const savepoint = `confirm_all_${savepointCounter}`;
       await queryRunner.query(`SAVEPOINT ${savepoint}`);
       try {
-        results.push(await this.applyConfirmedProposal(queryRunner, personId, proposal));
+        const applied = await this.applyConfirmedProposal(queryRunner, personId, proposal);
+        results.push(applied);
+        if (applied.dateWarning) dateWarnings.push(applied.dateWarning);
         await queryRunner.query(`RELEASE SAVEPOINT ${savepoint}`);
       } catch (error) {
         if (error instanceof ConditionConflictError) {
@@ -2564,24 +4164,7 @@ export class AIService {
     // dentro de esta charla, combinar los campos (el valor no nulo más
     // reciente gana) y guardar UNA sola vez — nunca dos filas separadas
     // ni una corrección perdida.
-    const mergeKeyFor = (proposal: { proposal_type: string; json_data: Record<string, unknown> }): string | null => {
-      const data = proposal.json_data;
-      const norm = (v: unknown) => AIService.stripAccents(String(v ?? '').toLowerCase().trim());
-      switch (proposal.proposal_type) {
-        case 'CONDITION':
-          return `CONDITION|${norm(data.conditionName)}`;
-        case 'MEDICATION':
-          return `MEDICATION|${norm(data.genericName)}`;
-        case 'ALLERGY':
-          return `ALLERGY|${norm(data.allergenName)}`;
-        case 'SURGERY':
-          return `SURGERY|${norm(data.procedureName)}|${norm(data.performedDate ?? data.performedDateRaw)}`;
-        case 'IMPLANT_DEVICE':
-          return `IMPLANT_DEVICE|${norm(data.deviceName)}|${norm(data.implantedAt ?? data.implantedAtRaw)}`;
-        default:
-          return null;
-      }
-    };
+    const mergeKeyFor = AIService.mergeKeyFor;
 
     const groups = new Map<string, typeof otherProposals>();
     const ungrouped: typeof otherProposals = [];
@@ -2629,7 +4212,7 @@ export class AIService {
       }
     }
 
-    return { confirmed: results.length, results, skipped };
+    return { confirmed: results.length, results, skipped, dateWarnings };
   }
 
   private async applyConfirmedProposal(
@@ -2640,7 +4223,34 @@ export class AIService {
     const data = proposal.json_data;
     let resultingId: string;
     let resultingTable: string;
+    // Bug real reportado en vivo: "la primera vez que se pone una fecha
+    // mal... guarda la enfermedad pero no la fecha y no dice nada" —
+    // normalizeDateOrNull ya rechazaba fechas futuras/anteriores al
+    // nacimiento acá abajo, pero al devolver null en silencio, el
+    // registro se guardaba igual sin fecha y nadie se enteraba (a
+    // diferencia de updateConditionAnswer, que si tira error en la
+    // EDICIÓN de un antecedente ya existente). Se guarda acá el aviso
+    // para que confirmAllProposalsInTx lo junte y la app lo muestre.
+    let dateWarning: string | null = null;
+    const resolveDate = (raw: unknown, label: string): string | null => {
+      const resolved = AIService.normalizeDateOrNull(raw, birthDate);
+      if (typeof raw === 'string' && raw.trim() && !resolved) {
+        dateWarning = `La fecha que ingresaste para "${label}" no es válida (futura o anterior a la fecha de nacimiento) — se guardó sin fecha.`;
+      }
+      return resolved;
+    };
 
+    // Pedido explícito del usuario: ninguna fecha de antecedente puede
+    // ser futura ni anterior al nacimiento del viajero (ver
+    // normalizeDateOrNull) — se lee UNA sola vez acá, no en cada rama,
+    // para no repetir la consulta por cada antecedente que se confirma.
+    const [birthRow] = await queryRunner.query(
+      `SELECT birth_date FROM core.persons WHERE id = $1`,
+      [personId],
+    );
+    const birthDate: string | null = birthRow?.birth_date
+      ? (birthRow.birth_date instanceof Date ? birthRow.birth_date.toISOString().slice(0, 10) : String(birthRow.birth_date))
+      : null;
 
       if (proposal.proposal_type === 'MEDICATION') {
         // Historial de Salud — Fase 2: la IA sigue proponiendo texto
@@ -2657,7 +4267,7 @@ export class AIService {
              (person_id, generic_name, medication_catalog_id, brand_name, manufacturer, dose_amount, dose_unit_id,
               prescribed_date, is_current, canonical_status_id, confirmation_status_id, certification_status_id,
               provenance_id, ai_assisted, ai_completed_fields,
-              member_confirmed, member_confirmed_at, requires_member_confirmation, notes)
+              member_confirmed, member_confirmed_at, requires_member_confirmation, notes, source_question_id)
            VALUES (
              $1, core.encrypt_pii($2), $3, core.encrypt_pii($4), core.encrypt_pii($5), $6,
              CASE WHEN $7::text IS NULL THEN NULL ELSE params.catalog_id('DOSE_UNIT', $7) END,
@@ -2667,7 +4277,7 @@ export class AIService {
              params.catalog_id('CONFIRMATION_STATUS', 'MEMBER_CONFIRMED'),
              params.catalog_id('CERTIFICATION_STATUS', 'UNCERTIFIED'),
              params.catalog_id('PROVENANCE_TYPE', 'AI_ASSISTED'),
-             TRUE, $10::jsonb, TRUE, NOW(), FALSE, core.encrypt_pii($11)
+             TRUE, $10::jsonb, TRUE, NOW(), FALSE, core.encrypt_pii($11), $12
            )
            RETURNING id`,
           [
@@ -2678,10 +4288,11 @@ export class AIService {
             data.manufacturer ?? null,
             data.doseAmount ?? null,
             data.doseUnit ?? null,
-            data.prescribedDate ?? null,
+            resolveDate(data.prescribedDate, String(data.genericName ?? 'medicamento')),
             data.isCurrent ?? true,
             JSON.stringify(data),
             data.notes ?? null,
+            data.sourceQuestionId ?? null,
           ],
         );
         resultingId = row.id;
@@ -2704,7 +4315,7 @@ export class AIService {
              (person_id, allergen_name, allergen_catalog_id, allergen_type_id, severity_id,
               canonical_status_id, confirmation_status_id, certification_status_id,
               provenance_id, ai_assisted, ai_completed_fields,
-              member_confirmed, member_confirmed_at, requires_member_confirmation, notes)
+              member_confirmed, member_confirmed_at, requires_member_confirmation, notes, source_question_id)
            VALUES (
              $1, core.encrypt_pii($2), $3,
              params.catalog_id('ALLERGEN_TYPE', $4),
@@ -2713,7 +4324,7 @@ export class AIService {
              params.catalog_id('CONFIRMATION_STATUS', 'MEMBER_CONFIRMED'),
              params.catalog_id('CERTIFICATION_STATUS', 'UNCERTIFIED'),
              params.catalog_id('PROVENANCE_TYPE', 'AI_ASSISTED'),
-             TRUE, $6::jsonb, TRUE, NOW(), FALSE, core.encrypt_pii($7)
+             TRUE, $6::jsonb, TRUE, NOW(), FALSE, core.encrypt_pii($7), $8
            )
            RETURNING id`,
           [
@@ -2724,6 +4335,7 @@ export class AIService {
             data.severity ?? 'MODERATE',
             JSON.stringify(data),
             data.notes ?? null,
+            data.sourceQuestionId ?? null,
           ],
         );
         resultingId = row.id;
@@ -2774,7 +4386,7 @@ export class AIService {
                TRUE, NOW(), FALSE, core.encrypt_pii($4), $7
              )
              RETURNING id`,
-            [personId, data.conditionName, data.diagnosedDate ?? null, notes, statusCode, conditionCatalog.id, sourceQuestionId ?? null],
+            [personId, data.conditionName, resolveDate(data.diagnosedDate, String(data.conditionName ?? 'antecedente')), notes, statusCode, conditionCatalog.id, sourceQuestionId ?? null],
           );
         } catch (error) {
           // Pedido explícito del usuario: en vez de perder el dato en
@@ -2825,20 +4437,57 @@ export class AIService {
              (person_id, device_name, device_type_id, implanted_at,
               canonical_status_id, confirmation_status_id, certification_status_id,
               provenance_id, member_confirmed, member_confirmed_at,
-              requires_member_confirmation, notes)
+              requires_member_confirmation, notes, source_question_id)
            VALUES (
              $1, core.encrypt_pii($2), $5, $3::date,
              params.catalog_id('CANONICAL_STATUS', 'PROVISIONAL'),
              params.catalog_id('CONFIRMATION_STATUS', 'MEMBER_CONFIRMED'),
              params.catalog_id('CERTIFICATION_STATUS', 'UNCERTIFIED'),
              params.catalog_id('PROVENANCE_TYPE', 'AI_ASSISTED'),
-             TRUE, NOW(), FALSE, core.encrypt_pii($4)
+             TRUE, NOW(), FALSE, core.encrypt_pii($4), $6
            )
            RETURNING id`,
-          [personId, data.deviceName, data.implantedAt ?? null, notes, implantCatalog.id],
+          [personId, data.deviceName, resolveDate(data.implantedAt, String(data.deviceName ?? 'implante')), notes, implantCatalog.id, data.sourceQuestionId ?? null],
         );
         resultingId = row.id;
         resultingTable = 'clinical.implants_devices';
+      } else if (proposal.proposal_type === 'TREATMENT') {
+        // Pedido explícito del usuario: "para el caso de diálisis, como
+        // la tenemos que tratar ya que es un tratamiento" — mismo
+        // shape que CONDITION (status_id CONDITION_STATUS reutilizado,
+        // source_question_id para el mismo anti-duplicado por
+        // pregunta que ya usan CONDITION/SURGERY), pero en su propia
+        // tabla — la enfermedad de fondo (si la hay) se guarda aparte
+        // como CONDITION.
+        const notes = data.startedAtRaw && !data.startedAt
+          ? `Fecha declarada por el viajero: "${data.startedAtRaw}".${data.notes ? ' ' + data.notes : ''}`
+          : (data.notes ?? null);
+        const statusCode = data.statusCode ?? 'ACTIVE';
+        const treatmentCatalog = await this.catalogResolution.resolveOrCreate(
+          'TREATMENT_TYPE',
+          data.treatmentName,
+        );
+        const [row] = await queryRunner.query(
+          `INSERT INTO clinical.treatments
+             (person_id, treatment_name, treatment_catalog_id, status_id, started_at,
+              canonical_status_id, confirmation_status_id, certification_status_id,
+              provenance_id, member_confirmed, member_confirmed_at,
+              requires_member_confirmation, notes, source_question_id)
+           VALUES (
+             $1, core.encrypt_pii($2), $6,
+             params.catalog_id('CONDITION_STATUS', $5),
+             $3::date,
+             params.catalog_id('CANONICAL_STATUS', 'PROVISIONAL'),
+             params.catalog_id('CONFIRMATION_STATUS', 'MEMBER_CONFIRMED'),
+             params.catalog_id('CERTIFICATION_STATUS', 'UNCERTIFIED'),
+             params.catalog_id('PROVENANCE_TYPE', 'AI_ASSISTED'),
+             TRUE, NOW(), FALSE, core.encrypt_pii($4), $7
+           )
+           RETURNING id`,
+          [personId, data.treatmentName, resolveDate(data.startedAt, String(data.treatmentName ?? 'tratamiento')), notes, statusCode, treatmentCatalog.id, data.sourceQuestionId ?? null],
+        );
+        resultingId = row.id;
+        resultingTable = 'clinical.treatments';
       } else if (proposal.proposal_type === 'SURGERY') {
         // performed_at es NOT NULL en el schema — si ni el viajero ni la
         // IA lograron precisar ninguna fecha (no debería pasar, el
@@ -2868,7 +4517,7 @@ export class AIService {
              TRUE, NOW(), FALSE, core.encrypt_pii($4), $6
            )
            RETURNING id`,
-          [personId, data.procedureName, data.performedDate ?? null, notes, surgeryCatalog.id, data.sourceQuestionId ?? null],
+          [personId, data.procedureName, resolveDate(data.performedDate, String(data.procedureName ?? 'cirugía')), notes, surgeryCatalog.id, data.sourceQuestionId ?? null],
         );
         resultingId = row.id;
         resultingTable = 'clinical.surgeries';
@@ -2880,20 +4529,20 @@ export class AIService {
         // proposal (mismo turno de charla), así que se resuelve en la
         // misma rama: además del INSERT en vitals_history, un UPDATE en
         // core.persons.gender_id si vino genderCode.
-        const bloodTypeId = data.bloodTypeCode
-          ? (
-              await queryRunner.query(
-                `SELECT params.catalog_id('BLOOD_TYPE', $1) AS id`,
-                [data.bloodTypeCode],
-              )
-            )[0]?.id
-          : null;
-
+        //
+        // Pedido explícito del usuario: "Grupo Sanguíneo no es un signo
+        // vital... siempre es el mismo" — a diferencia de peso/altura/
+        // presión (que SÍ son mediciones repetibles, una fila nueva por
+        // carga), el grupo sanguíneo ya NO se inserta en vitals_history:
+        // pasa a core.persons.blood_type_id, mismo criterio que
+        // gender_id/birth_date más abajo (un solo valor por persona, se
+        // pisa in-place si se corrige). Ver
+        // proposed-blood-type-persons-and-clinical-dates.sql.
         const [row] = await queryRunner.query(
           `INSERT INTO clinical.vitals_history
              (person_id, weight_kg, height_cm, blood_pressure_sys, blood_pressure_dia,
-              blood_type_id, provenance_id)
-           VALUES ($1, $2, $3, $4, $5, $6, params.catalog_id('PROVENANCE_TYPE', 'AI_ASSISTED'))
+              provenance_id)
+           VALUES ($1, $2, $3, $4, $5, params.catalog_id('PROVENANCE_TYPE', 'AI_ASSISTED'))
            RETURNING id`,
           [
             personId,
@@ -2901,7 +4550,6 @@ export class AIService {
             data.heightCm ?? null,
             data.bloodPressureSystolic ?? null,
             data.bloodPressureDiastolic ?? null,
-            bloodTypeId,
           ],
         );
         resultingId = row.id;
@@ -2915,14 +4563,23 @@ export class AIService {
             [personId, data.genderCode],
           );
         }
-        if (data.birthDate) {
+        if (data.bloodTypeCode) {
+          await queryRunner.query(
+            `UPDATE core.persons
+             SET blood_type_id = params.catalog_id('BLOOD_TYPE', $2)
+             WHERE id = $1`,
+            [personId, data.bloodTypeCode],
+          );
+        }
+        const normalizedBirthDate = AIService.normalizeDateOrNull(data.birthDate);
+        if (normalizedBirthDate) {
           // Fecha de nacimiento pedida explícitamente por el usuario en
           // el guion del asistente — vive en core.persons.birth_date
           // (usada también para calcular la edad en getPersonContext),
           // no en vitals_history.
           await queryRunner.query(
             `UPDATE core.persons SET birth_date = $2::date WHERE id = $1`,
-            [personId, data.birthDate],
+            [personId, normalizedBirthDate],
           );
         }
       } else {
@@ -2937,13 +4594,13 @@ export class AIService {
         // fecha declarada sin poder normalizar (performedDateRaw) se
         // agregan ahí también como entradas {name, value}.
         const customValues = AIService.dedupeLabCustomValues(data, [
-          ...(data.customValues ?? []),
+          ...AIService.normalizeCustomValues(data.customValues),
           ...(!data.performedDate && data.performedDateRaw
             ? [{ name: 'Fecha declarada', value: data.performedDateRaw }]
             : []),
           ...(data.notes ? [{ name: 'Notas', value: data.notes }] : []),
         ]);
-        const performedAt = data.performedDate ?? null;
+        const performedAt = resolveDate(data.performedDate, String(data.labName ?? 'análisis'));
         const labName = data.labName ?? null;
 
         // Bug real reportado en vivo: "cuando le pido corregir un dato
@@ -3077,7 +4734,7 @@ export class AIService {
       [proposal.id, resultingId, resultingTable],
     );
 
-    return { proposalId: proposal.id, resultingId, resultingTable };
+    return { proposalId: proposal.id, resultingId, resultingTable, dateWarning };
   }
 
   async rejectProposal(personId: string, proposalId: string) {
@@ -3103,6 +4760,39 @@ export class AIService {
    * salir de la charla (botón atrás), la app consulta esto antes de
    * cerrar la pantalla para no dejar datos sueltos en limbo.
    */
+  /**
+   * Pedido explícito del usuario: "a medida que avanza vaya grabando
+   * información... para no perder lo registrado" — cada respuesta YA
+   * queda guardada como PENDING_CONFIRMATION apenas se la reconoce
+   * (ai.proposals), no hace falta ningún caché nuevo en el celular
+   * para esto. El único gap real era que, si la charla se cortaba
+   * antes de llegar al confirm-all final (crash, cuelgue del
+   * reconocedor, cierre de la app), volver a entrar a la pantalla
+   * arrancaba una charla DESDE CERO sin ofrecer retomar lo ya dicho —
+   * confirmado en vivo: una entrevista completa (vitals + 6
+   * antecedentes) quedó así, recuperable en la base pero invisible
+   * para la app. Esto busca la conversación INCOMPLETA más reciente de
+   * este viajero (mismo modelo) para que la pantalla pueda ofrecer
+   * "¿continuar donde quedaste?" antes de arrancar una nueva.
+   */
+  async findResumableConversation(personId: string, intakeModel: string) {
+    const [row] = await this.txManager.runInTransaction((queryRunner) =>
+      queryRunner.query(
+        `SELECT p.conversation_id AS "conversationId", MAX(p.created_at) AS "lastActivity"
+         FROM ai.proposals p
+         JOIN ai.conversations c ON c.id = p.conversation_id
+         WHERE c.person_id = $1 AND c.intake_model = $2 AND p.status = 'PENDING_CONFIRMATION'
+         GROUP BY p.conversation_id
+         ORDER BY MAX(p.created_at) DESC
+         LIMIT 1`,
+        [personId, intakeModel],
+      ),
+    );
+    if (!row) return null;
+    const items = await this.getPendingProposals(personId, row.conversationId);
+    return { conversationId: row.conversationId as string, lastActivity: row.lastActivity as Date, items };
+  }
+
   async getPendingProposals(personId: string, conversationId: string) {
     return this.txManager.runInTransaction((queryRunner) =>
       queryRunner.query(
@@ -3137,6 +4827,7 @@ export class AIService {
       case 'MEDICATION': return `Medicamento: ${data.genericName}`;
       case 'SURGERY': return `Cirugía: ${data.procedureName}`;
       case 'IMPLANT_DEVICE': return `Implante: ${data.deviceName}`;
+      case 'TREATMENT': return `Tratamiento: ${data.treatmentName}`;
       case 'LAB_RESULT': {
         // Pedido explícito del usuario: "me dice Análisis de sangre sin
         // darme detalle de los valores. No dice Glucemia y el valor" —
@@ -3155,8 +4846,10 @@ export class AIService {
         const values = labFieldLabels
           .filter(([key]) => data[key] != null)
           .map(([key, label]) => `${label} ${data[key]}`);
-        const customValues = (data.customValues as { name: string; value: string }[] | null) ?? [];
-        for (const cv of customValues) values.push(`${cv.name} ${cv.value}`);
+        // Ver el comentario de normalizeCustomValues: data acá viene tal
+        // cual la mandó el modelo (json_data sin procesar de un proposal
+        // pendiente), así que puede no ser un array todavía.
+        for (const cv of AIService.normalizeCustomValues(data.customValues)) values.push(`${cv.name} ${cv.value}`);
         return `Análisis: ${data.labName ?? 'estudio'}${date ? ` (${date})` : ''}` +
           (values.length ? ` — ${values.join(', ')}` : '');
       }
@@ -3171,13 +4864,25 @@ export class AIService {
    */
   async rejectAllPendingProposals(personId: string, conversationId: string) {
     return this.txManager.runInTransaction((queryRunner) =>
-      queryRunner.query(
-        `UPDATE ai.proposals
-         SET status = 'REJECTED', rejected_at = NOW()
-         WHERE conversation_id = $1 AND person_id = $2 AND status = 'PENDING_CONFIRMATION'
-         RETURNING id`,
-        [conversationId, personId],
-      ),
+      this.rejectAllPendingProposalsInTx(queryRunner, personId, conversationId),
+    );
+  }
+
+  /**
+   * Cuerpo de rejectAllPendingProposals separado para poder llamarlo con
+   * un queryRunner YA ABIERTO — mismo motivo que confirmAllProposalsInTx:
+   * el modelo Estructurado necesita descartar todo lo pendiente EN LA
+   * MISMA transacción del turno actual cuando el viajero pide cerrar sin
+   * guardar nada (wantsToDiscard, ver structuredIntakeChat), sin abrir
+   * una transacción nueva anidada.
+   */
+  private async rejectAllPendingProposalsInTx(queryRunner: QueryRunner, personId: string, conversationId: string) {
+    return queryRunner.query(
+      `UPDATE ai.proposals
+       SET status = 'REJECTED', rejected_at = NOW()
+       WHERE conversation_id = $1 AND person_id = $2 AND status = 'PENDING_CONFIRMATION'
+       RETURNING id`,
+      [conversationId, personId],
     );
   }
 
@@ -3235,6 +4940,12 @@ export class AIService {
      * campo distinto después, y volviera a preguntarlo — hay que resolver
      * el valor no-nulo más reciente POR CAMPO, no por fila.
      */
+    // Bug real reportado en vivo (Estructurado, mismo motivo acá):
+    // "ya lo he registrado, no está tomando lo que tiene registrado" —
+    // el grupo sanguíneo pasó a core.persons.blood_type_id (valor
+    // fijo, no histórico), esta consulta seguía mirando la fila vieja
+    // en vitals_history y por eso el asistente lo volvía a preguntar
+    // aunque ya estuviera cargado.
     const [latestVitals] = await queryRunner.query(
       `SELECT
          (SELECT weight_kg FROM clinical.vitals_history
@@ -3243,10 +4954,9 @@ export class AIService {
          (SELECT height_cm FROM clinical.vitals_history
           WHERE person_id = $1 AND deleted_at IS NULL AND height_cm IS NOT NULL
           ORDER BY measured_at DESC LIMIT 1) AS height_cm,
-         (SELECT bt.code FROM clinical.vitals_history v
-          JOIN params.catalog_values bt ON bt.id = v.blood_type_id
-          WHERE v.person_id = $1 AND v.deleted_at IS NULL AND v.blood_type_id IS NOT NULL
-          ORDER BY v.measured_at DESC LIMIT 1) AS blood_type_code`,
+         (SELECT bt.code FROM core.persons p
+          JOIN params.catalog_values bt ON bt.id = p.blood_type_id
+          WHERE p.id = $1) AS blood_type_code`,
       [personId],
     );
     if (latestVitals?.weight_kg != null) {
@@ -3262,7 +4972,7 @@ export class AIService {
       hasClinicalData = true;
     }
 
-    const [conditions, allergies, medications, surgeries, labResults] = await Promise.all([
+    const [conditions, allergies, medications, surgeries, implants, treatments, labResults] = await Promise.all([
       queryRunner.query(
         `SELECT core.decrypt_pii(condition_name) AS name FROM clinical.conditions
          WHERE person_id = $1 AND active = TRUE AND deleted_at IS NULL`,
@@ -3281,6 +4991,24 @@ export class AIService {
       queryRunner.query(
         `SELECT core.decrypt_pii(procedure_name) AS name FROM clinical.surgeries
          WHERE person_id = $1 AND deleted_at IS NULL`,
+        [personId],
+      ),
+      // Gap real encontrado revisando este método (mismo síntoma que ya
+      // se había arreglado para lab_results, ver comentario de abajo):
+      // implants_devices nunca se consultaba acá — un implante se
+      // guardaba bien, pero la IA no lo veía en el contexto y podía
+      // volver a preguntarlo o no saber que ya existe.
+      queryRunner.query(
+        `SELECT core.decrypt_pii(device_name) AS name FROM clinical.implants_devices
+         WHERE person_id = $1 AND active = TRUE AND deleted_at IS NULL`,
+        [personId],
+      ),
+      // Pedido explícito del usuario: diálisis/quimioterapia/etc. son
+      // TREATMENT, no CONDITION (ver proposed-treatment-type.sql) —
+      // necesitan su propia entrada en el contexto igual que el resto.
+      queryRunner.query(
+        `SELECT core.decrypt_pii(treatment_name) AS name FROM clinical.treatments
+         WHERE person_id = $1 AND active = TRUE AND deleted_at IS NULL`,
         [personId],
       ),
       // Bug real reportado en vivo: "le consulté qué análisis tengo
@@ -3323,6 +5051,14 @@ export class AIService {
     }
     if (surgeries.length) {
       parts.push(`cirugías ya cargadas: ${surgeries.map((s: { name: string }) => s.name).join(', ')}`);
+      hasClinicalData = true;
+    }
+    if (implants.length) {
+      parts.push(`implantes/dispositivos ya cargados: ${implants.map((i: { name: string }) => i.name).join(', ')}`);
+      hasClinicalData = true;
+    }
+    if (treatments.length) {
+      parts.push(`tratamientos ya cargados: ${treatments.map((t: { name: string }) => t.name).join(', ')}`);
       hasClinicalData = true;
     }
     if (labResults.length) {
@@ -3463,6 +5199,9 @@ export class AIService {
         case 'IMPLANT_DEVICE':
           parts.push(`implante ya anotado en esta charla: ${data.deviceName}`);
           break;
+        case 'TREATMENT':
+          parts.push(`tratamiento ya anotado en esta charla: ${data.treatmentName}`);
+          break;
         case 'LAB_RESULT':
           parts.push(`estudio ya anotado en esta charla${data.labName ? `: ${data.labName}` : ''}`);
           break;
@@ -3520,13 +5259,19 @@ export class AIService {
    * violando MTA-103 §10) para poder alimentarlo de la base de
    * conocimiento igual que los otros dos asistentes (gap #73).
    */
-  async appHelpChat(question: string): Promise<{ answer: string; configured: boolean }> {
+  async appHelpChat(personId: string, question: string): Promise<{ answer: string; configured: boolean }> {
     if (!this.config.get<boolean>('AI_ENABLED')) {
       return { answer: FALLBACK_ANSWER_APP_HELP, configured: false };
     }
     return this.txManager.runInTransaction(async (queryRunner) => {
+      // Secuencial a propósito: dos queries en paralelo (Promise.all)
+      // sobre el mismo queryRunner comparten una única conexión — pg
+      // no soporta dos queries concurrentes en el mismo client (tira
+      // "Calling client.query() when the client is already executing
+      // a query is deprecated", visto en vivo en el log del server).
       const guidance = await this.getAppHelpScriptGuidance(queryRunner);
-      const result = await this.provider.appHelpChat(question, guidance);
+      const language = await this.getPersonLanguage(queryRunner, personId);
+      const result = await this.provider.appHelpChat(question, guidance, language);
       return { answer: result.answer || FALLBACK_ANSWER_APP_HELP, configured: true };
     });
   }

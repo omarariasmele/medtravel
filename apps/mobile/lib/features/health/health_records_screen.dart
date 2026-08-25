@@ -1,11 +1,13 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/api_client.dart';
 import '../../core/text_normalize.dart';
 import '../../core/auth_state.dart';
 import '../../core/catalog_service.dart';
+import '../../l10n/app_strings.dart';
 import '../assistant/health_assistant_screen.dart' show openHealthAssistant;
 
 /// Sin esto, un GET que falla (servidor caído, `adb reverse` perdido,
@@ -126,13 +128,13 @@ class _RecordCard extends StatelessWidget {
           if (onEdit != null)
             IconButton(
               icon: Icon(Icons.edit_outlined, size: 20, color: Colors.grey.shade600),
-              tooltip: 'Editar',
+              tooltip: context.tr('common.edit'),
               onPressed: onEdit,
             ),
           if (onDelete != null)
             IconButton(
               icon: Icon(Icons.delete_outline, size: 20, color: Colors.grey.shade600),
-              tooltip: 'Borrar',
+              tooltip: context.tr('common.delete'),
               onPressed: onDelete,
             ),
         ],
@@ -159,15 +161,17 @@ Future<void> _confirmAndSoftDelete({
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: const Text('¿Borrar este dato?'),
-      content: Text('Vas a borrar "$itemLabel". Si lo cargaste por error, esta acción lo saca de tu Historial de Salud.'),
+      title: Text(context.tr('health.deleteThisData')),
+      content: Text(context.tr('health.deleteConfirmBody', params: {'item': itemLabel})),
       actions: [
-        TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancelar')),
-        FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Borrar')),
+        TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: Text(context.tr('common.cancel'))),
+        FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: Text(context.tr('common.delete'))),
       ],
     ),
   );
   if (confirmed != true) return;
+  if (!context.mounted) return;
+  final deleteErrorFallback = context.tr('health.deleteError');
   try {
     await ApiClient.instance.dio.patch('/clinical/$resource/$id', data: {
       'deletedAt': DateTime.now().toUtc().toIso8601String(),
@@ -176,7 +180,7 @@ Future<void> _confirmAndSoftDelete({
   } catch (e) {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(_errorMessage(e, 'No se pudo borrar. Probá de nuevo.'))),
+      SnackBar(content: Text(_errorMessage(e, deleteErrorFallback))),
     );
   }
 }
@@ -197,6 +201,8 @@ class _RecordColors {
   static const medicationIcon = Color(0xFF042C53);
   static const implantBg = Color(0xFFEEEDFE);
   static const implantIcon = Color(0xFF26215C);
+  static const treatmentBg = Color(0xFFFDE9F3);
+  static const treatmentIcon = Color(0xFF5C1B40);
   static const neutralBg = Color(0xFFF1EFE8);
   static const neutralIcon = Color(0xFF444441);
   static const vitalsBg = Color(0xFFE1F5EE);
@@ -220,7 +226,7 @@ class _LoadErrorView extends StatelessWidget {
             const SizedBox(height: 12),
             Text(message, textAlign: TextAlign.center),
             const SizedBox(height: 16),
-            OutlinedButton(onPressed: onRetry, child: const Text('Reintentar')),
+            OutlinedButton(onPressed: onRetry, child: Text(context.tr('common.retry'))),
           ],
         ),
       ),
@@ -245,6 +251,26 @@ class _HealthRecordsScreenState extends State<HealthRecordsScreen> with SingleTi
   DateTime? _lastUpdatedAt;
   int _reminderDays = 60;
   bool _loadingLastUpdated = true;
+
+  /// Bug real reportado en vivo: corregir una alergia por voz ("polen"
+  /// -> "polvo") se guardaba bien en la base (confirmado en el log del
+  /// servidor: UPDATE + COMMIT, sin ningún revert) pero la pestaña de
+  /// Alergias seguía mostrando el valor viejo al volver del asistente.
+  /// Cada una de las 7 pestañas solo carga sus datos UNA vez, en su
+  /// propio initState — HomeShell las mantiene todas vivas en un
+  /// IndexedStack, así que volver acá después de usar el asistente no
+  /// las reconstruye solo. Cambiar la key de cada pestaña las obliga a
+  /// recrearse (y por lo tanto a recargar) apenas se vuelve del
+  /// asistente — mismo problema, mismo tipo de arreglo, que el cartel
+  /// de "no cargaste información" en Inicio (ver _navigateAndRefresh).
+  int _reloadKey = 0;
+
+  Future<void> _openAssistantAndReload() async {
+    await openHealthAssistant(context);
+    if (!mounted) return;
+    setState(() => _reloadKey++);
+    _loadLastUpdated();
+  }
 
   @override
   void initState() {
@@ -296,29 +322,30 @@ class _HealthRecordsScreenState extends State<HealthRecordsScreen> with SingleTi
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 7,
+      length: 8,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Historial de Salud'),
+          title: Text(context.tr('health.title')),
           actions: [
             IconButton(
               icon: const Icon(Icons.health_and_safety_outlined),
-              tooltip: 'Actualizar información de la Ficha de Salud',
-              onPressed: () => openHealthAssistant(context),
+              tooltip: context.tr('home.updateHealthTitle'),
+              onPressed: _openAssistantAndReload,
             ),
           ],
           // Pedido explícito del usuario: "eliminar el título Comorbilidades
           // de todos lados, es enfermedades o enfermedades crónicas" — esta
           // solapa agrupa ambas (crónicas y no crónicas), por eso queda
           // "Enfermedades" (sin "Crónicas"), igual que en admin-web.
-          bottom: const TabBar(isScrollable: true, tabs: [
-            Tab(text: 'Alergias'),
-            Tab(text: 'Enfermedades'),
-            Tab(text: 'Implantes'),
-            Tab(text: 'Medicamentos'),
-            Tab(text: 'Cirugías'),
-            Tab(text: 'Peso y Mediciones'),
-            Tab(text: 'Estudios'),
+          bottom: TabBar(isScrollable: true, tabs: [
+            Tab(text: context.tr('health.tabAllergies')),
+            Tab(text: context.tr('health.tabConditions')),
+            Tab(text: context.tr('health.tabImplants')),
+            Tab(text: context.tr('health.tabTreatments')),
+            Tab(text: context.tr('health.tabMedications')),
+            Tab(text: context.tr('health.tabSurgeries')),
+            Tab(text: context.tr('health.tabVitals')),
+            Tab(text: context.tr('health.tabLabResults')),
           ]),
         ),
         body: Column(
@@ -326,17 +353,18 @@ class _HealthRecordsScreenState extends State<HealthRecordsScreen> with SingleTi
             if (!_loadingLastUpdated) _LastUpdatedBanner(
               lastUpdatedAt: _lastUpdatedAt,
               needsReminder: _needsReminder,
-              onUpdatePressed: () => openHealthAssistant(context),
+              onUpdatePressed: _openAssistantAndReload,
             ),
-            const Expanded(
+            Expanded(
               child: TabBarView(children: [
-                _AllergiesTab(),
-                _ConditionsTab(),
-                _ImplantsTab(),
-                _MedicationsTab(),
-                _SurgeriesTab(),
-                _VitalsTab(),
-                _LabResultsTab(),
+                _AllergiesTab(key: ValueKey('allergies-$_reloadKey')),
+                _ConditionsTab(key: ValueKey('conditions-$_reloadKey')),
+                _ImplantsTab(key: ValueKey('implants-$_reloadKey')),
+                _TreatmentsTab(key: ValueKey('treatments-$_reloadKey')),
+                _MedicationsTab(key: ValueKey('medications-$_reloadKey')),
+                _SurgeriesTab(key: ValueKey('surgeries-$_reloadKey')),
+                _VitalsTab(key: ValueKey('vitals-$_reloadKey')),
+                _LabResultsTab(key: ValueKey('labresults-$_reloadKey')),
               ]),
             ),
           ],
@@ -371,11 +399,11 @@ class _LastUpdatedBanner extends StatelessWidget {
     final hasData = lastUpdatedAt != null;
     final String message;
     if (!hasData) {
-      message = 'No hay información de salud registrada todavía. Ingresá tus datos por si los necesitás ante una emergencia.';
+      message = context.tr('health.noDataYet');
     } else if (needsReminder) {
-      message = 'Última actualización: ${_formatDate(lastUpdatedAt!)}. ¿Tenés alguna novedad de salud? Actualizala.';
+      message = context.tr('health.lastUpdatedReminder', params: {'date': _formatDate(lastUpdatedAt!)});
     } else {
-      message = 'Última actualización: ${_formatDate(lastUpdatedAt!)}';
+      message = context.tr('health.lastUpdated', params: {'date': _formatDate(lastUpdatedAt!)});
     }
     final needsAttention = !hasData || needsReminder;
     return Container(
@@ -402,7 +430,7 @@ class _LastUpdatedBanner extends StatelessWidget {
             ),
           ),
           if (needsAttention)
-            TextButton(onPressed: onUpdatePressed, child: Text(hasData ? 'Actualizar' : 'Ingresar datos')),
+            TextButton(onPressed: onUpdatePressed, child: Text(hasData ? context.tr('health.updateButton') : context.tr('health.enterDataButton'))),
         ],
       ),
     );
@@ -410,7 +438,7 @@ class _LastUpdatedBanner extends StatelessWidget {
 }
 
 class _AllergiesTab extends StatefulWidget {
-  const _AllergiesTab();
+  const _AllergiesTab({super.key});
   @override
   State<_AllergiesTab> createState() => _AllergiesTabState();
 }
@@ -457,7 +485,7 @@ class _AllergiesTabState extends State<_AllergiesTab> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = _errorMessage(e, 'No se pudieron cargar las alergias.');
+        _error = _errorMessage(e, context.tr('health.allergy.loadError'));
         _loading = false;
       });
     }
@@ -494,7 +522,7 @@ class _AllergiesTabState extends State<_AllergiesTab> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(isEdit ? 'Editar alergia' : 'Agregar alergia', style: Theme.of(ctx).textTheme.titleLarge),
+              Text(isEdit ? context.tr('health.allergy.editTitle') : context.tr('health.allergy.addTitle'), style: Theme.of(ctx).textTheme.titleLarge),
               const SizedBox(height: 12),
               // Bug real reportado en vivo: escribir "ñ" (u otro acento
               // vía popup de tecla larga en teclados Android) se perdía
@@ -506,35 +534,37 @@ class _AllergiesTabState extends State<_AllergiesTab> {
               // de widgets mientras se escribe.
               Autocomplete<CatalogValue>(
                 initialValue: TextEditingValue(text: existing?['allergenName'] as String? ?? ''),
-                displayStringForOption: (c) => c.labelEs,
+                displayStringForOption: (c) => c.label(context.lang),
                 optionsBuilder: (v) => v.text.isEmpty
                     ? const Iterable<CatalogValue>.empty()
-                    : allergenCatalog.where((c) => c.labelEs.toLowerCase().contains(v.text.toLowerCase())),
+                    : allergenCatalog.where((c) => c.label(context.lang).toLowerCase().contains(v.text.toLowerCase())),
                 fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
                   nameController = controller;
                   return TextField(
                     controller: controller,
                     focusNode: focusNode,
-                    decoration: const InputDecoration(labelText: 'Alérgeno'),
+                    decoration: InputDecoration(labelText: context.tr('health.allergy.allergenLabel')),
                   );
                 },
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
                 initialValue: typeId,
-                decoration: const InputDecoration(labelText: 'Tipo'),
-                items: typeCatalog.map((c) => DropdownMenuItem(value: c.id, child: Text(c.labelEs))).toList(),
+                isExpanded: true,
+                decoration: InputDecoration(labelText: context.tr('health.allergy.typeLabel')),
+                items: typeCatalog.map((c) => DropdownMenuItem(value: c.id, child: Text(c.label(context.lang), overflow: TextOverflow.ellipsis))).toList(),
                 onChanged: (v) => setSheetState(() => typeId = v),
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
                 initialValue: severityId,
-                decoration: const InputDecoration(labelText: 'Severidad'),
-                items: severityCatalog.map((c) => DropdownMenuItem(value: c.id, child: Text(c.labelEs))).toList(),
+                isExpanded: true,
+                decoration: InputDecoration(labelText: context.tr('health.allergy.severityLabel')),
+                items: severityCatalog.map((c) => DropdownMenuItem(value: c.id, child: Text(c.label(context.lang), overflow: TextOverflow.ellipsis))).toList(),
                 onChanged: (v) => setSheetState(() => severityId = v),
               ),
               const SizedBox(height: 12),
-              TextField(controller: notesController, decoration: const InputDecoration(labelText: 'Notas (opcional)')),
+              TextField(controller: notesController, decoration: InputDecoration(labelText: context.tr('health.allergy.notesOptional'))),
               const SizedBox(height: 16),
               FilledButton(
                 onPressed: (typeId == null || severityId == null)
@@ -542,7 +572,7 @@ class _AllergiesTabState extends State<_AllergiesTab> {
                     : () async {
                         if (nameController.text.trim().isEmpty) {
                           ScaffoldMessenger.of(ctx).showSnackBar(
-                            const SnackBar(content: Text('Ingresá el alérgeno.')),
+                            SnackBar(content: Text(context.tr('health.allergy.enterAllergenError'))),
                           );
                           return;
                         }
@@ -573,7 +603,7 @@ class _AllergiesTabState extends State<_AllergiesTab> {
                         if (ctx.mounted) Navigator.of(ctx).pop();
                         await _load();
                       },
-                child: const Text('Guardar'),
+                child: Text(context.tr('common.save')),
               ),
             ],
           ),
@@ -590,8 +620,8 @@ class _AllergiesTabState extends State<_AllergiesTab> {
       body: RefreshIndicator(
         onRefresh: _load,
         child: _items.isEmpty
-            ? ListView(children: const [
-                Padding(padding: EdgeInsets.all(24), child: Text('Sin alergias registradas.')),
+            ? ListView(children: [
+                Padding(padding: const EdgeInsets.all(24), child: Text(context.tr('health.allergy.emptyList'))),
               ])
             : ListView.builder(
                 itemCount: _items.length,
@@ -606,7 +636,7 @@ class _AllergiesTabState extends State<_AllergiesTab> {
                   // sin fecha visible.
                   final createdAt = a['createdAt'] as String?;
                   final subtitleParts = <String>[
-                    if (createdAt != null) 'Registrada ${_formatIsoDate(createdAt)}',
+                    if (createdAt != null) context.tr('health.allergy.registeredOn', params: {'date': _formatIsoDate(createdAt)}),
                     if (a['notes'] != null) a['notes'] as String,
                   ];
                   return _RecordCard(
@@ -614,7 +644,7 @@ class _AllergiesTabState extends State<_AllergiesTab> {
                     iconBackground: isHighSeverity ? _RecordColors.allergyBg : _RecordColors.allergyAmberBg,
                     iconColor: isHighSeverity ? _RecordColors.allergyIcon : _RecordColors.allergyAmberIcon,
                     title: a['allergenName'] as String? ?? '',
-                    badgeLabel: severity?.labelEs,
+                    badgeLabel: severity?.label(context.lang),
                     badgeBackground: isHighSeverity ? _RecordColors.allergyBg : _RecordColors.allergyAmberBg,
                     badgeColor: isHighSeverity ? _RecordColors.allergyIcon : _RecordColors.allergyAmberIcon,
                     subtitle: subtitleParts.isEmpty ? null : subtitleParts.join(' · '),
@@ -623,7 +653,7 @@ class _AllergiesTabState extends State<_AllergiesTab> {
                       context: context,
                       resource: 'allergies',
                       id: a['id'] as String,
-                      itemLabel: a['allergenName'] as String? ?? 'esta alergia',
+                      itemLabel: a['allergenName'] as String? ?? context.tr('health.allergy.deletedFallback'),
                       onDeleted: _load,
                     ),
                   );
@@ -636,7 +666,7 @@ class _AllergiesTabState extends State<_AllergiesTab> {
 }
 
 class _ConditionsTab extends StatefulWidget {
-  const _ConditionsTab();
+  const _ConditionsTab({super.key});
   @override
   State<_ConditionsTab> createState() => _ConditionsTabState();
 }
@@ -656,7 +686,7 @@ class _ConditionsTabState extends State<_ConditionsTab> {
     return null;
   }
 
-  String _statusLabel(String? statusId) => CatalogService.labelFor(_statusCatalog, statusId);
+  String _statusLabel(String? statusId) => CatalogService.labelFor(_statusCatalog, statusId, lang: context.lang);
 
   /// Pedido explícito del usuario: "Activa" es el estado por default de
   /// toda condición — mostrarlo en todas las tarjetas es ruido. Si no
@@ -695,7 +725,7 @@ class _ConditionsTabState extends State<_ConditionsTab> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = _errorMessage(e, 'No se pudieron cargar los antecedentes.');
+        _error = _errorMessage(e, context.tr('health.condition.loadError'));
         _loading = false;
       });
     }
@@ -730,36 +760,37 @@ class _ConditionsTabState extends State<_ConditionsTab> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(isEdit ? 'Editar condición' : 'Agregar condición', style: Theme.of(ctx).textTheme.titleLarge),
+              Text(isEdit ? context.tr('health.condition.editTitle') : context.tr('health.condition.addTitle'), style: Theme.of(ctx).textTheme.titleLarge),
               const SizedBox(height: 12),
               Autocomplete<CatalogValue>(
                 initialValue: TextEditingValue(text: existing?['conditionName'] as String? ?? ''),
-                displayStringForOption: (c) => c.labelEs,
+                displayStringForOption: (c) => c.label(context.lang),
                 optionsBuilder: (v) => v.text.isEmpty
                     ? const Iterable<CatalogValue>.empty()
-                    : conditionCatalog.where((c) => c.labelEs.toLowerCase().contains(v.text.toLowerCase())),
+                    : conditionCatalog.where((c) => c.label(context.lang).toLowerCase().contains(v.text.toLowerCase())),
                 fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
                   nameController = controller;
                   return TextField(
                     controller: controller,
                     focusNode: focusNode,
-                    decoration: const InputDecoration(labelText: 'Condición', helperText: 'Ej. Diabetes tipo 2'),
+                    decoration: InputDecoration(labelText: context.tr('health.condition.nameLabel'), helperText: context.tr('health.condition.nameHelper')),
                   );
                 },
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
                 initialValue: statusId,
-                decoration: const InputDecoration(labelText: 'Estado'),
-                items: statusCatalog.map((c) => DropdownMenuItem(value: c.id, child: Text(c.labelEs))).toList(),
+                isExpanded: true,
+                decoration: InputDecoration(labelText: context.tr('health.condition.statusLabel')),
+                items: statusCatalog.map((c) => DropdownMenuItem(value: c.id, child: Text(c.label(context.lang), overflow: TextOverflow.ellipsis))).toList(),
                 onChanged: (v) => setSheetState(() => statusId = v),
               ),
               const SizedBox(height: 12),
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 title: Text(diagnosedAt != null
-                    ? 'Fecha de diagnóstico: ${_formatDate(diagnosedAt!)}'
-                    : 'Fecha de diagnóstico (opcional, aproximada si no la recordás)'),
+                    ? context.tr('health.condition.diagnosedDateWithValue', params: {'date': _formatDate(diagnosedAt!)})
+                    : context.tr('health.condition.diagnosedDateEmpty')),
                 trailing: const Icon(Icons.calendar_today),
                 onTap: () async {
                   final picked = await showDatePicker(
@@ -778,7 +809,7 @@ class _ConditionsTabState extends State<_ConditionsTab> {
                     : () async {
                         if (nameController.text.trim().isEmpty) {
                           ScaffoldMessenger.of(ctx).showSnackBar(
-                            const SnackBar(content: Text('Ingresá la condición.')),
+                            SnackBar(content: Text(context.tr('health.condition.enterConditionError'))),
                           );
                           return;
                         }
@@ -807,7 +838,7 @@ class _ConditionsTabState extends State<_ConditionsTab> {
                         if (ctx.mounted) Navigator.of(ctx).pop();
                         await _load();
                       },
-                child: const Text('Guardar'),
+                child: Text(context.tr('common.save')),
               ),
             ],
           ),
@@ -827,11 +858,11 @@ class _ConditionsTabState extends State<_ConditionsTab> {
       body: RefreshIndicator(
         onRefresh: _load,
         child: _items.isEmpty
-            ? ListView(children: const [Padding(padding: EdgeInsets.all(24), child: Text('Sin condiciones registradas.'))])
+            ? ListView(children: [Padding(padding: const EdgeInsets.all(24), child: Text(context.tr('health.condition.emptyList')))])
             : ListView(
                 children: [
-                  if (chronic.isNotEmpty) ..._conditionSection('Enfermedades Crónicas', chronic),
-                  if (other.isNotEmpty) ..._conditionSection('Enfermedades', other),
+                  if (chronic.isNotEmpty) ..._conditionSection(context.tr('health.condition.chronicSectionTitle'), chronic),
+                  if (other.isNotEmpty) ..._conditionSection(context.tr('health.condition.otherSectionTitle'), other),
                 ],
               ),
       ),
@@ -855,13 +886,13 @@ class _ConditionsTabState extends State<_ConditionsTab> {
                 : _statusLabel(e['statusId'] as String?),
             badgeBackground: e['statusId'] == _chronicStatusId ? _RecordColors.conditionBg : _RecordColors.neutralBg,
             badgeColor: e['statusId'] == _chronicStatusId ? _RecordColors.conditionIcon : _RecordColors.neutralIcon,
-            subtitle: e['diagnosedAt'] != null ? 'Diagnosticada ${_formatIsoDate(e['diagnosedAt'] as String)}' : null,
+            subtitle: e['diagnosedAt'] != null ? context.tr('health.condition.diagnosedOn', params: {'date': _formatIsoDate(e['diagnosedAt'] as String)}) : null,
             onEdit: () => _openForm(e),
             onDelete: () => _confirmAndSoftDelete(
               context: context,
               resource: 'conditions',
               id: e['id'] as String,
-              itemLabel: e['conditionName'] as String? ?? 'esta condición',
+              itemLabel: e['conditionName'] as String? ?? context.tr('health.condition.deletedFallback'),
               onDeleted: _load,
             ),
           ),
@@ -869,7 +900,7 @@ class _ConditionsTabState extends State<_ConditionsTab> {
 }
 
 class _MedicationsTab extends StatefulWidget {
-  const _MedicationsTab();
+  const _MedicationsTab({super.key});
   @override
   State<_MedicationsTab> createState() => _MedicationsTabState();
 }
@@ -902,7 +933,7 @@ class _MedicationsTabState extends State<_MedicationsTab> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = _errorMessage(e, 'No se pudieron cargar los medicamentos.');
+        _error = _errorMessage(e, context.tr('health.medication.loadError'));
         _loading = false;
       });
     }
@@ -934,20 +965,20 @@ class _MedicationsTabState extends State<_MedicationsTab> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(isEdit ? 'Editar medicamento' : 'Agregar medicamento', style: Theme.of(ctx).textTheme.titleLarge),
+              Text(isEdit ? context.tr('health.medication.editTitle') : context.tr('health.medication.addTitle'), style: Theme.of(ctx).textTheme.titleLarge),
               const SizedBox(height: 12),
               Autocomplete<CatalogValue>(
                 initialValue: TextEditingValue(text: existing?['genericName'] as String? ?? ''),
-                displayStringForOption: (c) => c.labelEs,
+                displayStringForOption: (c) => c.label(context.lang),
                 optionsBuilder: (v) => v.text.isEmpty
                     ? const Iterable<CatalogValue>.empty()
-                    : medicationCatalog.where((c) => c.labelEs.toLowerCase().contains(v.text.toLowerCase())),
+                    : medicationCatalog.where((c) => c.label(context.lang).toLowerCase().contains(v.text.toLowerCase())),
                 fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
                   nameController = controller;
                   return TextField(
                     controller: controller,
                     focusNode: focusNode,
-                    decoration: const InputDecoration(labelText: 'Droga (nombre genérico)'),
+                    decoration: InputDecoration(labelText: context.tr('health.medication.genericNameLabel')),
                   );
                 },
               ),
@@ -959,28 +990,29 @@ class _MedicationsTabState extends State<_MedicationsTab> {
                     child: TextField(
                       controller: doseAmountController,
                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      decoration: const InputDecoration(labelText: 'Dosis (opcional)'),
+                      decoration: InputDecoration(labelText: context.tr('health.medication.doseOptional')),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: DropdownButtonFormField<String>(
                       initialValue: doseUnitId,
-                      decoration: const InputDecoration(labelText: 'Unidad'),
-                      items: doseUnitCatalog.map((c) => DropdownMenuItem(value: c.id, child: Text(c.labelEs))).toList(),
+                      isExpanded: true,
+                      decoration: InputDecoration(labelText: context.tr('health.medication.unitLabel')),
+                      items: doseUnitCatalog.map((c) => DropdownMenuItem(value: c.id, child: Text(c.label(context.lang), overflow: TextOverflow.ellipsis))).toList(),
                       onChanged: (v) => setSheetState(() => doseUnitId = v),
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 12),
-              TextField(controller: brandController, decoration: const InputDecoration(labelText: 'Nombre comercial (opcional)')),
+              TextField(controller: brandController, decoration: InputDecoration(labelText: context.tr('health.medication.brandOptional'))),
               const SizedBox(height: 12),
-              TextField(controller: manufacturerController, decoration: const InputDecoration(labelText: 'Laboratorio (opcional)')),
+              TextField(controller: manufacturerController, decoration: InputDecoration(labelText: context.tr('health.medication.manufacturerOptional'))),
               const SizedBox(height: 12),
               ListTile(
                 contentPadding: EdgeInsets.zero,
-                title: Text(prescribedDate == null ? 'Fecha de prescripción (opcional)' : _formatDate(prescribedDate!)),
+                title: Text(prescribedDate == null ? context.tr('health.medication.prescribedDateOptional') : _formatDate(prescribedDate!)),
                 trailing: const Icon(Icons.calendar_today_outlined, size: 20),
                 onTap: () async {
                   final picked = await showDatePicker(
@@ -997,7 +1029,7 @@ class _MedicationsTabState extends State<_MedicationsTab> {
                 onPressed: () async {
                         if (nameController.text.trim().isEmpty) {
                           ScaffoldMessenger.of(ctx).showSnackBar(
-                            const SnackBar(content: Text('Ingresá la droga.')),
+                            SnackBar(content: Text(context.tr('health.medication.enterDrugError'))),
                           );
                           return;
                         }
@@ -1033,7 +1065,7 @@ class _MedicationsTabState extends State<_MedicationsTab> {
                         if (ctx.mounted) Navigator.of(ctx).pop();
                         await _load();
                       },
-                child: const Text('Guardar'),
+                child: Text(context.tr('common.save')),
               ),
             ],
           ),
@@ -1050,7 +1082,7 @@ class _MedicationsTabState extends State<_MedicationsTab> {
       body: RefreshIndicator(
         onRefresh: _load,
         child: _items.isEmpty
-            ? ListView(children: const [Padding(padding: EdgeInsets.all(24), child: Text('Sin medicamentos registrados.'))])
+            ? ListView(children: [Padding(padding: const EdgeInsets.all(24), child: Text(context.tr('health.medication.emptyList')))])
             : ListView.builder(
                 itemCount: _items.length,
                 itemBuilder: (context, i) {
@@ -1062,7 +1094,7 @@ class _MedicationsTabState extends State<_MedicationsTab> {
                   final subtitleParts = <String>[
                     if (doseAmount != null) '$doseAmount',
                     if (manufacturer != null) manufacturer,
-                    if (startedAt != null) 'Desde ${_formatIsoDate(startedAt)}',
+                    if (startedAt != null) context.tr('health.medication.sinceDate', params: {'date': _formatIsoDate(startedAt)}),
                   ];
                   final isCurrent = m['isCurrent'] != false;
                   return _RecordCard(
@@ -1070,7 +1102,7 @@ class _MedicationsTabState extends State<_MedicationsTab> {
                     iconBackground: _RecordColors.medicationBg,
                     iconColor: _RecordColors.medicationIcon,
                     title: '${m['genericName']}${brand != null ? ' ($brand)' : ''}',
-                    badgeLabel: isCurrent ? 'Actual' : 'Discontinuado',
+                    badgeLabel: isCurrent ? context.tr('health.medication.currentBadge') : context.tr('health.medication.discontinuedBadge'),
                     badgeBackground: isCurrent ? _RecordColors.medicationBg : _RecordColors.neutralBg,
                     badgeColor: isCurrent ? _RecordColors.medicationIcon : _RecordColors.neutralIcon,
                     subtitle: subtitleParts.isEmpty ? null : subtitleParts.join(' · '),
@@ -1079,7 +1111,7 @@ class _MedicationsTabState extends State<_MedicationsTab> {
                       context: context,
                       resource: 'medications',
                       id: m['id'] as String,
-                      itemLabel: m['genericName'] as String? ?? 'este medicamento',
+                      itemLabel: m['genericName'] as String? ?? context.tr('health.medication.deletedFallback'),
                       onDeleted: _load,
                     ),
                   );
@@ -1092,7 +1124,7 @@ class _MedicationsTabState extends State<_MedicationsTab> {
 }
 
 class _SurgeriesTab extends StatefulWidget {
-  const _SurgeriesTab();
+  const _SurgeriesTab({super.key});
   @override
   State<_SurgeriesTab> createState() => _SurgeriesTabState();
 }
@@ -1125,7 +1157,7 @@ class _SurgeriesTabState extends State<_SurgeriesTab> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = _errorMessage(e, 'No se pudieron cargar las cirugías.');
+        _error = _errorMessage(e, context.tr('health.surgery.loadError'));
         _loading = false;
       });
     }
@@ -1152,20 +1184,20 @@ class _SurgeriesTabState extends State<_SurgeriesTab> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(isEdit ? 'Editar cirugía' : 'Agregar cirugía', style: Theme.of(ctx).textTheme.titleLarge),
+              Text(isEdit ? context.tr('health.surgery.editTitle') : context.tr('health.surgery.addTitle'), style: Theme.of(ctx).textTheme.titleLarge),
               const SizedBox(height: 12),
               Autocomplete<CatalogValue>(
                 initialValue: TextEditingValue(text: existing?['procedureName'] as String? ?? ''),
-                displayStringForOption: (c) => c.labelEs,
+                displayStringForOption: (c) => c.label(context.lang),
                 optionsBuilder: (v) => v.text.isEmpty
                     ? const Iterable<CatalogValue>.empty()
-                    : surgeryCatalog.where((c) => c.labelEs.toLowerCase().contains(v.text.toLowerCase())),
+                    : surgeryCatalog.where((c) => c.label(context.lang).toLowerCase().contains(v.text.toLowerCase())),
                 fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
                   nameController = controller;
                   return TextField(
                     controller: controller,
                     focusNode: focusNode,
-                    decoration: const InputDecoration(labelText: 'Cirugía / procedimiento', helperText: 'Ej. Apendicectomía'),
+                    decoration: InputDecoration(labelText: context.tr('health.surgery.nameLabel'), helperText: context.tr('health.surgery.nameHelper')),
                   );
                 },
               ),
@@ -1173,8 +1205,8 @@ class _SurgeriesTabState extends State<_SurgeriesTab> {
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 title: Text(performedAt != null
-                    ? 'Fecha: ${_formatDate(performedAt!)}'
-                    : 'Fecha (aproximada si no la recordás)'),
+                    ? context.tr('health.surgery.dateWithValue', params: {'date': _formatDate(performedAt!)})
+                    : context.tr('health.surgery.dateEmpty')),
                 trailing: const Icon(Icons.calendar_today),
                 onTap: () async {
                   final picked = await showDatePicker(
@@ -1193,7 +1225,7 @@ class _SurgeriesTabState extends State<_SurgeriesTab> {
                     : () async {
                         if (nameController.text.trim().isEmpty) {
                           ScaffoldMessenger.of(ctx).showSnackBar(
-                            const SnackBar(content: Text('Ingresá la cirugía.')),
+                            SnackBar(content: Text(context.tr('health.surgery.enterSurgeryError'))),
                           );
                           return;
                         }
@@ -1220,7 +1252,7 @@ class _SurgeriesTabState extends State<_SurgeriesTab> {
                         if (ctx.mounted) Navigator.of(ctx).pop();
                         await _load();
                       },
-                child: const Text('Guardar'),
+                child: Text(context.tr('common.save')),
               ),
             ],
           ),
@@ -1237,7 +1269,7 @@ class _SurgeriesTabState extends State<_SurgeriesTab> {
       body: RefreshIndicator(
         onRefresh: _load,
         child: _items.isEmpty
-            ? ListView(children: const [Padding(padding: EdgeInsets.all(24), child: Text('Sin cirugías registradas.'))])
+            ? ListView(children: [Padding(padding: const EdgeInsets.all(24), child: Text(context.tr('health.surgery.emptyList')))])
             : ListView.builder(
                 itemCount: _items.length,
                 itemBuilder: (context, i) {
@@ -1248,7 +1280,7 @@ class _SurgeriesTabState extends State<_SurgeriesTab> {
                     iconBackground: _RecordColors.surgeryBg,
                     iconColor: _RecordColors.surgeryIcon,
                     title: s['procedureName'] as String? ?? '',
-                    badgeLabel: 'Cirugía',
+                    badgeLabel: context.tr('health.surgery.badgeLabel'),
                     badgeBackground: _RecordColors.neutralBg,
                     badgeColor: _RecordColors.neutralIcon,
                     subtitle: date != null ? _formatIsoDate(date) : null,
@@ -1257,7 +1289,7 @@ class _SurgeriesTabState extends State<_SurgeriesTab> {
                       context: context,
                       resource: 'surgeries',
                       id: s['id'] as String,
-                      itemLabel: s['procedureName'] as String? ?? 'esta cirugía',
+                      itemLabel: s['procedureName'] as String? ?? context.tr('health.surgery.deletedFallback'),
                       onDeleted: _load,
                     ),
                   );
@@ -1270,7 +1302,7 @@ class _SurgeriesTabState extends State<_SurgeriesTab> {
 }
 
 class _VitalsTab extends StatefulWidget {
-  const _VitalsTab();
+  const _VitalsTab({super.key});
   @override
   State<_VitalsTab> createState() => _VitalsTabState();
 }
@@ -1279,6 +1311,14 @@ class _VitalsTabState extends State<_VitalsTab> {
   List<dynamic> _items = [];
   bool _loading = true;
   String? _error;
+  // Pedido explícito del usuario: "Grupo Sanguíneo... siempre es el
+  // mismo... debe permitir su modificación por si hay un error" — a
+  // diferencia de peso/altura/presión (mediciones repetibles, abajo),
+  // el grupo sanguíneo ya no vive en "Nueva medición": se muestra acá
+  // como dato fijo (core.persons.blood_type_id) con un link a Perfil
+  // para corregirlo, igual que el sexo.
+  String? _bloodTypeId;
+  List<CatalogValue> _bloodTypeCatalog = [];
 
   String get _personId => context.read<AuthState>().personId!;
 
@@ -1294,16 +1334,23 @@ class _VitalsTabState extends State<_VitalsTab> {
       _error = null;
     });
     try {
-      final response = await ApiClient.instance.dio.get('/clinical/vitals-history', queryParameters: {'personId': _personId});
+      final results = await Future.wait([
+        ApiClient.instance.dio.get('/clinical/vitals-history', queryParameters: {'personId': _personId}),
+        ApiClient.instance.dio.get('/me/profile'),
+        CatalogService.get('BLOOD_TYPE'),
+      ]);
       if (!mounted) return;
+      final profile = (results[1] as dynamic).data as Map<String, dynamic>;
       setState(() {
-        _items = (response.data as List)..sort((a, b) => (b['measuredAt'] as String).compareTo(a['measuredAt'] as String));
+        _items = ((results[0] as dynamic).data as List)..sort((a, b) => (b['measuredAt'] as String).compareTo(a['measuredAt'] as String));
+        _bloodTypeId = profile['blood_type_id'] as String?;
+        _bloodTypeCatalog = results[2] as List<CatalogValue>;
         _loading = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = _errorMessage(e, 'No se pudo cargar el historial de peso/altura.');
+        _error = _errorMessage(e, context.tr('health.vitals.loadError'));
         _loading = false;
       });
     }
@@ -1311,12 +1358,10 @@ class _VitalsTabState extends State<_VitalsTab> {
 
   Future<void> _openForm() async {
     final provenanceCatalog = await CatalogService.get('PROVENANCE_TYPE');
-    final bloodTypeCatalog = await CatalogService.get('BLOOD_TYPE');
     final weightController = TextEditingController();
     final heightController = TextEditingController();
     final sysController = TextEditingController();
     final diaController = TextEditingController();
-    String? bloodTypeId;
     DateTime measuredAt = DateTime.now();
 
     if (!mounted) return;
@@ -1330,24 +1375,24 @@ class _VitalsTabState extends State<_VitalsTab> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('Nueva medición', style: Theme.of(ctx).textTheme.titleLarge),
+              Text(context.tr('health.vitals.newMeasurementTitle'), style: Theme.of(ctx).textTheme.titleLarge),
               const SizedBox(height: 4),
               Text(
-                'Peso, altura y presión pueden cambiar — cada registro queda con su propia fecha, no reemplaza al anterior.',
+                context.tr('health.vitals.hint'),
                 style: Theme.of(ctx).textTheme.bodySmall,
               ),
               const SizedBox(height: 12),
               TextField(
                 controller: weightController,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: 'Peso (kg)'),
+                decoration: InputDecoration(labelText: context.tr('health.vitals.weightLabel')),
                 onChanged: (_) => setSheetState(() {}),
               ),
               const SizedBox(height: 12),
               TextField(
                 controller: heightController,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: 'Altura (cm)'),
+                decoration: InputDecoration(labelText: context.tr('health.vitals.heightLabel')),
                 onChanged: (_) => setSheetState(() {}),
               ),
               const SizedBox(height: 12),
@@ -1357,7 +1402,7 @@ class _VitalsTabState extends State<_VitalsTab> {
                     child: TextField(
                       controller: sysController,
                       keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(labelText: 'Presión — sistólica'),
+                      decoration: InputDecoration(labelText: context.tr('health.vitals.systolicLabel')),
                       onChanged: (_) => setSheetState(() {}),
                     ),
                   ),
@@ -1366,25 +1411,16 @@ class _VitalsTabState extends State<_VitalsTab> {
                     child: TextField(
                       controller: diaController,
                       keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(labelText: 'Presión — diastólica'),
+                      decoration: InputDecoration(labelText: context.tr('health.vitals.diastolicLabel')),
                       onChanged: (_) => setSheetState(() {}),
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                initialValue: bloodTypeId,
-                decoration: const InputDecoration(labelText: 'Grupo sanguíneo'),
-                items: bloodTypeCatalog
-                    .map((b) => DropdownMenuItem(value: b.id, child: Text(b.labelEs)))
-                    .toList(),
-                onChanged: (v) => setSheetState(() => bloodTypeId = v),
-              ),
-              const SizedBox(height: 12),
               ListTile(
                 contentPadding: EdgeInsets.zero,
-                title: Text('Fecha de la medición: ${_formatDate(measuredAt)}'),
+                title: Text(context.tr('health.vitals.measurementDate', params: {'date': _formatDate(measuredAt)})),
                 trailing: const Icon(Icons.calendar_today),
                 onTap: () async {
                   final picked = await showDatePicker(
@@ -1401,8 +1437,7 @@ class _VitalsTabState extends State<_VitalsTab> {
                 onPressed: (weightController.text.trim().isEmpty &&
                         heightController.text.trim().isEmpty &&
                         sysController.text.trim().isEmpty &&
-                        diaController.text.trim().isEmpty &&
-                        bloodTypeId == null)
+                        diaController.text.trim().isEmpty)
                     ? null
                     : () async {
                         final selfDeclared = provenanceCatalog.firstWhere((p) => p.code == 'SELF_DECLARED');
@@ -1412,14 +1447,13 @@ class _VitalsTabState extends State<_VitalsTab> {
                           if (heightController.text.trim().isNotEmpty) 'heightCm': heightController.text.trim(),
                           if (sysController.text.trim().isNotEmpty) 'bloodPressureSys': sysController.text.trim(),
                           if (diaController.text.trim().isNotEmpty) 'bloodPressureDia': diaController.text.trim(),
-                          if (bloodTypeId != null) 'bloodTypeId': bloodTypeId,
                           'measuredAt': measuredAt.toIso8601String(),
                           'provenanceId': selfDeclared.id,
                         });
                         if (ctx.mounted) Navigator.of(ctx).pop();
                         await _load();
                       },
-                child: const Text('Guardar'),
+                child: Text(context.tr('common.save')),
               ),
             ],
           ),
@@ -1447,6 +1481,32 @@ class _VitalsTabState extends State<_VitalsTab> {
     return {'height': height, 'heightIsCarried': v['heightCm'] == null && height != null, 'bmi': bmi};
   }
 
+  Widget _bloodTypeHeader(BuildContext context) {
+    final matches = _bloodTypeCatalog.where((b) => b.id == _bloodTypeId);
+    final label = matches.isEmpty ? null : matches.first.label(context.lang);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+      child: Row(
+        children: [
+          Icon(Icons.bloodtype_outlined, color: _RecordColors.vitalsIcon),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              label != null
+                  ? context.tr('health.vitals.bloodTypeFixedWithValue', params: {'value': label})
+                  : context.tr('health.vitals.bloodTypeFixedEmpty'),
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+          TextButton(
+            onPressed: () => context.push('/profile'),
+            child: Text(context.tr('health.vitals.bloodTypeEditLink')),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
@@ -1454,37 +1514,44 @@ class _VitalsTabState extends State<_VitalsTab> {
     return Scaffold(
       body: RefreshIndicator(
         onRefresh: _load,
-        child: _items.isEmpty
-            ? ListView(children: const [Padding(padding: EdgeInsets.all(24), child: Text('Sin peso/altura/grupo sanguíneo registrados.'))])
-            : ListView.builder(
-                itemCount: _items.length,
-                itemBuilder: (context, i) {
+        child: Column(
+          children: [
+            _bloodTypeHeader(context),
+            const Divider(height: 1),
+            Expanded(
+              child: _items.isEmpty
+                  ? ListView(children: [Padding(padding: const EdgeInsets.all(24), child: Text(context.tr('health.vitals.emptyList')))])
+                  : ListView.builder(
+                      itemCount: _items.length,
+                      itemBuilder: (context, i) {
                   final v = _items[i] as Map<String, dynamic>;
                   final weight = v['weightKg'];
                   final computed = _heightAndBmi(i);
-                  final bloodType = v['bloodTypeId'];
                   final sys = v['bloodPressureSys'];
                   final dia = v['bloodPressureDia'];
                   final parts = <String>[
                     if (computed['height'] != null)
-                      'Altura: ${computed['height']} cm${computed['heightIsCarried'] == true ? ' (última cargada)' : ''}',
-                    if (computed['bmi'] != null) 'IMC: ${computed['bmi']}',
-                    if (sys != null && dia != null) 'Presión: $sys/$dia',
-                    if (bloodType != null) 'Grupo sanguíneo cargado',
+                      context.tr('health.vitals.heightWithValue', params: {'value': '${computed['height']}'}) +
+                          (computed['heightIsCarried'] == true ? context.tr('health.vitals.heightCarriedSuffix') : ''),
+                    if (computed['bmi'] != null) context.tr('health.vitals.bmiWithValue', params: {'value': '${computed['bmi']}'}),
+                    if (sys != null && dia != null) context.tr('health.vitals.pressureWithValue', params: {'value': '$sys/$dia'}),
                   ];
                   final measuredAt = v['measuredAt'] as String?;
                   return _RecordCard(
                     icon: Icons.monitor_weight_outlined,
                     iconBackground: _RecordColors.vitalsBg,
                     iconColor: _RecordColors.vitalsIcon,
-                    title: weight != null ? 'Peso: $weight kg' : 'Medición',
+                    title: weight != null ? context.tr('health.vitals.weightTitle', params: {'value': '$weight'}) : context.tr('health.vitals.measurementTitle'),
                     badgeLabel: measuredAt != null ? _formatIsoDate(measuredAt) : null,
                     badgeBackground: _RecordColors.vitalsBg,
                     badgeColor: _RecordColors.vitalsIcon,
                     subtitle: parts.isEmpty ? null : parts.join(' · '),
                   );
-                },
-              ),
+                      },
+                    ),
+            ),
+          ],
+        ),
       ),
       floatingActionButton: FloatingActionButton(onPressed: _openForm, child: const Icon(Icons.add)),
     );
@@ -1496,7 +1563,7 @@ class _VitalsTabState extends State<_VitalsTab> {
 /// verlos ni cargarlos a mano acá, aunque clinical.lab_results ya
 /// existía. Mismo recurso genérico /clinical/lab-results que usa la IA.
 class _LabResultsTab extends StatefulWidget {
-  const _LabResultsTab();
+  const _LabResultsTab({super.key});
   @override
   State<_LabResultsTab> createState() => _LabResultsTabState();
 }
@@ -1543,7 +1610,7 @@ class _LabResultsTabState extends State<_LabResultsTab> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = _errorMessage(e, 'No se pudo cargar el historial de estudios.');
+        _error = _errorMessage(e, context.tr('health.labResult.loadError'));
         _loading = false;
       });
     }
@@ -1562,7 +1629,7 @@ class _LabResultsTabState extends State<_LabResultsTab> {
     for (final i in _indicatorCatalog) {
       if (i.code == name) {
         final unit = i.metadata['unit'] as String?;
-        return '${i.labelEs}: $value${unit != null ? ' $unit' : ''}';
+        return '${i.label(context.lang)}: $value${unit != null ? ' $unit' : ''}';
       }
     }
     return '$name: $value';
@@ -1611,29 +1678,30 @@ class _LabResultsTabState extends State<_LabResultsTab> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text('Nuevo estudio', style: Theme.of(ctx).textTheme.titleLarge),
+                  Text(context.tr('health.labResult.newStudyTitle'), style: Theme.of(ctx).textTheme.titleLarge),
                   const SizedBox(height: 4),
                   Text(
-                    'Análisis de sangre, orina u otro estudio — cada uno queda con su propia fecha.',
+                    context.tr('health.labResult.hint'),
                     style: Theme.of(ctx).textTheme.bodySmall,
                   ),
                   const SizedBox(height: 12),
                   if (_studyTypeCatalog.isNotEmpty)
                     DropdownButtonFormField<String>(
                       initialValue: studyTypeId,
-                      decoration: const InputDecoration(labelText: 'Tipo de estudio'),
-                      items: _studyTypeCatalog.map((s) => DropdownMenuItem(value: s.id, child: Text(s.labelEs))).toList(),
+                      isExpanded: true,
+                      decoration: InputDecoration(labelText: context.tr('health.labResult.studyTypeLabel')),
+                      items: _studyTypeCatalog.map((s) => DropdownMenuItem(value: s.id, child: Text(s.label(context.lang), overflow: TextOverflow.ellipsis))).toList(),
                       onChanged: (v) => setSheetState(() => studyTypeId = v),
                     ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: labNameController,
-                    decoration: const InputDecoration(labelText: 'Estudio (ej. análisis de sangre)'),
+                    decoration: InputDecoration(labelText: context.tr('health.labResult.studyNameLabel')),
                   ),
                   const SizedBox(height: 12),
                   ListTile(
                     contentPadding: EdgeInsets.zero,
-                    title: Text('Fecha del estudio: ${_formatDate(performedAt)}'),
+                    title: Text(context.tr('health.labResult.studyDate', params: {'date': _formatDate(performedAt)})),
                     trailing: const Icon(Icons.calendar_today),
                     onTap: () async {
                       final picked = await showDatePicker(
@@ -1653,7 +1721,7 @@ class _LabResultsTabState extends State<_LabResultsTab> {
                           child: TextField(
                             controller: glucoseController,
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            decoration: const InputDecoration(labelText: 'Glucemia'),
+                            decoration: InputDecoration(labelText: context.tr('health.labResult.glucoseLabel')),
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -1661,7 +1729,7 @@ class _LabResultsTabState extends State<_LabResultsTab> {
                           child: TextField(
                             controller: hba1cController,
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            decoration: const InputDecoration(labelText: 'HbA1c'),
+                            decoration: InputDecoration(labelText: context.tr('health.labResult.hba1cLabel')),
                           ),
                         ),
                       ],
@@ -1673,7 +1741,7 @@ class _LabResultsTabState extends State<_LabResultsTab> {
                           child: TextField(
                             controller: cholesterolController,
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            decoration: const InputDecoration(labelText: 'Colesterol total'),
+                            decoration: InputDecoration(labelText: context.tr('health.labResult.cholesterolLabel')),
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -1681,7 +1749,7 @@ class _LabResultsTabState extends State<_LabResultsTab> {
                           child: TextField(
                             controller: creatinineController,
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            decoration: const InputDecoration(labelText: 'Creatinina'),
+                            decoration: InputDecoration(labelText: context.tr('health.labResult.creatinineLabel')),
                           ),
                         ),
                       ],
@@ -1693,7 +1761,7 @@ class _LabResultsTabState extends State<_LabResultsTab> {
                           child: TextField(
                             controller: hemoglobinController,
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            decoration: const InputDecoration(labelText: 'Hemoglobina'),
+                            decoration: InputDecoration(labelText: context.tr('health.labResult.hemoglobinLabel')),
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -1701,7 +1769,7 @@ class _LabResultsTabState extends State<_LabResultsTab> {
                           child: TextField(
                             controller: plateletsController,
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            decoration: const InputDecoration(labelText: 'Plaquetas'),
+                            decoration: InputDecoration(labelText: context.tr('health.labResult.plateletsLabel')),
                           ),
                         ),
                       ],
@@ -1713,7 +1781,7 @@ class _LabResultsTabState extends State<_LabResultsTab> {
                           child: TextField(
                             controller: ptInrController,
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            decoration: const InputDecoration(labelText: 'INR'),
+                            decoration: InputDecoration(labelText: context.tr('health.labResult.inrLabel')),
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -1721,7 +1789,7 @@ class _LabResultsTabState extends State<_LabResultsTab> {
                           child: TextField(
                             controller: apttController,
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            decoration: const InputDecoration(labelText: 'APTT'),
+                            decoration: InputDecoration(labelText: context.tr('health.labResult.apttLabel')),
                           ),
                         ),
                       ],
@@ -1729,7 +1797,7 @@ class _LabResultsTabState extends State<_LabResultsTab> {
                   ],
                   if (dynamicIndicators.isNotEmpty) ...[
                     const SizedBox(height: 12),
-                    Text('Otros indicadores', style: Theme.of(ctx).textTheme.titleSmall),
+                    Text(context.tr('health.labResult.otherIndicatorsTitle'), style: Theme.of(ctx).textTheme.titleSmall),
                     for (final ind in dynamicIndicators)
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
@@ -1737,7 +1805,7 @@ class _LabResultsTabState extends State<_LabResultsTab> {
                           controller: indicatorControllers[ind.id],
                           keyboardType: const TextInputType.numberWithOptions(decimal: true),
                           decoration: InputDecoration(
-                            labelText: ind.metadata['unit'] != null ? '${ind.labelEs} (${ind.metadata['unit']})' : ind.labelEs,
+                            labelText: ind.metadata['unit'] != null ? '${ind.label(context.lang)} (${ind.metadata['unit']})' : ind.label(context.lang),
                           ),
                         ),
                       ),
@@ -1746,7 +1814,7 @@ class _LabResultsTabState extends State<_LabResultsTab> {
                   TextField(
                     controller: notesController,
                     maxLines: 2,
-                    decoration: const InputDecoration(labelText: 'Otros valores / notas'),
+                    decoration: InputDecoration(labelText: context.tr('health.labResult.notesLabel')),
                   ),
                   const SizedBox(height: 16),
                   FilledButton(
@@ -1756,6 +1824,7 @@ class _LabResultsTabState extends State<_LabResultsTab> {
                       // mandan) y no había ningún try/catch — el guardado
                       // fallaba siempre y quedaba en silencio total, sin
                       // avisarle nada al usuario.
+                      final saveErrorFallback = context.tr('health.labResult.saveError');
                       try {
                         final provisional = canonicalCatalog.firstWhere((s) => s.code == 'PROVISIONAL');
                         final selfDeclared = provenanceCatalog.firstWhere((p) => p.code == 'SELF_DECLARED');
@@ -1788,12 +1857,12 @@ class _LabResultsTabState extends State<_LabResultsTab> {
                       } catch (e) {
                         if (ctx.mounted) {
                           ScaffoldMessenger.of(ctx).showSnackBar(
-                            SnackBar(content: Text(_errorMessage(e, 'No se pudo guardar el estudio — probá de nuevo.'))),
+                            SnackBar(content: Text(_errorMessage(e, saveErrorFallback))),
                           );
                         }
                       }
                     },
-                    child: const Text('Guardar'),
+                    child: Text(context.tr('common.save')),
                   ),
                 ],
               ),
@@ -1807,20 +1876,20 @@ class _LabResultsTabState extends State<_LabResultsTab> {
   Widget _resultTile(Map<String, dynamic> r) {
     final labName = r['labName'] as String?;
     final parts = <String>[
-      if (r['glucoseFasting'] != null) 'Glucemia: ${r['glucoseFasting']}',
-      if (r['hba1c'] != null) 'HbA1c: ${r['hba1c']}',
-      if (r['totalCholesterol'] != null) 'Colesterol: ${r['totalCholesterol']}',
-      if (r['creatinine'] != null) 'Creatinina: ${r['creatinine']}',
-      if (r['hemoglobin'] != null) 'Hemoglobina: ${r['hemoglobin']}',
-      if (r['platelets'] != null) 'Plaquetas: ${r['platelets']}',
-      if (r['ptInr'] != null) 'INR: ${r['ptInr']}',
-      if (r['aptt'] != null) 'APTT: ${r['aptt']}',
+      if (r['glucoseFasting'] != null) '${context.tr('health.labResult.glucoseLabel')}: ${r['glucoseFasting']}',
+      if (r['hba1c'] != null) '${context.tr('health.labResult.hba1cLabel')}: ${r['hba1c']}',
+      if (r['totalCholesterol'] != null) '${context.tr('health.labResult.cholesterolLabel')}: ${r['totalCholesterol']}',
+      if (r['creatinine'] != null) '${context.tr('health.labResult.creatinineLabel')}: ${r['creatinine']}',
+      if (r['hemoglobin'] != null) '${context.tr('health.labResult.hemoglobinLabel')}: ${r['hemoglobin']}',
+      if (r['platelets'] != null) '${context.tr('health.labResult.plateletsLabel')}: ${r['platelets']}',
+      if (r['ptInr'] != null) '${context.tr('health.labResult.inrLabel')}: ${r['ptInr']}',
+      if (r['aptt'] != null) '${context.tr('health.labResult.apttLabel')}: ${r['aptt']}',
       if (r['customValues'] is List)
         for (final v in (r['customValues'] as List))
           if (v is Map) _customValueLabel(v),
     ];
     return ListTile(
-      title: Text(labName?.isNotEmpty == true ? labName! : 'Estudio'),
+      title: Text(labName?.isNotEmpty == true ? labName! : context.tr('health.labResult.defaultStudyLabel')),
       subtitle: Text([
         _formatIsoDate(r['performedAt'] as String? ?? ''),
         if (parts.isNotEmpty) parts.join(' · '),
@@ -1833,7 +1902,7 @@ class _LabResultsTabState extends State<_LabResultsTab> {
     final widgets = <Widget>[];
     final types = _studyTypeCatalog.isNotEmpty
         ? _studyTypeCatalog
-        : [CatalogValue(id: '', code: 'OTHER', labelEs: 'Estudios')];
+        : [CatalogValue(id: '', code: 'OTHER', labelEs: context.tr('health.labResult.otherStudiesGroupLabel'))];
     for (final type in types) {
       final groupItems = _studyTypeCatalog.isEmpty
           ? _items
@@ -1841,13 +1910,13 @@ class _LabResultsTabState extends State<_LabResultsTab> {
       if (groupItems.isEmpty) continue;
       widgets.add(Padding(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-        child: Text(type.labelEs, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold)),
+        child: Text(type.label(context.lang), style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold)),
       ));
       widgets.add(_resultTile(groupItems.first as Map<String, dynamic>));
       final older = groupItems.skip(1).toList();
       if (older.isNotEmpty) {
         widgets.add(ExpansionTile(
-          title: Text('Ver estudios anteriores (${older.length})'),
+          title: Text(context.tr('health.labResult.viewOlderStudies', params: {'n': '${older.length}'})),
           children: older.map((e) => _resultTile(e as Map<String, dynamic>)).toList(),
         ));
       }
@@ -1863,7 +1932,7 @@ class _LabResultsTabState extends State<_LabResultsTab> {
       body: RefreshIndicator(
         onRefresh: _load,
         child: _items.isEmpty
-            ? ListView(children: const [Padding(padding: EdgeInsets.all(24), child: Text('Sin estudios registrados.'))])
+            ? ListView(children: [Padding(padding: const EdgeInsets.all(24), child: Text(context.tr('health.labResult.emptyList')))])
             : ListView(children: _buildGroups()),
       ),
       floatingActionButton: FloatingActionButton(onPressed: _openForm, child: const Icon(Icons.add)),
@@ -1872,7 +1941,7 @@ class _LabResultsTabState extends State<_LabResultsTab> {
 }
 
 class _ImplantsTab extends StatefulWidget {
-  const _ImplantsTab();
+  const _ImplantsTab({super.key});
   @override
   State<_ImplantsTab> createState() => _ImplantsTabState();
 }
@@ -1908,7 +1977,7 @@ class _ImplantsTabState extends State<_ImplantsTab> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = _errorMessage(e, 'No se pudieron cargar los implantes/dispositivos.');
+        _error = _errorMessage(e, context.tr('health.implant.loadError'));
         _loading = false;
       });
     }
@@ -1935,25 +2004,25 @@ class _ImplantsTabState extends State<_ImplantsTab> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(isEdit ? 'Editar implante o dispositivo' : 'Agregar implante o dispositivo', style: Theme.of(ctx).textTheme.titleLarge),
+              Text(isEdit ? context.tr('health.implant.editTitle') : context.tr('health.implant.addTitle'), style: Theme.of(ctx).textTheme.titleLarge),
               const SizedBox(height: 4),
               Text(
-                'Ej. marcapasos, prótesis, bomba de insulina.',
+                context.tr('health.implant.hint'),
                 style: Theme.of(ctx).textTheme.bodySmall,
               ),
               const SizedBox(height: 12),
               Autocomplete<CatalogValue>(
                 initialValue: TextEditingValue(text: existing?['deviceName'] as String? ?? ''),
-                displayStringForOption: (c) => c.labelEs,
+                displayStringForOption: (c) => c.label(context.lang),
                 optionsBuilder: (v) => v.text.isEmpty
                     ? const Iterable<CatalogValue>.empty()
-                    : _typeCatalog.where((c) => c.labelEs.toLowerCase().contains(v.text.toLowerCase())),
+                    : _typeCatalog.where((c) => c.label(context.lang).toLowerCase().contains(v.text.toLowerCase())),
                 fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
                   nameController = controller;
                   return TextField(
                     controller: controller,
                     focusNode: focusNode,
-                    decoration: const InputDecoration(labelText: 'Implante / dispositivo'),
+                    decoration: InputDecoration(labelText: context.tr('health.implant.nameLabel')),
                   );
                 },
               ),
@@ -1961,8 +2030,8 @@ class _ImplantsTabState extends State<_ImplantsTab> {
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 title: Text(implantedAt != null
-                    ? 'Fecha: ${_formatDate(implantedAt!)}'
-                    : 'Fecha (opcional, aproximada si no la recordás)'),
+                    ? context.tr('health.implant.dateWithValue', params: {'date': _formatDate(implantedAt!)})
+                    : context.tr('health.implant.dateEmptyOptional')),
                 trailing: const Icon(Icons.calendar_today),
                 onTap: () async {
                   final picked = await showDatePicker(
@@ -1978,14 +2047,14 @@ class _ImplantsTabState extends State<_ImplantsTab> {
               TextField(
                 controller: notesController,
                 maxLines: 2,
-                decoration: const InputDecoration(labelText: 'Notas (opcional)'),
+                decoration: InputDecoration(labelText: context.tr('health.allergy.notesOptional')),
               ),
               const SizedBox(height: 16),
               FilledButton(
                 onPressed: () async {
                         if (nameController.text.trim().isEmpty) {
                           ScaffoldMessenger.of(ctx).showSnackBar(
-                            const SnackBar(content: Text('Ingresá el implante/dispositivo.')),
+                            SnackBar(content: Text(context.tr('health.implant.enterDeviceError'))),
                           );
                           return;
                         }
@@ -2014,7 +2083,7 @@ class _ImplantsTabState extends State<_ImplantsTab> {
                         if (ctx.mounted) Navigator.of(ctx).pop();
                         await _load();
                       },
-                child: const Text('Guardar'),
+                child: Text(context.tr('common.save')),
               ),
             ],
           ),
@@ -2031,13 +2100,13 @@ class _ImplantsTabState extends State<_ImplantsTab> {
       body: RefreshIndicator(
         onRefresh: _load,
         child: _items.isEmpty
-            ? ListView(children: const [Padding(padding: EdgeInsets.all(24), child: Text('Sin implantes ni dispositivos registrados.'))])
+            ? ListView(children: [Padding(padding: const EdgeInsets.all(24), child: Text(context.tr('health.implant.emptyList')))])
             : ListView.builder(
                 itemCount: _items.length,
                 itemBuilder: (context, i) {
                   final d = _items[i] as Map<String, dynamic>;
                   final date = d['implantedAt'] as String?;
-                  final typeLabel = CatalogService.labelFor(_typeCatalog, d['deviceTypeId'] as String?);
+                  final typeLabel = CatalogService.labelFor(_typeCatalog, d['deviceTypeId'] as String?, lang: context.lang);
                   return _RecordCard(
                     icon: Icons.settings_input_component_outlined,
                     iconBackground: _RecordColors.implantBg,
@@ -2052,7 +2121,233 @@ class _ImplantsTabState extends State<_ImplantsTab> {
                       context: context,
                       resource: 'implants-devices',
                       id: d['id'] as String,
-                      itemLabel: d['deviceName'] as String? ?? 'este implante',
+                      itemLabel: d['deviceName'] as String? ?? context.tr('health.implant.deletedFallback'),
+                      onDeleted: _load,
+                    ),
+                  );
+                },
+              ),
+      ),
+      floatingActionButton: FloatingActionButton(onPressed: _openForm, child: const Icon(Icons.add)),
+    );
+  }
+}
+
+/// Pedido explícito del usuario: "para el caso de diálisis, como la
+/// tenemos que tratar ya que es un tratamiento... deberíamos tener
+/// también una tabla que pueda ser actualizada como enfermedades" —
+/// mismo patrón que _ImplantsTab (arriba), con el agregado del
+/// dropdown de estado (CONDITION_STATUS reutilizado) igual que
+/// _ConditionsTab, ya que un tratamiento puede seguir en curso o haber
+/// terminado.
+class _TreatmentsTab extends StatefulWidget {
+  const _TreatmentsTab({super.key});
+  @override
+  State<_TreatmentsTab> createState() => _TreatmentsTabState();
+}
+
+class _TreatmentsTabState extends State<_TreatmentsTab> {
+  List<dynamic> _items = [];
+  List<CatalogValue> _typeCatalog = [];
+  List<CatalogValue> _statusCatalog = [];
+  bool _loading = true;
+  String? _error;
+
+  String get _personId => context.read<AuthState>().personId!;
+
+  String? get _activeStatusId {
+    for (final c in _statusCatalog) {
+      if (c.code == 'ACTIVE') return c.id;
+    }
+    return null;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final response = await ApiClient.instance.dio.get('/clinical/treatments', queryParameters: {'personId': _personId});
+      final typeCatalog = await CatalogService.get('TREATMENT_TYPE');
+      final statusCatalog = await CatalogService.get('CONDITION_STATUS');
+      if (!mounted) return;
+      setState(() {
+        _items = response.data as List;
+        _typeCatalog = typeCatalog;
+        _statusCatalog = statusCatalog;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = _errorMessage(e, context.tr('health.treatment.loadError'));
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _openForm([Map<String, dynamic>? existing]) async {
+    final isEdit = existing != null;
+    final canonicalCatalog = await CatalogService.get('CANONICAL_STATUS');
+    final provenanceCatalog = await CatalogService.get('PROVENANCE_TYPE');
+    late TextEditingController nameController;
+    final notesController = TextEditingController(text: existing?['notes'] as String? ?? '');
+    String? statusId = existing?['statusId'] as String? ?? _activeStatusId;
+    DateTime? startedAt = existing?['startedAt'] != null
+        ? DateTime.tryParse(existing!['startedAt'] as String)
+        : null;
+
+    if (!mounted) return;
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(left: 16, right: 16, top: 16, bottom: MediaQuery.of(ctx).viewInsets.bottom + 16),
+        child: StatefulBuilder(
+          builder: (ctx, setSheetState) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(isEdit ? context.tr('health.treatment.editTitle') : context.tr('health.treatment.addTitle'), style: Theme.of(ctx).textTheme.titleLarge),
+              const SizedBox(height: 4),
+              Text(
+                context.tr('health.treatment.hint'),
+                style: Theme.of(ctx).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 12),
+              Autocomplete<CatalogValue>(
+                initialValue: TextEditingValue(text: existing?['treatmentName'] as String? ?? ''),
+                displayStringForOption: (c) => c.label(context.lang),
+                optionsBuilder: (v) => v.text.isEmpty
+                    ? const Iterable<CatalogValue>.empty()
+                    : _typeCatalog.where((c) => c.label(context.lang).toLowerCase().contains(v.text.toLowerCase())),
+                fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
+                  nameController = controller;
+                  return TextField(
+                    controller: controller,
+                    focusNode: focusNode,
+                    decoration: InputDecoration(labelText: context.tr('health.treatment.nameLabel')),
+                  );
+                },
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: statusId,
+                isExpanded: true,
+                decoration: InputDecoration(labelText: context.tr('health.condition.statusLabel')),
+                items: _statusCatalog.map((c) => DropdownMenuItem(value: c.id, child: Text(c.label(context.lang), overflow: TextOverflow.ellipsis))).toList(),
+                onChanged: (v) => setSheetState(() => statusId = v),
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(startedAt != null
+                    ? context.tr('health.treatment.dateWithValue', params: {'date': _formatDate(startedAt!)})
+                    : context.tr('health.treatment.dateEmptyOptional')),
+                trailing: const Icon(Icons.calendar_today),
+                onTap: () async {
+                  final picked = await showDatePicker(
+                    context: ctx,
+                    initialDate: DateTime(2020),
+                    firstDate: DateTime(1930),
+                    lastDate: DateTime.now(),
+                  );
+                  if (picked != null) setSheetState(() => startedAt = picked);
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: notesController,
+                maxLines: 2,
+                decoration: InputDecoration(labelText: context.tr('health.allergy.notesOptional')),
+              ),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: () async {
+                        if (nameController.text.trim().isEmpty) {
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                            SnackBar(content: Text(context.tr('health.treatment.enterTreatmentError'))),
+                          );
+                          return;
+                        }
+                        final name = normalizeSpanishAccents(nameController.text.trim());
+                        final treatmentCatalogId = await CatalogService.resolveOrCreate('TREATMENT_TYPE', name, _typeCatalog);
+                        if (isEdit) {
+                          await ApiClient.instance.dio.patch('/clinical/treatments/${existing['id']}', data: {
+                            'treatmentName': name,
+                            if (treatmentCatalogId != null) 'treatmentCatalogId': treatmentCatalogId,
+                            'statusId': statusId,
+                            'startedAt': startedAt != null ? startedAt!.toIso8601String().split('T').first : null,
+                            'notes': notesController.text.trim().isNotEmpty ? notesController.text.trim() : null,
+                          });
+                        } else {
+                          final provisional = canonicalCatalog.firstWhere((s) => s.code == 'PROVISIONAL');
+                          final selfDeclared = provenanceCatalog.firstWhere((p) => p.code == 'SELF_DECLARED');
+                          await ApiClient.instance.dio.post('/clinical/treatments', data: {
+                            'personId': _personId,
+                            'treatmentName': name,
+                            if (treatmentCatalogId != null) 'treatmentCatalogId': treatmentCatalogId,
+                            'statusId': statusId,
+                            if (startedAt != null) 'startedAt': startedAt!.toIso8601String().split('T').first,
+                            if (notesController.text.trim().isNotEmpty) 'notes': notesController.text.trim(),
+                            'canonicalStatusId': provisional.id,
+                            'provenanceId': selfDeclared.id,
+                          });
+                        }
+                        if (ctx.mounted) Navigator.of(ctx).pop();
+                        await _load();
+                      },
+                child: Text(context.tr('common.save')),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_error != null) return _LoadErrorView(message: _error!, onRetry: _load);
+    return Scaffold(
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: _items.isEmpty
+            ? ListView(children: [Padding(padding: const EdgeInsets.all(24), child: Text(context.tr('health.treatment.emptyList')))])
+            : ListView.builder(
+                itemCount: _items.length,
+                itemBuilder: (context, i) {
+                  final t = _items[i] as Map<String, dynamic>;
+                  final date = t['startedAt'] as String?;
+                  final statusCode = _statusCatalog.firstWhere(
+                    (c) => c.id == t['statusId'],
+                    orElse: () => CatalogValue(id: '', code: '', labelEs: ''),
+                  ).code;
+                  return _RecordCard(
+                    icon: Icons.medical_services_outlined,
+                    iconBackground: _RecordColors.treatmentBg,
+                    iconColor: _RecordColors.treatmentIcon,
+                    title: t['treatmentName'] as String? ?? '',
+                    badgeLabel: statusCode != 'ACTIVE' && statusCode.isNotEmpty
+                        ? CatalogService.labelFor(_statusCatalog, t['statusId'] as String?, lang: context.lang)
+                        : null,
+                    badgeBackground: _RecordColors.treatmentBg,
+                    badgeColor: _RecordColors.treatmentIcon,
+                    subtitle: date != null ? _formatIsoDate(date) : null,
+                    onEdit: () => _openForm(t),
+                    onDelete: () => _confirmAndSoftDelete(
+                      context: context,
+                      resource: 'treatments',
+                      id: t['id'] as String,
+                      itemLabel: t['treatmentName'] as String? ?? context.tr('health.treatment.deletedFallback'),
                       onDeleted: _load,
                     ),
                   );

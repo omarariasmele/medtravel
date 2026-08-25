@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import '../../core/api_client.dart';
 import '../../core/auth_state.dart';
 import '../../core/jwt.dart';
+import '../../l10n/app_strings.dart';
 import '../assistant/health_assistant_screen.dart' show openHealthAssistant;
 
 class HomeScreen extends StatefulWidget {
@@ -23,6 +24,12 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _loading = true;
   Uint8List? _photoBytes;
   final _storage = const FlutterSecureStorage();
+  /// Pedido explícito del usuario: "la app tiene que controlar además
+  /// que la persona... haya cargado su fecha de nacimiento, su número
+  /// de celular y por lo menos un contacto de emergencia" — sin esto,
+  /// ni el asistente de salud ni una emergencia real tienen cómo
+  /// contactar a nadie. null mientras no se pudo consultar todavía.
+  bool? _hasEmergencyContact;
 
   @override
   void initState() {
@@ -50,12 +57,12 @@ class _HomeScreenState extends State<HomeScreen> {
         context: context,
         barrierDismissible: false,
         builder: (ctx) => AlertDialog(
-          title: const Text('¡Bienvenido/a a MedTravelApp!'),
+          title: Text(context.tr('home.welcomeTitle')),
           content: Text(message),
           actions: [
             FilledButton(
               onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Entendido'),
+              child: Text(context.tr('home.understood')),
             ),
           ],
         ),
@@ -64,6 +71,19 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (_) {
       // Silencioso — no bloquear el uso de la app si esto falla.
     }
+  }
+
+  /// Bug real reportado en vivo: "al regresar después de grabar la
+  /// información mostró que todavía no cargaste información — eso es
+  /// un error porque la acabamos de cargar". El dato en la base estaba
+  /// bien (verificado directo); lo que pasaba es que esta pantalla
+  /// solo se cargaba una vez, en initState — al volver de cargar la
+  /// Ficha de Salud (o editar el perfil) seguía mostrando el _profile
+  /// viejo, de ANTES de la carga. Se refresca apenas se vuelve de
+  /// cualquier pantalla que pudo haber cambiado perfil/ficha de salud.
+  Future<void> _navigateAndRefresh(Future<void> Function() navigate) async {
+    await navigate();
+    if (mounted) await _load();
   }
 
   Future<void> _load() async {
@@ -78,6 +98,16 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     } catch (_) {
       setState(() => _loading = false);
+      return;
+    }
+    // Aparte del perfil principal — si esto falla (sin red, etc.) no
+    // hace que el resto de la pantalla principal deje de mostrarse,
+    // simplemente no se muestra el aviso de contacto de emergencia.
+    try {
+      final response = await ApiClient.instance.dio.get('/me/emergency-contacts');
+      if (mounted) setState(() => _hasEmergencyContact = (response.data as List).isNotEmpty);
+    } catch (_) {
+      // Silencioso — ver comentario arriba.
     }
   }
 
@@ -97,6 +127,28 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  /// Pedido explícito del usuario: "si no tiene información de salud
+  /// cargada... la app no sirve para una asistencia médica" — mismo
+  /// criterio ya usado para bloquear el reporte de emergencia
+  /// (emergency_screen.dart): health_record_last_updated_at solo se
+  /// completa cuando se confirma algún dato clínico real, null
+  /// significa que todavía no se cargó nada.
+  bool get _needsHealthData =>
+      _profile != null && _profile!['health_record_last_updated_at'] == null;
+
+  /// Ver el comentario de _hasEmergencyContact — qué falta puntualmente,
+  /// para armar un mensaje concreto en vez de un genérico "completá tu
+  /// perfil". null mientras todavía no se pudo determinar (perfil o
+  /// contactos sin cargar).
+  List<String> get _missingProfileEssentials {
+    if (_profile == null) return const [];
+    final missing = <String>[];
+    if (_profile!['birth_date'] == null) missing.add(context.tr('home.missingBirthDate'));
+    if ((_profile!['phone'] as String?)?.trim().isEmpty ?? true) missing.add(context.tr('home.missingPhone'));
+    if (_hasEmergencyContact == false) missing.add(context.tr('home.missingEmergencyContact'));
+    return missing;
+  }
+
   @override
   Widget build(BuildContext context) {
     final name = _profile != null
@@ -109,7 +161,7 @@ class _HomeScreenState extends State<HomeScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.logout),
-            tooltip: 'Cerrar sesión',
+            tooltip: context.tr('home.logout'),
             onPressed: () => context.read<AuthState>().logout(),
           ),
         ],
@@ -121,42 +173,155 @@ class _HomeScreenState extends State<HomeScreen> {
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
+                  if (_missingProfileEssentials.isNotEmpty)
+                    _IncompleteProfileBanner(
+                      missing: _missingProfileEssentials,
+                      onTap: () => _navigateAndRefresh(() => context.push('/profile')),
+                    ),
+                  if (_needsHealthData)
+                    _NoHealthDataBanner(onTap: () => _navigateAndRefresh(() => openHealthAssistant(context))),
                   Card(
                     child: ListTile(
                       leading: CircleAvatar(
                         backgroundImage: _photoBytes != null ? MemoryImage(_photoBytes!) : null,
                         child: _photoBytes == null ? const Icon(Icons.person) : null,
                       ),
-                      title: Text(name ?? 'Viajero'),
-                      subtitle: const Text('Ver / editar mi perfil'),
+                      title: Text(name ?? context.tr('home.traveler')),
+                      subtitle: Text(context.tr('home.viewEditProfile')),
                       trailing: const Icon(Icons.chevron_right),
-                      onTap: () => context.push('/profile'),
+                      onTap: () => _navigateAndRefresh(() => context.push('/profile')),
                     ),
                   ),
                   const SizedBox(height: 16),
-                  Text('Accesos rápidos', style: Theme.of(context).textTheme.titleMedium),
+                  Text(context.tr('home.quickActions'), style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 8),
                   _QuickAction(
                     icon: Icons.qr_code_2,
-                    title: 'Compartir mi Historial de Salud',
-                    subtitle: 'QR o link para el médico que te atienda',
+                    title: context.tr('home.shareTitle'),
+                    subtitle: context.tr('home.shareSubtitle'),
                     onTap: () => context.push('/share'),
                   ),
                   _QuickAction(
                     icon: Icons.smart_toy_outlined,
-                    title: 'Asistente para usar la app',
-                    subtitle: 'Ayuda para completar tus datos de salud',
+                    title: context.tr('home.assistantHelpTitle'),
+                    subtitle: context.tr('home.assistantHelpSubtitle'),
                     onTap: () => context.push('/assistant'),
                   ),
                   _QuickAction(
                     icon: Icons.health_and_safety_outlined,
-                    title: 'Actualizar información de la Ficha de Salud',
-                    subtitle: 'Contale tus alergias/medicamentos y los carga por vos',
-                    onTap: () => openHealthAssistant(context),
+                    title: context.tr('home.updateHealthTitle'),
+                    subtitle: context.tr('home.updateHealthSubtitle'),
+                    onTap: () => _navigateAndRefresh(() => openHealthAssistant(context)),
                   ),
                 ],
               ),
             ),
+    );
+  }
+}
+
+/// Pedido explícito del usuario: alertar en la pantalla principal si
+/// todavía no hay nada cargado en la Ficha de Salud — sin eso, la app
+/// no sirve para una asistencia médica real (un médico que escanee el
+/// QR en una emergencia no va a encontrar nada). Se muestra siempre
+/// que falte, no una sola vez como el onboarding — es información que
+/// importa recordar hasta que se resuelva.
+class _NoHealthDataBanner extends StatelessWidget {
+  const _NoHealthDataBanner({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Card(
+      color: colors.errorContainer,
+      margin: const EdgeInsets.only(bottom: 16),
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.warning_amber_rounded, color: colors.onErrorContainer),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      context.tr('home.noHealthDataTitle'),
+                      style: TextStyle(fontWeight: FontWeight.bold, color: colors.onErrorContainer),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      context.tr('home.noHealthDataBody'),
+                      style: TextStyle(color: colors.onErrorContainer),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, color: colors.onErrorContainer),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Pedido explícito del usuario: "la app tiene que controlar que la
+/// persona haya cargado su fecha de nacimiento, su número de celular y
+/// por lo menos un contacto de emergencia" — sin eso, ni el asistente
+/// de salud (la fecha de nacimiento se usa para calcular edad) ni una
+/// emergencia real (a quién llamar) funcionan bien.
+class _IncompleteProfileBanner extends StatelessWidget {
+  const _IncompleteProfileBanner({required this.missing, required this.onTap});
+
+  final List<String> missing;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final and = context.tr('home.and');
+    final list = missing.length == 1
+        ? missing.first
+        : '${missing.sublist(0, missing.length - 1).join(', ')} $and ${missing.last}';
+    return Card(
+      color: colors.tertiaryContainer,
+      margin: const EdgeInsets.only(bottom: 16),
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.person_outline, color: colors.onTertiaryContainer),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      context.tr('home.incompleteProfileTitle'),
+                      style: TextStyle(fontWeight: FontWeight.bold, color: colors.onTertiaryContainer),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      context.tr('home.incompleteProfileBody', params: {'missing': list}),
+                      style: TextStyle(color: colors.onTertiaryContainer),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, color: colors.onTertiaryContainer),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

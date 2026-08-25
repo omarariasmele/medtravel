@@ -18,6 +18,7 @@ interface PatientSummaryRow {
   country_residence_id: string | null;
   photo_path: string | null;
   health_record_last_updated_at: string | null;
+  blood_type_id: string | null;
 }
 
 export interface PatientSummaryView {
@@ -29,6 +30,8 @@ export interface PatientSummaryView {
   photoPath: string | null;
   /** Pedido explícito del usuario: mostrar cuándo fue la última actualización del Historial de Salud. */
   healthRecordLastUpdatedAt: string | null;
+  /** Pedido explícito del usuario: "Grupo Sanguíneo... siempre es el mismo" — valor fijo de la persona, no un signo vital repetible (ver core.persons.blood_type_id). */
+  bloodTypeId: string | null;
 }
 
 /**
@@ -73,6 +76,7 @@ export class PatientSummaryController {
       countryResidenceId: row.country_residence_id,
       photoPath: row.photo_path,
       healthRecordLastUpdatedAt: row.health_record_last_updated_at,
+      bloodTypeId: row.blood_type_id,
     };
   }
 }

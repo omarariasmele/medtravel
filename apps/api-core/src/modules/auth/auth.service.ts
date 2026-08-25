@@ -123,6 +123,27 @@ export class AuthService {
           ],
         );
 
+        // Bug real reportado en vivo: "le puse bien el número de
+        // documento y no lo relacionó [con la póliza]" — este INSERT
+        // se copió de MeDocumentController.add (arriba, mismo shape)
+        // pero se olvidó la mitad del mecanismo: ese otro endpoint
+        // SIEMPRE llama a try_match_pending_records_for_person justo
+        // después de cargar el documento (¿ya hay una póliza subida
+        // por la empresa esperando este documento?) — acá nunca se
+        // llamaba, así que cargar el documento AL REGISTRARSE (como ya
+        // hace el formulario de alta de la app) nunca disparaba el
+        // emparejamiento; solo funcionaba si el viajero volvía a
+        // cargar/editar el documento después desde Perfil.
+        const [{ code: docTypeCode }] = await queryRunner.query(
+          `SELECT code FROM params.catalog_values WHERE id = $1`,
+          [dto.docTypeId],
+        );
+        const blindIndexKey = this.config.get<string>('DB_BLIND_INDEX_KEY')!;
+        await queryRunner.query(
+          `SELECT * FROM core.try_match_pending_records_for_person($1, $2, $3, $4)`,
+          [registered.person_id, docNumberIdx, docTypeCode, blindIndexKey],
+        );
+
         return registered;
       });
     } catch (error) {

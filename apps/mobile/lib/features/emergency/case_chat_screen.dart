@@ -6,11 +6,14 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import '../../core/api_client.dart';
+import '../../core/auth_state.dart';
 import '../../core/text_normalize.dart';
+import '../../l10n/app_strings.dart';
 
 /// Defensa aparte del prompt (mismo criterio que health_assistant_screen.dart):
 /// si el texto trae markdown (viñetas, negrita, etc.) no lo lea literal.
@@ -110,6 +113,18 @@ class _CaseChatScreenState extends State<CaseChatScreen> {
   int _listenSeconds = 30;
   int _pauseSeconds = 2;
 
+  // Mismo bug que ya se corrigió en health_assistant_screen.dart: el
+  // reconocimiento/síntesis de voz quedaban fijos en español sin
+  // importar el idioma preferido del viajero.
+  static const Map<String, String> _localeIdByLang = {
+    'es': 'es_AR', 'en': 'en_US', 'pt': 'pt_BR', 'fr': 'fr_FR',
+  };
+  static const Map<String, String> _ttsLangByLang = {
+    'es': 'es-AR', 'en': 'en-US', 'pt': 'pt-BR', 'fr': 'fr-FR',
+  };
+  String get _preferredLang => context.read<AuthState>().preferredLang;
+  String get _localeId => _localeIdByLang[_preferredLang] ?? 'es_AR';
+
   @override
   void initState() {
     super.initState();
@@ -139,7 +154,7 @@ class _CaseChatScreenState extends State<CaseChatScreen> {
     _tts.setCancelHandler(() {
       if (mounted) setState(() => _speaking = false);
     });
-    await _tts.setLanguage('es-AR');
+    await _tts.setLanguage(_ttsLangByLang[_preferredLang] ?? 'es-AR');
     await _tts.awaitSpeakCompletion(true);
     try {
       // Mismos parámetros que Parámetros de la app (admin-web) usa para
@@ -207,7 +222,7 @@ class _CaseChatScreenState extends State<CaseChatScreen> {
     try {
       await _speech.listen(
         listenOptions: stt.SpeechListenOptions(
-          localeId: 'es_AR',
+          localeId: _localeId,
           listenMode: stt.ListenMode.dictation,
           pauseFor: Duration(seconds: _pauseSeconds),
           listenFor: Duration(seconds: _listenSeconds),
@@ -224,7 +239,7 @@ class _CaseChatScreenState extends State<CaseChatScreen> {
       if (mounted) {
         setState(() => _listening = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No se pudo activar el micrófono — revisá el permiso en Ajustes.')),
+          SnackBar(content: Text(context.tr('caseChat.micPermissionError'))),
         );
       }
     }
@@ -311,7 +326,7 @@ class _CaseChatScreenState extends State<CaseChatScreen> {
       })
       ..on('case_update', (_) => _loadCaseClosed())
       ..onConnectError((err) {
-        if (mounted) setState(() => _error = 'No se pudo conectar al chat.');
+        if (mounted) setState(() => _error = context.tr('caseChat.connectError'));
       })
       ..connect();
   }
@@ -341,11 +356,13 @@ class _CaseChatScreenState extends State<CaseChatScreen> {
     if (content.isEmpty || _caseClosed) return;
     if (widget.channelId == null || _socket == null || !_connected) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sin conexión al chat — el mensaje no se envió, probá de nuevo.')),
+        SnackBar(content: Text(context.tr('caseChat.noConnectionError'))),
       );
       return;
     }
     _textController.clear();
+    final sendMessageErrorFallback = context.tr('caseChat.sendMessageError');
+    final confirmSendErrorText = context.tr('caseChat.confirmSendError');
     var acked = false;
     _socket!.emitWithAck('send_message', {
       'caseId': widget.caseId,
@@ -358,7 +375,7 @@ class _CaseChatScreenState extends State<CaseChatScreen> {
         if (_textController.text.isEmpty) _textController.text = content;
         final error = (data is Map) ? data['error'] as String? : null;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error ?? 'No se pudo enviar el mensaje.')),
+          SnackBar(content: Text(error ?? sendMessageErrorFallback)),
         );
       }
     });
@@ -366,7 +383,7 @@ class _CaseChatScreenState extends State<CaseChatScreen> {
       if (!acked && mounted) {
         if (_textController.text.isEmpty) _textController.text = content;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No se pudo confirmar el envío — probá de nuevo.')),
+          SnackBar(content: Text(confirmSendErrorText)),
         );
       }
     });
@@ -388,11 +405,11 @@ class _CaseChatScreenState extends State<CaseChatScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.caseNumber != null ? 'Caso ${widget.caseNumber}' : 'Chat del caso'),
+        title: Text(widget.caseNumber != null ? context.tr('caseChat.caseNumberTitle', params: {'number': widget.caseNumber!}) : context.tr('caseChat.title')),
         actions: [
           IconButton(
             icon: Icon(_voiceEnabled ? Icons.volume_up : Icons.volume_off),
-            tooltip: _voiceEnabled ? 'Dejar de leer los mensajes en voz alta' : 'Leer los mensajes en voz alta',
+            tooltip: _voiceEnabled ? context.tr('caseChat.muteTooltip') : context.tr('caseChat.unmuteTooltip'),
             onPressed: _toggleVoice,
           ),
         ],
@@ -402,10 +419,10 @@ class _CaseChatScreenState extends State<CaseChatScreen> {
                 child: Container(
                   color: Colors.grey.shade700,
                   padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: const Text(
-                    'Este caso está cerrado — no se pueden enviar más mensajes',
+                  child: Text(
+                    context.tr('caseChat.closedBanner'),
                     textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.white, fontSize: 12),
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
                   ),
                 ),
               )
@@ -416,7 +433,7 @@ class _CaseChatScreenState extends State<CaseChatScreen> {
                       color: Colors.orange,
                       padding: const EdgeInsets.symmetric(vertical: 2),
                       child: Text(
-                        _error ?? 'Conectando…',
+                        _error ?? context.tr('caseChat.connecting'),
                         textAlign: TextAlign.center,
                         style: const TextStyle(color: Colors.white, fontSize: 12),
                       ),
@@ -486,7 +503,7 @@ class _CaseChatScreenState extends State<CaseChatScreen> {
                         : const CircularProgressIndicator(strokeWidth: 2),
                   ),
                   const SizedBox(width: 8),
-                  Text(_listening ? 'Escuchando…' : 'Hablando…'),
+                  Text(_listening ? context.tr('caseChat.listening') : context.tr('caseChat.speaking')),
                 ],
               ),
             ),
@@ -496,7 +513,7 @@ class _CaseChatScreenState extends State<CaseChatScreen> {
                     width: double.infinity,
                     padding: const EdgeInsets.all(16),
                     child: Text(
-                      'Este caso está cerrado. No se pueden enviar más mensajes.',
+                      context.tr('caseChat.closedFooter'),
                       textAlign: TextAlign.center,
                       style: TextStyle(color: Colors.grey.shade600),
                     ),
@@ -508,7 +525,7 @@ class _CaseChatScreenState extends State<CaseChatScreen> {
                         child: TextField(
                           controller: _textController,
                           decoration: InputDecoration(
-                            hintText: _listening ? 'Escuchando…' : 'Escribí un mensaje…',
+                            hintText: _listening ? context.tr('caseChat.listening') : context.tr('caseChat.inputHint'),
                             border: const OutlineInputBorder(),
                           ),
                           onSubmitted: (_) => _send(),
@@ -518,7 +535,7 @@ class _CaseChatScreenState extends State<CaseChatScreen> {
                         IconButton(
                           icon: Icon(_listening ? Icons.mic : Icons.mic_none),
                           color: _listening ? Theme.of(context).colorScheme.error : null,
-                          tooltip: _listening ? 'Detener' : 'Hablar',
+                          tooltip: _listening ? context.tr('caseChat.stopMic') : context.tr('caseChat.startMic'),
                           onPressed: _toggleListening,
                         ),
                       IconButton(icon: const Icon(Icons.send), onPressed: _send),

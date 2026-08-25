@@ -49,7 +49,11 @@ interface Person {
   firstName: string;
   lastName: string;
   photoPath?: string | null;
+  preferredLang?: string | null;
 }
+
+/** Pedido explícito del usuario: mostrar en la ficha del viajero qué idioma tiene seleccionado en la app. */
+const LANGUAGE_LABELS: Record<string, string> = { es: 'Español', en: 'English', pt: 'Português', fr: 'Français' };
 
 interface EmergencyContact {
   id: string;
@@ -209,6 +213,27 @@ export function TravelerDetailPage() {
     },
     onSuccess: () => {
       window.location.reload();
+    },
+  });
+
+  // Pedido explícito del usuario: "podés poner un botón en el usuario
+  // para darlo de baja con toda su info, así podemos hacer pruebas
+  // reiteradas con un mismo usuario" — a diferencia del reset de
+  // arriba (solo ficha de salud), esto borra la cuenta ENTERA (perfil,
+  // login, contactos, viajes) para poder registrar a la misma persona
+  // de cero. Todavía más irreversible que el de arriba, así que pide
+  // escribir el nombre completo en vez de una palabra fija.
+  const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
+  const [deleteAccountConfirmText, setDeleteAccountConfirmText] = useState('');
+  const deleteAccountMutation = useMutation({
+    mutationFn: async () => {
+      const { data } = await apiClient.delete(
+        `/identity/persons/${personQuery.data!.id}/delete-test-traveler`,
+      );
+      return data;
+    },
+    onSuccess: () => {
+      navigate('/travelers');
     },
   });
 
@@ -595,6 +620,15 @@ export function TravelerDetailPage() {
                   }`
                 : 'Sin documento cargado'}
             </Typography>
+            {person?.preferredLang && (
+              <Typography variant="body2" color="text.secondary">
+                {/* Bug real reportado en vivo: mostraba "es" crudo en vez de
+                    "Español" — preferred_lang es CHAR(5) en la base, que Postgres
+                    devuelve con espacios de relleno ("es   "), así que nunca
+                    coincidía con las claves del mapa. Se recorta antes de buscar. */}
+                Preferencia de Idioma: {LANGUAGE_LABELS[person.preferredLang.trim()] ?? person.preferredLang.trim()}
+              </Typography>
+            )}
           </Box>
           {sessionQuery.data?.hasActiveSession && (
             <Box sx={{ textAlign: 'right' }}>
@@ -902,6 +936,13 @@ export function TravelerDetailPage() {
             <Button variant="outlined" color="error" onClick={() => setResetOpen(true)}>
               Borrar antecedentes de salud
             </Button>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 3, mb: 2 }}>
+              Da de baja la cuenta COMPLETA de este viajero (perfil, login, contactos, viajes, tokens
+              para compartir) — para poder registrarlo de cero con el mismo nombre. No se puede deshacer.
+            </Typography>
+            <Button variant="outlined" color="error" onClick={() => setDeleteAccountOpen(true)}>
+              Dar de baja cuenta completa
+            </Button>
           </CardContent>
         </Card>
       )}
@@ -960,6 +1001,68 @@ export function TravelerDetailPage() {
             onClick={() => resetMutation.mutate()}
           >
             Borrar definitivamente
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={deleteAccountOpen}
+        onClose={() => {
+          setDeleteAccountOpen(false);
+          setDeleteAccountConfirmText('');
+        }}
+      >
+        <DialogTitle color="error">¿Dar de baja la cuenta completa?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            Se va a borrar de forma permanente el perfil, login, ficha de salud, contactos de emergencia,
+            documento, viajes, inscripciones de cobertura y tokens para compartir de{' '}
+            <strong>{person?.firstName} {person?.lastName}</strong>. Esta acción no se puede deshacer, y
+            la persona va a tener que registrarse de nuevo desde cero.
+          </Typography>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            Escribí el nombre completo (<strong>{person?.firstName} {person?.lastName}</strong>) para confirmar.
+          </Typography>
+          <TextField
+            fullWidth
+            size="small"
+            value={deleteAccountConfirmText}
+            onChange={(e) => setDeleteAccountConfirmText(e.target.value)}
+            autoFocus
+          />
+          {deleteAccountMutation.isError && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              No se pudo dar de baja la cuenta
+              {deleteAccountMutation.error instanceof AxiosError
+                ? ` (${deleteAccountMutation.error.response?.status ?? 'sin respuesta del servidor'}${
+                    deleteAccountMutation.error.response?.data?.message
+                      ? `: ${deleteAccountMutation.error.response.data.message}`
+                      : ''
+                  })`
+                : ''}
+              .
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              setDeleteAccountOpen(false);
+              setDeleteAccountConfirmText('');
+            }}
+          >
+            Cancelar
+          </Button>
+          <Button
+            color="error"
+            variant="contained"
+            disabled={
+              deleteAccountConfirmText !== `${person?.firstName} ${person?.lastName}` ||
+              deleteAccountMutation.isPending
+            }
+            onClick={() => deleteAccountMutation.mutate()}
+          >
+            Dar de baja definitivamente
           </Button>
         </DialogActions>
       </Dialog>

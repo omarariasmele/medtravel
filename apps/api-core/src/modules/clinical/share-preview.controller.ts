@@ -4,6 +4,7 @@ import {
   NotFoundException,
   Param,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
@@ -13,6 +14,7 @@ import { randomBytes, createHash } from 'crypto';
 
 import { TenantTransactionManager } from '@common/database/tenant-transaction.manager';
 import { getOperationalLimit } from '@common/database/operational-limits.helper';
+import { AIService } from '@modules/ai/ai.service';
 
 import {
   buildSharedProfile,
@@ -37,10 +39,22 @@ export class SharePreviewController {
   constructor(
     private readonly txManager: TenantTransactionManager,
     private readonly config: ConfigService,
+    private readonly aiService: AIService,
   ) {}
 
+  /**
+   * Pedido explícito del usuario: "el botón de ver como la vería el
+   * médico... debe pedir en qué idioma la quiere visualizar" — mismo
+   * mecanismo de traducción que ya usa doctor-invite (createDoctorInvite,
+   * un solo llamado a IA, nunca en cada vista), para que la previsualización
+   * sea fiel a lo que un médico real vería si el link se genera en ese
+   * idioma — no una vista aparte que se pueda desincronizar.
+   */
   @Get(':personId')
-  async get(@Param('personId') personId: string) {
+  async get(
+    @Param('personId') personId: string,
+    @Query('language') language?: string,
+  ) {
     const result = await this.txManager.runInTransaction((queryRunner) =>
       buildSharedProfile(queryRunner, personId, DEFAULT_SHARE_SCOPE),
     );
@@ -48,6 +62,13 @@ export class SharePreviewController {
     if (!result.person) {
       throw new NotFoundException(
         'No encontrado o sin acceso clínico habilitado',
+      );
+    }
+
+    if (language && language !== 'es') {
+      return this.aiService.translateSharedProfile(
+        result as unknown as Record<string, unknown>,
+        language,
       );
     }
 

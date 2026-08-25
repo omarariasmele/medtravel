@@ -3,6 +3,8 @@ import { AuthGuard } from '@nestjs/passport';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 
+import { CurrentContext } from '@common/request-context/current-context.decorator';
+import { RequestContextData } from '@common/request-context/request-context.types';
 import { AIService } from '@modules/ai/ai.service';
 
 import { AskAssistantDto } from './dto/ask-assistant.dto';
@@ -24,8 +26,8 @@ export class MeAssistantController {
 
   @Throttle({ default: { ttl: 60_000, limit: 20 } })
   @Post('ask')
-  async ask(@Body() dto: AskAssistantDto) {
-    return this.aiService.appHelpChat(dto.question);
+  async ask(@CurrentContext() context: RequestContextData, @Body() dto: AskAssistantDto) {
+    return this.aiService.appHelpChat(context.personId!, dto.question);
   }
 
   /** Mensaje de bienvenida general, mostrado la primera vez que se abre la app (ver home_screen.dart). */

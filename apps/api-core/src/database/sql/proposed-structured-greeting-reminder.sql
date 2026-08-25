@@ -18,6 +18,6 @@ VALUES (
   E'salud para contarme? Puede ser una enfermedad nueva, un cambio en tus medicamentos, o cualquier otra cosa ' ||
   E'que haya cambiado.\n\n' ||
   E'Voy a repasar tus datos y saltear lo que ya está confirmado.',
-  'Saludo inicial del chat Estructurado (beta) cuando el viajero YA tiene datos cargados Y pasaron health.reminder_days días o más desde la última actualización. Usa {firstName} y {lastUpdated}. Los "\n\n" marcan pausas al leerlo en voz alta.'
+  'Saludo inicial del chat Estructurado cuando el viajero YA tiene datos cargados Y pasaron health.reminder_days días o más desde la última actualización. Usa {firstName} y {lastUpdated}. Los "\n\n" marcan pausas al leerlo en voz alta.'
 )
 ON CONFLICT (setting_key) DO NOTHING;

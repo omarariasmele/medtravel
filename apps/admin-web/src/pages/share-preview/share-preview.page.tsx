@@ -7,6 +7,8 @@ import {
   Button,
   CircularProgress,
   Container,
+  MenuItem,
+  TextField,
   Typography,
 } from '@mui/material';
 
@@ -24,15 +26,31 @@ import { ShareWindowHeader } from '../../components/share-window-header';
  * Ventana simple a propósito (pedido explícito del usuario): sin el
  * menú/sidebar del panel — vive fuera de <AppLayout> en App.tsx.
  */
+const LANGUAGE_OPTIONS: { code: string; label: string }[] = [
+  { code: 'es', label: 'Español' },
+  { code: 'en', label: 'Inglés' },
+  { code: 'pt', label: 'Portugués' },
+  { code: 'fr', label: 'Francés' },
+];
+
 export function SharePreviewPage() {
   const { personId } = useParams<{ personId: string }>();
+  // Pedido explícito del usuario: "antes de mostrar la ficha de salud
+  // debe pedir en qué idioma la quiere visualizar, para mostrar como
+  // la vería el médico según su idioma" — arranca sin idioma elegido
+  // (la consulta no corre todavía, ver `enabled` más abajo) hasta que
+  // el operador lo selecciona.
+  const [language, setLanguage] = useState<string | null>(null);
 
   const query = useQuery({
-    queryKey: ['clinical', 'share-preview', personId],
+    queryKey: ['clinical', 'share-preview', personId, language],
     queryFn: async () => {
-      const { data } = await apiClient.get<SharedProfileData>(`/clinical/share-preview/${personId}`);
+      const { data } = await apiClient.get<SharedProfileData>(`/clinical/share-preview/${personId}`, {
+        params: language && language !== 'es' ? { language } : undefined,
+      });
       return data;
     },
+    enabled: language !== null,
     retry: false,
   });
 
@@ -81,13 +99,38 @@ export function SharePreviewPage() {
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
       <ShareWindowHeader />
       <Container maxWidth="md" sx={{ pb: 6, px: { xs: 2, sm: 3 } }}>
-        {query.isLoading && (
+        {language === null && (
+          <Box sx={{ maxWidth: 360, mx: 'auto', mt: 6, textAlign: 'center' }}>
+            <Typography variant="h6" gutterBottom>
+              Vista previa — como la vería el médico
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+              ¿En qué idioma querés verla? Es el mismo idioma en el que la vería un médico real si el link
+              se genera en ese idioma.
+            </Typography>
+            <TextField
+              select
+              fullWidth
+              label="Idioma"
+              defaultValue=""
+              onChange={(e) => setLanguage(e.target.value)}
+            >
+              {LANGUAGE_OPTIONS.map((o) => (
+                <MenuItem key={o.code} value={o.code}>
+                  {o.label}
+                </MenuItem>
+              ))}
+            </TextField>
+          </Box>
+        )}
+
+        {language !== null && query.isLoading && (
           <Box sx={{ textAlign: 'center', mt: 6 }}>
             <CircularProgress />
           </Box>
         )}
 
-        {!query.isLoading && (query.isError || !query.data) && (
+        {language !== null && !query.isLoading && (query.isError || !query.data) && (
           <Alert severity="warning">
             Sin acceso a la historia clínica de este viajero: no hay un caso de asistencia abierto ni
             consentimiento activo para esta empresa.
@@ -122,7 +165,7 @@ export function SharePreviewPage() {
                 </Alert>
               )}
             </Box>
-            <SharedProfileView data={query.data} photoUrl={photoUrl} />
+            <SharedProfileView data={query.data} photoUrl={photoUrl} language={language ?? 'es'} />
           </>
         )}
       </Container>

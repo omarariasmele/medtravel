@@ -40,7 +40,9 @@ export class UserEntity extends UuidBaseEntity {
   @Column({ name: 'phone_verified', type: 'boolean', default: false })
   phoneVerified: boolean;
 
-  @Column({ name: 'preferred_lang', type: 'char', length: 5, default: 'es' })
+  // Ver el mismo comentario en person.entity.ts — CHAR(5) rellenaba
+  // con espacios y rompía comparaciones exactas de idioma.
+  @Column({ name: 'preferred_lang', type: 'varchar', length: 5, default: 'es' })
   preferredLang: string;
 
   @Column({ name: 'last_login_at', type: 'timestamptz', nullable: true })

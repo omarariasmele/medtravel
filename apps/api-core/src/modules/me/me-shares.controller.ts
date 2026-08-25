@@ -141,4 +141,76 @@ export class MeSharesController {
 
     return result;
   }
+
+  /**
+   * Pedido explícito del usuario: "poner una opción para que en la app
+   * se pueda ver que es lo que vería el médico de mi historial de
+   * salud, sin botones habilitados para el médico" — a diferencia de
+   * doctor-invite (arriba), este token NUNCA lleva 'submit_note' en su
+   * scope, así que la página pública que lo abre no ofrece "Dejar nota
+   * de la atención" ni ninguna acción de médico — es la MISMA página
+   * real (/public/shares/:token), no una recreación aparte que se
+   * pueda desincronizar de lo que un médico ve de verdad. TTL corto
+   * (horas, no días — mismo operational_limit que ya usa
+   * share-preview.controller.ts para el mismo propósito del lado de
+   * admin-web) porque es solo para que el viajero se fije ahora, no
+   * para compartir de verdad.
+   */
+  @Post('preview')
+  async createSelfPreview(
+    @CurrentContext() context: RequestContextData,
+    @Body() dto: CreateDoctorInviteDto,
+  ) {
+    const ttlHours = await getOperationalLimit(
+      this.txManager,
+      'TOKEN_SHARE_PREVIEW_TTL_HOURS',
+      2,
+    );
+    const tokenValue = randomBytes(24).toString('base64url');
+    const tokenHash = createHash('sha256').update(tokenValue).digest('hex');
+    const baseUrl = this.config.get<string>('CORS_ORIGIN');
+    const accessUrl = `${baseUrl}/public/shares/${tokenValue}`;
+
+    const result = await this.txManager.runInTransaction(async (queryRunner) => {
+      const owner = await resolveShareOwner(queryRunner, context.personId!, dto.memberId);
+
+      // Bug real reportado en vivo: "cuando quiero ver la historia como
+      // la vería el médico no la traduce al idioma elegido" — a
+      // diferencia de doctor-invite (arriba), acá nunca se leía
+      // dto.language ni se traducía nada: el selector de idioma de la
+      // app (share_screen.dart) solo lo usaba para el OTRO flujo (el
+      // link real para compartir), nunca para este de vista previa. La
+      // traducción se hace UNA vez acá, mismo criterio que
+      // doctor-invite (nunca en cada vista del link).
+      let translatedProfile: Record<string, unknown> | null = null;
+      if (dto.language && dto.language !== 'es') {
+        const profile = await buildSharedProfile(queryRunner, owner.personId, DEFAULT_SHARE_SCOPE);
+        translatedProfile = await this.aiService.translateSharedProfile(
+          profile as unknown as Record<string, unknown>,
+          dto.language,
+        );
+      }
+
+      const rows = await queryRunner.query(
+        `INSERT INTO emergency.tokens
+           (member_id, person_id, token_type_id, token_value, token_hash, access_url,
+            expires_at, status_id, scope, max_uses, translated_profile, translated_language)
+         VALUES (
+           $1, $2, params.catalog_id('TOKEN_TYPE', 'DOCTOR_INVITE'), $3, $4, $5,
+           NOW() + ($6 || ' hours')::INTERVAL,
+           params.catalog_id('TOKEN_STATUS', 'ACTIVE'),
+           $7, NULL, $8::jsonb, $9
+         )
+         RETURNING id, access_url, expires_at`,
+        [
+          owner.memberId, owner.personId, tokenValue, tokenHash, accessUrl, ttlHours, DEFAULT_SHARE_SCOPE,
+          translatedProfile ? JSON.stringify(translatedProfile) : null,
+          translatedProfile ? dto.language : null,
+        ],
+      );
+      return rows[0];
+    });
+
+    return { accessUrl: result.access_url, expiresAt: result.expires_at };
+  }
 }

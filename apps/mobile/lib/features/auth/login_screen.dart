@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/auth_state.dart';
 import '../../core/error_message.dart';
+import '../../l10n/app_strings.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -31,7 +32,17 @@ class _LoginScreenState extends State<LoginScreen> {
           );
       // go_router redirige solo (ver router.dart) al detectar isAuthenticated.
     } catch (e) {
-      setState(() => _error = dioErrorMessage(e, 'Email o contraseña incorrectos.'));
+      if (!mounted) return;
+      final message = dioErrorMessage(e, context.tr('login.error'));
+      setState(() => _error = message);
+      // Pedido explícito del usuario: "no hace nada, solo no entra" —
+      // el texto rojo arriba del formulario pasaba desapercibido (fácil
+      // de no notar entre el resto de la pantalla). Un SnackBar es
+      // mucho más difícil de pasar por alto, mismo criterio que se usa
+      // para errores en el resto de la app.
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -59,14 +70,14 @@ class _LoginScreenState extends State<LoginScreen> {
                   TextField(
                     controller: _emailController,
                     keyboardType: TextInputType.emailAddress,
-                    decoration: const InputDecoration(labelText: 'Email'),
+                    decoration: InputDecoration(labelText: context.tr('login.email')),
                   ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: _passwordController,
                     obscureText: _obscurePassword,
                     decoration: InputDecoration(
-                      labelText: 'Contraseña',
+                      labelText: context.tr('login.password'),
                       suffixIcon: IconButton(
                         icon: Icon(_obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined),
                         onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
@@ -79,16 +90,16 @@ class _LoginScreenState extends State<LoginScreen> {
                     onPressed: _loading ? null : _submit,
                     child: _loading
                         ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Text('Ingresar'),
+                        : Text(context.tr('login.submit')),
                   ),
                   const SizedBox(height: 12),
                   TextButton(
                     onPressed: () => context.push('/register'),
-                    child: const Text('¿No tenés cuenta? Registrate'),
+                    child: Text(context.tr('login.noAccount')),
                   ),
                   TextButton(
                     onPressed: () => context.push('/forgot-password'),
-                    child: const Text('¿Olvidaste tu contraseña?'),
+                    child: Text(context.tr('login.forgotPassword')),
                   ),
                 ],
               ),

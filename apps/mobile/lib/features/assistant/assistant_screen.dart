@@ -5,9 +5,12 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:provider/provider.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import '../../core/api_client.dart';
+import '../../core/auth_state.dart';
+import '../../l10n/app_strings.dart';
 
 class _AssistantMessage {
   _AssistantMessage({required this.text, required this.fromUser});
@@ -32,9 +35,9 @@ String _speakableText(String raw) {
 /// la app que no se presentaba por nombre). `firstName` viene de
 /// `/me/profile`, buscado en initState — null si el fetch falla
 /// (sin conexión, etc.), y ahí cae al saludo genérico.
-String _buildGreeting(String? firstName) {
+String _buildGreeting(String? firstName, String lang) {
   final namePart = (firstName != null && firstName.trim().isNotEmpty) ? ' $firstName' : '';
-  return '¡Hola$namePart! Preguntame lo que necesites sobre cómo usar MedTravelApp: completar tu Historial de Salud, tu cobertura, o cómo compartirlo con un médico.';
+  return AppStrings.forLang(lang, 'appHelp.greeting', params: {'name': namePart});
 }
 
 /// Chat de ayuda para USAR LA APP (no un chat clínico — eso es
@@ -77,6 +80,18 @@ class _AssistantScreenState extends State<AssistantScreen> {
   double _voiceDouble(String key, double fallback) => double.tryParse(_voiceSettings[key] ?? '') ?? fallback;
   int _voiceInt(String key, int fallback) => int.tryParse(_voiceSettings[key] ?? '') ?? fallback;
 
+  // Mismo bug ya corregido en health_assistant_screen.dart y
+  // case_chat_screen.dart: reconocimiento/síntesis de voz fijos en
+  // español sin importar el idioma preferido del viajero.
+  static const Map<String, String> _localeIdByLang = {
+    'es': 'es_AR', 'en': 'en_US', 'pt': 'pt_BR', 'fr': 'fr_FR',
+  };
+  static const Map<String, String> _ttsLangByLang = {
+    'es': 'es-AR', 'en': 'en-US', 'pt': 'pt-BR', 'fr': 'fr-FR',
+  };
+  String get _preferredLang => context.read<AuthState>().preferredLang;
+  String get _localeId => _localeIdByLang[_preferredLang] ?? 'es_AR';
+
   @override
   void initState() {
     super.initState();
@@ -104,7 +119,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
           _startListening();
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('No se pudo reconocer la voz (${error.errorMsg}) — probá de nuevo.')),
+            SnackBar(content: Text(context.tr('appHelp.voiceRecognitionError', params: {'error': error.errorMsg}))),
           );
         }
       },
@@ -189,7 +204,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
     } catch (_) {
       // Sin nombre, el saludo cae al genérico — no bloquea el arranque.
     }
-    final greeting = _buildGreeting(firstName);
+    final greeting = _buildGreeting(firstName, _preferredLang);
     if (!mounted) return;
     setState(() => _messages.add(_AssistantMessage(text: greeting, fromUser: false)));
     _scrollToBottom();
@@ -218,7 +233,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
   }
 
   Future<void> _configureTts() async {
-    await _tts.setLanguage('es-AR');
+    await _tts.setLanguage(_ttsLangByLang[_preferredLang] ?? 'es-AR');
     await _tts.setSpeechRate(_voiceDouble('assistant.tts_speech_rate', 0.55));
     await _tts.setPitch(_voiceDouble('assistant.tts_pitch', 1.0));
     await _tts.setVolume(1.0);
@@ -246,7 +261,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
     try {
       await _speech.listen(
         listenOptions: stt.SpeechListenOptions(
-          localeId: 'es_AR',
+          localeId: _localeId,
           listenMode: stt.ListenMode.dictation,
           pauseFor: Duration(seconds: _voiceInt('assistant.tts_pause_seconds', 3)),
           listenFor: Duration(seconds: _voiceInt('assistant.tts_listen_seconds', 60)),
@@ -268,7 +283,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
       if (mounted) {
         setState(() => _listening = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No se pudo activar el micrófono — revisá el permiso en Ajustes.')),
+          SnackBar(content: Text(context.tr('appHelp.micPermissionError'))),
         );
       }
     }
@@ -293,7 +308,8 @@ class _AssistantScreenState extends State<AssistantScreen> {
       _scrollToBottom();
       if (_voiceReplyEnabled) _speak(answer);
     } catch (_) {
-      const errorText = 'No pude responder ahora — probá de nuevo en un momento.';
+      if (!mounted) return;
+      final errorText = context.tr('appHelp.answerError');
       setState(() {
         _messages.add(_AssistantMessage(text: errorText, fromUser: false));
         _sending = false;
@@ -315,11 +331,11 @@ class _AssistantScreenState extends State<AssistantScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Asistente'),
+        title: Text(context.tr('appHelp.title')),
         actions: [
           IconButton(
             icon: Icon(_voiceReplyEnabled ? Icons.volume_up : Icons.volume_off),
-            tooltip: _voiceReplyEnabled ? 'Dejar de leer las respuestas en voz alta' : 'Leer las respuestas en voz alta',
+            tooltip: _voiceReplyEnabled ? context.tr('appHelp.muteTooltip') : context.tr('appHelp.unmuteTooltip'),
             onPressed: () {
               setState(() => _voiceReplyEnabled = !_voiceReplyEnabled);
               if (!_voiceReplyEnabled) {
@@ -375,7 +391,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
                         : const CircularProgressIndicator(strokeWidth: 2),
                   ),
                   const SizedBox(width: 8),
-                  Text(_listening ? 'Escuchando…' : 'Hablando…'),
+                  Text(_listening ? context.tr('appHelp.listening') : context.tr('appHelp.speaking')),
                   const Spacer(),
                   if (_speaking)
                     TextButton(
@@ -383,7 +399,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
                         _tts.stop();
                         _audioPlayer.stop();
                       },
-                      child: const Text('Detener'),
+                      child: Text(context.tr('appHelp.stopButton')),
                     ),
                 ],
               ),
@@ -396,7 +412,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
                   child: TextField(
                     controller: _controller,
                     decoration: InputDecoration(
-                      hintText: _listening ? 'Escuchando…' : 'Escribí tu pregunta…',
+                      hintText: _listening ? context.tr('appHelp.listening') : context.tr('appHelp.inputHint'),
                       border: const OutlineInputBorder(),
                     ),
                     onSubmitted: (_) => _send(),
@@ -406,7 +422,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
                   IconButton(
                     icon: Icon(_listening ? Icons.mic : Icons.mic_none),
                     color: _listening ? Theme.of(context).colorScheme.error : null,
-                    tooltip: _listening ? 'Detener' : 'Hablar',
+                    tooltip: _listening ? context.tr('appHelp.stopMic') : context.tr('appHelp.startMic'),
                     onPressed: _toggleListening,
                   ),
                 IconButton(icon: const Icon(Icons.send), onPressed: _send),

@@ -79,7 +79,7 @@ CREATE TABLE core.persons (
   gender_id            UUID        REFERENCES params.catalog_values(id),
   nationality_id       UUID        REFERENCES params.catalog_values(id),
   country_residence_id UUID        REFERENCES params.catalog_values(id),
-  preferred_lang       CHAR(5)     NOT NULL DEFAULT 'es',
+  preferred_lang       VARCHAR(5)  NOT NULL DEFAULT 'es', -- VARCHAR, no CHAR: CHAR(n) rellena con espacios y rompe comparaciones exactas ('es' != 'es   ')
   timezone             VARCHAR(50) NOT NULL DEFAULT 'America/Argentina/Buenos_Aires',
   active               BOOLEAN     NOT NULL DEFAULT TRUE,
   created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),

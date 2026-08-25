@@ -6,10 +6,13 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import '../../core/api_client.dart';
+import '../../core/auth_state.dart';
 import '../../core/text_normalize.dart';
+import '../../l10n/app_strings.dart';
 import 'health_form_screen.dart';
 
 /// Pedido explícito del usuario: TRES formas de cargar la Ficha de
@@ -24,26 +27,26 @@ Future<void> openHealthAssistant(BuildContext context) async {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Padding(
-            padding: EdgeInsets.all(16),
-            child: Text('¿Cómo querés cargar tu Ficha de Salud?'),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(context.tr('assistant.chooserTitle')),
           ),
           ListTile(
             leading: const Icon(Icons.chat_outlined),
-            title: const Text('Modo clásico'),
-            subtitle: const Text('Charla libre, la IA conduce la entrevista'),
+            title: Text(context.tr('assistant.classicTitle')),
+            subtitle: Text(context.tr('assistant.classicSubtitle')),
             onTap: () => Navigator.of(ctx).pop('classic'),
           ),
           ListTile(
             leading: const Icon(Icons.checklist_outlined),
-            title: const Text('Modo estructurado'),
-            subtitle: const Text('Preguntas guiadas por IA'),
+            title: Text(context.tr('assistant.structuredTitle')),
+            subtitle: Text(context.tr('assistant.structuredSubtitle')),
             onTap: () => Navigator.of(ctx).pop('structured'),
           ),
           ListTile(
             leading: const Icon(Icons.article_outlined),
-            title: const Text('Formulario'),
-            subtitle: const Text('Preguntas en pantalla validadas por IA'),
+            title: Text(context.tr('assistant.formTitle')),
+            subtitle: Text(context.tr('assistant.formSubtitle')),
             onTap: () => Navigator.of(ctx).pop('form'),
           ),
           const SizedBox(height: 8),
@@ -53,10 +56,19 @@ Future<void> openHealthAssistant(BuildContext context) async {
   );
   if (choice == null || !context.mounted) return;
   if (choice == 'form') {
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => const HealthFormScreen()));
+    // Bug real reportado en vivo: "guardó, volvió al menú principal
+    // pero sigue el cartel de que no cargué información" — a este
+    // push (y al de más abajo) le faltaba el await. HomeScreen espera
+    // a que ESTA función termine para recién ahí refrescar el perfil
+    // (ver _navigateAndRefresh) — sin el await, la función terminaba
+    // apenas se ABRÍA la pantalla del asistente, no cuando el viajero
+    // volvía de verdad, así que el refresh salía disparado demasiado
+    // temprano (antes de que hubiera nada nuevo para mostrar) y nunca
+    // se repetía al cerrar.
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const HealthFormScreen()));
     return;
   }
-  context.push('/health-assistant', extra: {'structuredModel': choice == 'structured'});
+  await context.push('/health-assistant', extra: {'structuredModel': choice == 'structured'});
 }
 
 /// Mensaje de error puntual del backend (ej. "Ya tenés cargada esa
@@ -117,7 +129,25 @@ class HealthAssistantScreen extends StatefulWidget {
   State<HealthAssistantScreen> createState() => _HealthAssistantScreenState();
 }
 
-class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
+class _HealthAssistantScreenState extends State<HealthAssistantScreen> with WidgetsBindingObserver {
+  /// Bug real reportado en vivo: "quedó sin escuchar" tras varios
+  /// errores seguidos del reconocedor de voz (error_busy, error_network,
+  /// error_no_match) — confirmado con logcat que el manejador de esos
+  /// errores CRASHEABA en silencio: context.tr(...) usa
+  /// `context.watch<AuthState>()` por dentro, que tira "Tried to listen
+  /// to a value exposed with provider, from outside of the widget
+  /// tree" apenas se lo llama desde un callback async (de un canal de
+  /// plataforma, un Timer, etc.) — nunca corría el reintento que seguía
+  /// después en el mismo método, así que el micrófono se quedaba
+  /// colgado para siempre sin ningún aviso. context.read() sí es seguro
+  /// fuera del build — se resuelve el idioma con eso y se traduce con
+  /// AppStrings.forLang (no toca Provider) en vez de context.tr en los
+  /// puntos que corren fuera del build (errores de mic/TTS, timers).
+  String _trSafe(String key, {Map<String, String>? params}) {
+    final lang = mounted ? context.read<AuthState>().preferredLang : 'es';
+    return AppStrings.forLang(lang, key, params: params);
+  }
+
   final _controller = TextEditingController();
   final _scrollController = ScrollController();
   // Pedido explícito del usuario: "no me lleva al final de lo que
@@ -155,6 +185,35 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
   int _consecutiveMicErrors = 0;
   static const _maxConsecutiveMicErrors = 3;
   static const _maxConsecutiveNetworkErrors = 8;
+  // Bug real reportado en vivo, confirmado con logcat: "si uno no le
+  // responde a la pregunta se queda esperando... sigue esperando" —
+  // el celular quedó más de 3 minutos sin ninguna actividad después de
+  // 4 error_no_match/error_speech_timeout seguidos (cada uno tras 4s
+  // de silencio real, sin decir nada). error_no_match/error_speech_
+  // timeout NO son un error del dispositivo — es el reconocedor
+  // avisando "no escuché nada útil", algo esperable si la persona
+  // tarda en contestar (está pensando, atendiendo otra cosa un
+  // momento). Contarlo con el mismo presupuesto de 3 que un error de
+  // verdad apagaba el modo manos libres ("debería permanecer abierto,
+  // para que siempre esté escuchando" — pedido explícito de otra
+  // sesión) después de apenas ~16-20s de silencio. Mismo criterio ya
+  // usado para error_network (su propio presupuesto, más alto).
+  static const _maxConsecutiveSilenceErrors = 30;
+  // Bug real reportado en vivo: "quedó sin avanzar aunque no se le
+  // dice nada... debería decir algo para continuar o bien solicitar
+  // un cierre" — confirmado con logcat: con el presupuesto de 30
+  // reintentos de silencio de arriba, el mic puede reintentar en
+  // silencio (sin decir NADA, ni una palabra suelta) durante casi 90
+  // segundos antes de que la persona vea o escuche cualquier señal de
+  // que algo está pasando — se siente exactamente como "colgado",
+  // aunque técnicamente esté reintentando solo. Esto no toca ese
+  // presupuesto (sigue abierto tanto como antes, pedido explícito de
+  // otra sesión), pero cada _checkInAfterSilentRetries reintentos
+  // SIN CAPTURAR NI UNA PALABRA (ver _lastPartial en onResult) hace
+  // una pausa audible para avisar que sigue escuchando, en vez de
+  // reintentar en silencio total indefinidamente.
+  static const _checkInAfterSilentRetries = 4;
+  int _silentRetriesSinceCheckIn = 0;
   Future<bool>? _speechInitFuture;
 
   /// Bug real reportado en vivo: "dije la frase completa (peso, altura y
@@ -171,8 +230,117 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
   /// terminar de cualquier forma normal (final, status, error).
   Timer? _listenWatchdog;
 
+  // Bug real reportado en vivo: "se quedó re colgado" — logcat confirmó
+  // que, tras un onError (error_no_match) de una sesión de escucha de
+  // seguimiento, el modo manos libres se quedó totalmente en silencio
+  // (ni un log más, ni un pedido nuevo al backend, ni el mic
+  // reiniciándose) hasta que hubo que forzar el cierre de la app —
+  // _listenWatchdog no cubre esto porque se cancela a propósito apenas
+  // llega CUALQUIER callback final (onResult/onStatus/onError), y ese
+  // callback SÍ llegó a dispararse (quedó registrado en el log): el
+  // cuelgue pasó DESPUÉS, en algún punto que no deja rastro (posible
+  // corte del túnel USB a mitad de un pedido de red, u otra falla
+  // puntual del propio reconocedor/plugin nativo). Este es un segundo
+  // resguardo, más externo: si pasan más de _idleWatchdogSeconds sin
+  // ninguna señal de vida (ni escuchando, ni mandando, ni hablando) con
+  // el modo manos libres activo y la entrevista sin terminar, se asume
+  // que el ciclo se cortó solo y se reinicia el micrófono desde cero —
+  // sin esperar a que el viajero note el problema y cierre la app.
+  // Bug real reportado en vivo: "tarda demasiado en darse cuenta que
+  // no habló más" — ahora que _speakPending cubre bien todo el tramo
+  // en que SÍ hay una respuesta en camino (ver _speak), ya no hace
+  // falta un margen tan grande para no confundir eso con un cuelgue
+  // real — se puede ser más agresivo detectando el cuelgue genuino.
+  static const _idleWatchdogSeconds = 10;
+  DateTime _lastVoiceActivity = DateTime.now();
+  Timer? _idleWatchdog;
+  // Resguardo adicional para el caso "_sending se prendió y nunca se
+  // apagó" (ej. un pedido de red que se cuelga sin que ApiClient llegue
+  // a aplicar su propio timeout de 15s por algún corte puntual del
+  // túnel USB) — separado del caso "nada está activo", que ya cubre
+  // _checkIdleWatchdog arriba.
+  DateTime? _sendStartedAt;
+
+  void _touchVoiceActivity() => _lastVoiceActivity = DateTime.now();
+
+  void _checkIdleWatchdog(Timer _) {
+    if (!mounted) return;
+    // Bug real reportado en vivo (grave — pérdida de datos): "al
+    // guardar cancela la app se cierra... no grabó nada". Pasó
+    // exactamente en el peor momento: la pregunta final "¿Guardamos
+    // todo?", con _interviewComplete ya en true. La primera versión de
+    // este watchdog SALTEABA el chequeo entero mientras
+    // _interviewComplete era true (pensado para "no interferir con el
+    // cierre normal"), así que si el reconocedor se rompía justo ahí
+    // — o si el propio guardado (_confirmAllPending, más abajo) se
+    // colgaba — nada lo recuperaba nunca. Es exactamente al revés: ese
+    // es el momento MÁS importante para protegerse, no uno para
+    // ignorar. Ya no se excluye.
+    if (_sending &&
+        _sendStartedAt != null &&
+        DateTime.now().difference(_sendStartedAt!).inSeconds > 35) {
+      debugPrint('[MIC] idleWatchdog: _sending lleva 35s+ colgado — se da por perdido el pedido');
+      _sendStartedAt = null;
+      setState(() => _sending = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_trSafe('assistant.micAutoRestarted'))),
+      );
+      if (_voiceReplyEnabled && !_paused) _startListening();
+      return;
+    }
+    if (_confirmingAll &&
+        _sendStartedAt != null &&
+        DateTime.now().difference(_sendStartedAt!).inSeconds > 35) {
+      debugPrint('[MIC] idleWatchdog: _confirmingAll lleva 35s+ colgado — aviso para reintentar a mano');
+      _sendStartedAt = null;
+      setState(() => _confirmingAll = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_trSafe('assistant.saveTimeoutError'))),
+      );
+      return;
+    }
+    // Bug real reportado en vivo, confirmado en el momento con logcat
+    // en vivo: el saludo inicial habla en varias partes con una pausa
+    // A PROPÓSITO entre una y otra (_suppressAutoListen, ver
+    // _speakFirstTurn) — este watchdog no lo sabía, y en ese hueco
+    // (nada escuchando, nada hablando, nada mandando: exactamente lo
+    // que este chequeo mira) lo confundía con un cuelgue real y
+    // forzaba un _startListening() a la fuerza justo antes de que
+    // arrancara la parte SIGUIENTE del saludo — el micrófono
+    // arrancando compite por el audio justo cuando está por sonar la
+    // frase siguiente, cortándola. Se excluye esta pausa intencional.
+    if (!_voiceReplyEnabled || _paused || _suppressAutoListen) return;
+    if (_listening || _sending || _speaking || _speakPending || _confirmingAll) return;
+    if (DateTime.now().difference(_lastVoiceActivity).inSeconds < _idleWatchdogSeconds) return;
+    debugPrint('[MIC] idleWatchdog: sin actividad hace ${_idleWatchdogSeconds}s+ — reiniciando el micrófono');
+    _touchVoiceActivity();
+    _accumulatedSpeech = '';
+    _lastPartial = '';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(_trSafe('assistant.micAutoRestarted'))),
+    );
+    _startListening();
+  }
+
   final _tts = FlutterTts();
   final _audioPlayer = AudioPlayer();
+
+  /// Bug real reportado en vivo: "le marco No y sigue hablando la
+  /// pregunta [vieja], aparece la otra, le marco No y empieza a
+  /// mesclar todo" — los botones de opción quedan tocables apenas
+  /// llega la respuesta (showOptionButtons solo exige !_sending, no
+  /// !_speaking — a propósito, para no obligar a esperar la síntesis
+  /// completa antes de poder tocar), así que un toque rápido dispara
+  /// _send() -> _speak() de la pregunta SIGUIENTE mientras la síntesis
+  /// de la pregunta ANTERIOR todavía está sonando (o todavía tiene
+  /// oraciones en cola en _speakChunksWithOpenAi). Como _speak() nunca
+  /// tenía forma de cancelar una llamada anterior en vuelo, terminaban
+  /// las dos reproduciendo sobre el mismo _audioPlayer al mismo tiempo.
+  /// Cada _speak() nuevo saca un token propio; el pipeline de la
+  /// llamada vieja lo chequea entre oración y oración y se corta solo
+  /// apenas detecta que ya no es la vigente, en vez de seguir sonando
+  /// encima de la nueva.
+  int _speechToken = 0;
   // Por accesibilidad (pedido explícito del usuario: "le sirve a una
   // persona que no puede ver") arranca SIEMPRE activado (salvo que se
   // haya apagado por parámetro, ver _loadVoiceSettings) y encadena solo
@@ -181,6 +349,12 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
   // solo, si en algún momento no se detecta voz (ver _handleSilenceTimeout).
   bool _voiceReplyEnabled = true;
   bool _speaking = false;
+  // Ver el comentario grande en _speak(): true desde el instante en que
+  // se decide hablar (antes incluso de pedir el audio por red), no solo
+  // mientras _speaking (que recién se pone en true una vez que la red ya
+  // respondió) — el watchdog de inactividad necesita saber que ya hay
+  // una respuesta en camino ANTES de esa espera de red, no solo después.
+  bool _speakPending = false;
 
   /// Parámetros editables desde admin-web (Parámetros de la app) sin
   /// recompilar la app — ver params.app_settings / AppSettingsPage.
@@ -197,6 +371,20 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
 
   double _voiceDouble(String key, double fallback) => double.tryParse(_voiceSettings[key] ?? '') ?? fallback;
   int _voiceInt(String key, int fallback) => int.tryParse(_voiceSettings[key] ?? '') ?? fallback;
+
+  /// Pedido explícito del usuario: "si la persona tiene otro idioma
+  /// seleccionado en su perfil, la IA debería hablar en ese idioma, no
+  /// solamente en español" — el backend de Estructurado (AIService.t)
+  /// ya arma las preguntas en el idioma preferido del viajero, pero el
+  /// reconocimiento de voz del celular quedaba fijo en español
+  /// (es_AR) sin importar cuál fuera — un viajero que contesta en
+  /// inglés se transcribía mal porque el reconocedor esperaba
+  /// español. Se resuelve la primera vez que hace falta (ver
+  /// _loadVoiceSettings) y se usa acá en vez del valor fijo.
+  static const Map<String, String> _localeIdByLang = {
+    'es': 'es_AR', 'en': 'en_US', 'pt': 'pt_BR', 'fr': 'fr_FR',
+  };
+  String _localeId = 'es_AR';
 
   String get _chatEndpoint => widget.structuredModel
       ? '/me/health-assistant/structured-chat'
@@ -217,6 +405,7 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
     return _speech.initialize(
       onError: (error) {
         debugPrint('[MIC] onError: ${error.errorMsg} permanent=${error.permanent} structured=${widget.structuredModel}');
+        _touchVoiceActivity();
         _cancelListenWatchdog();
         if (!mounted) return;
         setState(() => _listening = false);
@@ -300,14 +489,39 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
           // mismo error al toque, en loop, hasta agotar los reintentos.
           final isNetworkError = error.errorMsg == 'error_network';
           final isServerDisconnected = error.errorMsg == 'error_server_disconnected';
+          final isSilence = error.errorMsg == 'error_no_match' || error.errorMsg == 'error_speech_timeout';
           _consecutiveMicErrors++;
-          final maxErrors = isNetworkError ? _maxConsecutiveNetworkErrors : _maxConsecutiveMicErrors;
+          final maxErrors = isNetworkError
+              ? _maxConsecutiveNetworkErrors
+              : isSilence
+                  ? _maxConsecutiveSilenceErrors
+                  : _maxConsecutiveMicErrors;
           if (_consecutiveMicErrors > maxErrors) {
             _consecutiveMicErrors = 0;
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('El micrófono no responde — tocá el ícono para intentar de nuevo.')),
+              SnackBar(content: Text(_trSafe('assistant.micUnresponsiveError'))),
             );
             return;
+          }
+          // Ver el comentario grande de _checkInAfterSilentRetries:
+          // varios reintentos SEGUIDOS sin captar ni una palabra (no
+          // solo "error_no_match una vez") ameritan avisar que se
+          // sigue esperando, en vez de reintentar mudo. Bug real
+          // reportado en vivo: la primera versión de este aviso lo
+          // DECÍA en voz alta (_speak, que necesita pedirle el audio
+          // al servidor) — si esa red se cuelga (el mismo problema de
+          // conexión ya documentado en otras partes de esta pantalla),
+          // el aviso mismo se queda esperando para siempre y tapa
+          // justo lo que quería arreglar. Ahora es solo un cartel en
+          // pantalla, sin ninguna dependencia de red.
+          if (isSilence) {
+            _silentRetriesSinceCheckIn++;
+            if (_silentRetriesSinceCheckIn >= _checkInAfterSilentRetries) {
+              _silentRetriesSinceCheckIn = 0;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(_trSafe('assistant.stillListeningCheckIn'))),
+              );
+            }
           }
           final delay = isNetworkError ? const Duration(milliseconds: 1500) : const Duration(milliseconds: 800);
           if (isServerDisconnected) {
@@ -322,12 +536,13 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
           });
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('No se pudo reconocer la voz (${error.errorMsg}) — probá de nuevo.')),
+            SnackBar(content: Text(_trSafe('assistant.voiceRecognitionError', params: {'error': error.errorMsg}))),
           );
         }
       },
       onStatus: (status) {
         debugPrint('[MIC] onStatus: $status structured=${widget.structuredModel}');
+        _touchVoiceActivity();
         if (status == 'done' || status == 'notListening') {
           _cancelListenWatchdog();
           if (mounted) setState(() => _listening = false);
@@ -339,6 +554,7 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _speechInitFuture = _initSpeech().then((available) {
       debugPrint('[MIC] initialize resolved: available=$available structured=${widget.structuredModel}');
       if (mounted) setState(() => _speechAvailable = available);
@@ -356,15 +572,18 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
       if (!mounted) return;
       setState(() => _speaking = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo reproducir la respuesta en voz alta ($message).')),
+        SnackBar(content: Text(_trSafe('assistant.ttsPlaybackError', params: {'message': '$message'}))),
       );
     });
+    _idleWatchdog = Timer.periodic(const Duration(seconds: 5), _checkIdleWatchdog);
     _initVoiceFlow();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _listenWatchdog?.cancel();
+    _idleWatchdog?.cancel();
     _speech.stop();
     _tts.stop();
     _audioPlayer.dispose();
@@ -372,12 +591,54 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
     super.dispose();
   }
 
+  // Bug real reportado en vivo (grave — voz quedó muerta el resto de
+  // la charla): "hablé al lado del micrófono y no lo captó, varias
+  // veces seguidas" — confirmado con logcat que justo antes de que
+  // empezara a fallar TODO, la app pasó a segundo plano
+  // (surfaceDestroyed/windowStopped) — probablemente la propia
+  // viajera cambiando de app un instante, o el celular bloqueándose
+  // solo. Android puede cortarle el acceso al micrófono a una app en
+  // segundo plano por privacidad; al volver a primer plano, el
+  // reconocedor nativo queda en un estado "sordo" — sigue aceptando
+  // listen() y devolviendo error_no_match/error_speech_timeout como
+  // si nada, pero sin captar audio real nunca más, indefinidamente,
+  // hasta que se lo reinicialice de cero (no alcanza con reintentar
+  // listen() sobre el mismo objeto ya roto). No había NINGÚN código
+  // que reaccionara a volver a primer plano — se agrega acá.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    debugPrint('[MIC] didChangeAppLifecycleState: resumed — reinicializando el reconocedor por las dudas');
+    _speech.cancel();
+    if (mounted) setState(() => _listening = false);
+    _speechInitFuture = _initSpeech().then((available) {
+      if (mounted) setState(() => _speechAvailable = available);
+      if (available && mounted && _voiceReplyEnabled && !_sending && !_speaking && !_listening) {
+        _startListening();
+      }
+      return available;
+    });
+  }
+
+  // Bug real reportado en vivo (grave, bloquea la demo): "se recolgó
+  // acá" — confirmado repetidas veces con logcat que, tras un
+  // onError/onStatus normal, a veces NO llega NINGÚN callback más del
+  // reconocedor nativo (ni onResult, ni onStatus, ni onError) — la
+  // app queda "Escuchando..." sin estarlo de verdad. Antes este
+  // watchdog esperaba tts_listen_seconds + tts_pause_seconds + 10
+  // (pensado para no cortar una respuesta larga legítima) — pero como
+  // se REARMA en cada onResult real (ver el llamado dentro de
+  // onResult más abajo), no necesita cubrir toda la duración de una
+  // respuesta larga de una sola vez: solo necesita notar que pasó
+  // demasiado tiempo SIN NINGÚN callback, lo cual nunca es normal
+  // (pauseFor ya garantiza que un final limpio llega mucho antes). Un
+  // valor fijo y corto detecta el cuelgue en segundos en vez de casi
+  // dos minutos, sin arriesgar cortar ninguna respuesta real en curso.
+  static const _listenWatchdogSeconds = 12;
+
   void _armListenWatchdog() {
     _listenWatchdog?.cancel();
-    final timeoutSeconds = _voiceInt('assistant.tts_listen_seconds', 60) +
-        _voiceInt('assistant.tts_pause_seconds', 3) +
-        10;
-    _listenWatchdog = Timer(Duration(seconds: timeoutSeconds), _recoverFromHungListen);
+    _listenWatchdog = Timer(const Duration(seconds: _listenWatchdogSeconds), _recoverFromHungListen);
   }
 
   void _cancelListenWatchdog() {
@@ -412,7 +673,7 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
       _startListening();
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('El micrófono dejó de responder — tocá el ícono para intentar de nuevo.')),
+        SnackBar(content: Text(_trSafe('assistant.micStoppedError'))),
       );
     }
   }
@@ -428,7 +689,35 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
     setState(() => _speaking = false);
     if (_suppressAutoListen) return;
     if (_voiceReplyEnabled && !_sending && !_listening) {
-      _startListening();
+      // Bug real reportado en vivo: "le hablo y no recibe nada" —
+      // confirmado con logcat que el micrófono capta literalmente el
+      // final de lo que la IA ACABA de decir ("¿Tuvo o tiene alguna
+      // enfermedad pulmonar crónica? Indique sí o no." reconocido como
+      // "todo o tiene alguna enfermedad pulmonar crónica sí o no",
+      // prácticamente idéntico) — el callback de "audio terminado" de
+      // flutter_tts llega antes de que el sonido termine de apagarse
+      // de verdad por el parlante (buffer de audio del hardware/SO),
+      // así que reactivar el micrófono en el mismo instante todavía
+      // agarra la cola del eco. _muteMicForPlayback (arriba) ya corta
+      // ANTES de reproducir — esto es el mismo cortafuegos del otro
+      // lado: una pausa corta ANTES de volver a escuchar, para dejar
+      // que el eco se apague de verdad.
+      //
+      // Bug real reportado en vivo (más grave que el eco de arriba):
+      // "siempre mencioné antes el mes pero no lo grabó, solo el año"
+      // — confirmado con logcat que el PRIMER fragmento que entrega el
+      // reconocedor en una sesión nueva ya viene sin las primeras
+      // palabras (tarda una fracción de segundo en "despertar" después
+      // de arrancar la escucha). Cuanto más se tarda en llamar a
+      // _startListening() después de la pregunta, más probable que la
+      // persona ya haya empezado a contestar antes de que el
+      // reconocedor esté realmente listo — se acorta esta espera
+      // (a costa de algo más de riesgo de agarrar la cola del eco, un
+      // problema menor) para achicar la ventana real donde se pierden
+      // palabras.
+      Future.delayed(const Duration(milliseconds: 400), () {
+        if (mounted && _voiceReplyEnabled && !_sending && !_listening) _startListening();
+      });
     }
   }
 
@@ -502,13 +791,60 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
   Future<void> _speak(String rawText) async {
     final text = _speakableText(rawText);
     if (text.trim().isEmpty) return;
+    // Bug real reportado en vivo, confirmado con logcat: el reinicio
+    // automático por inactividad (_checkIdleWatchdog) se disparaba
+    // MIENTRAS se estaba pidiendo el audio de una respuesta normal por
+    // red (no solo en el saludo, ver el comentario grande de
+    // _checkIdleWatchdog) — durante esos ~2s de espera de red, _speaking
+    // todavía no pasa a true (recién se pone después de que la red
+    // responde, ver _speakWithOpenAi), así que el watchdog no tenía
+    // forma de saber que ya se estaba por hablar. _speakPending cubre
+    // TODO el método, desde el instante en que se decide hablar.
+    _speakPending = true;
+    try {
+      await _speakInner(text);
+    } finally {
+      _speakPending = false;
+    }
+  }
+
+  Future<void> _speakInner(String text) async {
+    // Cada llamada nueva es LA vigente — corta ya mismo cualquier audio
+    // de una pregunta anterior que todavía esté sonando (ver comentario
+    // de _speechToken) en vez de dejar que las dos suenen juntas.
+    final token = ++_speechToken;
+    // Bug real reportado en vivo: "se corta a mitad de frase" —
+    // confirmado que el stop() de acá arriba, llamado SIEMPRE (incluso
+    // cuando no había nada sonando) y sin pausa antes del play() de la
+    // oración nueva, alcanza a chocar con el mismo bug ya documentado
+    // de audioplayers en este Galaxy S20+ (onPlayerComplete que no
+    // llega — ver _playAudioBytes): al reintentar reproducir sobre el
+    // mismo reproductor nativo casi en el mismo instante que se lo
+    // frena, el arranque del audio nuevo sale mordido/glitcheado. Solo
+    // se frena si de verdad había algo sonando, y se le da un respiro
+    // corto para que el nativo termine de soltarlo antes de arrancar
+    // el siguiente — mismo margen ya usado en _playAudioBytes para el
+    // problema análogo del otro lado (onDurationChanged).
+    if (_speaking) {
+      await _audioPlayer.stop();
+      // Ver el comentario grande en _playAudioBytes: soltar el clip
+      // interrumpido del todo (no solo pausarlo) para no acumular
+      // desgaste del reproductor turno tras turno.
+      try {
+        await _audioPlayer.release();
+      } catch (_) {}
+      await _tts.stop();
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
     final sentences = _splitIntoSentences(text);
     if (sentences.length <= 1) {
-      if (await _speakWithOpenAi(text)) return;
+      if (await _speakWithOpenAi(text, token)) return;
+      if (token != _speechToken || !mounted) return;
       await _tts.speak(text);
       return;
     }
-    if (await _speakChunksWithOpenAi(sentences)) return;
+    if (await _speakChunksWithOpenAi(sentences, token)) return;
+    if (token != _speechToken || !mounted) return;
     await _tts.speak(text);
   }
 
@@ -548,7 +884,29 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
       sub.cancel();
       if (!completer.isCompleted) completer.complete();
     });
+    // Bug real reportado en vivo: "el asistente estructurado sigue
+    // siendo lento" (aun con la velocidad de lectura ya al máximo) —
+    // confirmado con logcat en este mismo Galaxy S20+: onPlayerComplete
+    // NUNCA llega (ver comentario de más abajo, ya documentado antes),
+    // así que CADA turno esperaba el timeout fijo completo de 30s de
+    // silencio muerto antes de seguir — eso, no la velocidad de
+    // lectura, era lo que se sentía "lento". onDurationChanged sí
+    // llega apenas el audio termina de decodificarse (antes de
+    // empezar a sonar), con la duración real del clip — se usa esa
+    // duración + un margen chico como timeout en vez de un fijo de
+    // 30s, para que el timeout dispare apenas después de que el audio
+    // realmente termina, no 30 segundos después.
+    Duration timeoutDuration = const Duration(seconds: 10);
+    late final StreamSubscription<Duration> durationSub;
+    durationSub = _audioPlayer.onDurationChanged.listen((d) {
+      if (d > Duration.zero) timeoutDuration = d + const Duration(seconds: 2);
+      durationSub.cancel();
+    });
     await _audioPlayer.play(BytesSource(bytes));
+    // Le da un instante a onDurationChanged (llega apenas se decodifica
+    // el audio, normalmente antes de que termine de sonar) para
+    // actualizar timeoutDuration antes de armar el timeout de abajo.
+    await Future.delayed(const Duration(milliseconds: 150));
     // Bug real reportado en vivo: "se queda escuchando"/"no hace nada"
     // después de hablar — confirmado con logcat en un Samsung Galaxy
     // S20+: el paquete audioplayers a veces NUNCA emite onPlayerComplete
@@ -558,30 +916,61 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
     // depende de "terminó de hablar" (mic automático, pregunta
     // siguiente) quedaba trabado para siempre en apariencia. Es solo
     // una red de seguridad — el camino normal sigue resolviendo por el
-    // evento real; esto solo actúa si ese evento se pierde. 30s alcanza
-    // de sobra para UNA oración (a diferencia del límite viejo de 60s,
-    // que era para el audio completo sin trocear).
+    // evento real; esto solo actúa si ese evento se pierde.
     await completer.future.timeout(
-      const Duration(seconds: 30),
+      timeoutDuration,
       onTimeout: () {
-        debugPrint('[MIC] _playAudioBytes: onPlayerComplete nunca llegó, sigo por timeout');
+        debugPrint('[MIC] _playAudioBytes: onPlayerComplete nunca llegó, sigo por timeout ($timeoutDuration)');
         sub.cancel();
+        durationSub.cancel();
       },
     );
+    // Bug real reportado en vivo: "se entrecorta cada vez más a medida
+    // que avanza" — la charla reusa EL MISMO AudioPlayer nativo para
+    // cada oración/turno, y en este dispositivo (ver el resto de
+    // comentarios de esta clase: onPlayerComplete que no llega,
+    // arranques mordidos) el buffer interno del reproductor queda en
+    // un estado cada vez más degradado cuantas más veces se lo reusa
+    // sin soltarlo — no es una sola falla puntual, se va acumulando
+    // turno tras turno. release() fuerza al nativo a soltar el clip
+    // actual del todo (no solo pausarlo) antes de que la PRÓXIMA
+    // oración/turno vuelva a usar el mismo reproductor, así que cada
+    // reproducción arranca de cero en vez de heredar el desgaste de
+    // las anteriores.
+    try {
+      await _audioPlayer.release();
+    } catch (_) {
+      // Si el nativo ya estaba en un estado raro, no vale la pena
+      // bloquear el resto de la charla por esto.
+    }
   }
 
-  Future<bool> _speakWithOpenAi(String text) async {
+  Future<bool> _speakWithOpenAi(String text, int token) async {
+    // Bug real reportado en vivo: "dijo 'te hiciero' y quedó ahí" —
+    // confirmado con logcat que el micrófono seguía escuchando
+    // ACTIVAMENTE durante los varios segundos que tarda este pedido de
+    // red (más con el túnel USB/red lenta ya documentado en esta
+    // pantalla), y si en ese lapso llegaba a reconocer cualquier cosa
+    // (ruido, una palabra suelta), disparaba un turno nuevo que le
+    // ganaba el token a esta respuesta todavía sin empezar a sonar —
+    // la cortaba a mitad de la primera palabra apenas arrancaba. Se
+    // muta ANTES de pedir el audio (no después), igual que ya hace
+    // _speakChunksWithOpenAi más abajo.
+    _muteMicForPlayback();
     final bytes = await _synthesizeSpeechBytes(text);
     if (bytes == null) return false;
-    if (!mounted) return true;
-    _muteMicForPlayback();
+    // Mientras se esperaba la red, pudo haber arrancado una pregunta
+    // más nueva (otro toque de opción) — esta respuesta ya quedó vieja,
+    // no se reproduce (evita el "sigue hablando la pregunta anterior").
+    if (!mounted || token != _speechToken) return true;
     setState(() => _speaking = true);
     await _playAudioBytes(bytes);
+    if (token != _speechToken) return true;
     _onSpeechFinished();
     return true;
   }
 
-  Future<bool> _speakChunksWithOpenAi(List<String> sentences) async {
+  Future<bool> _speakChunksWithOpenAi(List<String> sentences, int token) async {
     if (!mounted) return true;
     _muteMicForPlayback();
     setState(() => _speaking = true);
@@ -593,10 +982,28 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
       // la siguiente en paralelo — no se espera a que termine de sonar
       // la actual, para que esté lista (o casi) cuando le toque el turno.
       pending = (i + 1 < sentences.length) ? _synthesizeSpeechBytes(sentences[i + 1]) : null;
-      if (!mounted) return true;
+      // Se chequea ENTRE oración y oración (ver _speechToken) — si en el
+      // medio de esta pregunta ya se contestó y arrancó la siguiente, se
+      // corta acá en vez de seguir leyendo oraciones de una pregunta que
+      // el viajero ya dejó atrás.
+      if (!mounted || token != _speechToken) return true;
       if (bytes != null) {
         anySucceeded = true;
         await _playAudioBytes(bytes);
+        if (token != _speechToken) return true;
+        // Bug real reportado en vivo: "empieza a entrecortarse" en el
+        // saludo inicial (varias oraciones seguidas) — mismo problema ya
+        // documentado en este Galaxy S20+ (onPlayerComplete que no
+        // llega, o llega antes de que el audio termine de sonar de
+        // verdad por el hardware): sin ninguna pausa acá, el .play() de
+        // la oración SIGUIENTE arranca sobre la cola todavía sonando de
+        // la anterior en el mismo reproductor nativo, mordiendo el
+        // final de una y el arranque de la otra. Un respiro corto entre
+        // oración y oración (no se nota como pausa "hablada", es más
+        // chico que cualquier pausa natural del habla) le da tiempo al
+        // nativo a soltar el audio anterior antes de arrancar el que
+        // sigue.
+        if (i + 1 < sentences.length) await Future.delayed(const Duration(milliseconds: 120));
       } else {
         await _tts.speak(sentences[i]);
       }
@@ -644,6 +1051,12 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
   Future<void> _initVoiceFlow() async {
     await _loadVoiceSettings();
     await _configureTts();
+    // Pedido explícito del usuario: "que vaya grabando información...
+    // no perder lo registrado" — cada respuesta ya queda guardada
+    // apenas se la reconoce (ai.proposals), así que no hace falta
+    // ningún caché nuevo en el celular: alcanza con ofrecer retomar
+    // una charla incompleta ANTES de arrancar una nueva de cero.
+    await _checkResumableConversation();
     // Pedido explícito del usuario: nada de saludo fijo ni de dejar el
     // diálogo esperando que el viajero hable primero sin saber qué
     // contestar — la IA arranca sola la charla, se presenta corto, y
@@ -653,6 +1066,81 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
     await _startConversation();
   }
 
+  /// Bug real reportado en vivo (grave — pérdida de datos percibida):
+  /// una entrevista completa (signos vitales + 6 antecedentes) quedó
+  /// sin confirmar porque la app se cortó justo en el paso final
+  /// ("¿Guardamos todo?"). Los datos NUNCA se perdieron de verdad —
+  /// cada respuesta ya se guarda como PENDING_CONFIRMATION apenas se
+  /// la reconoce — pero al volver a entrar, la pantalla arrancaba una
+  /// charla nueva de cero sin avisar que había algo sin guardar. Se
+  /// consulta acá, ANTES de saludar, y si hay algo pendiente se le
+  /// ofrece guardarlo directo (sin tener que repetir nada) o
+  /// descartarlo — nunca se sigue de largo en silencio.
+  Future<void> _checkResumableConversation() async {
+    Map<String, dynamic>? data;
+    try {
+      final response = await ApiClient.instance.dio.get(
+        '/me/health-assistant/resumable-conversation',
+        queryParameters: {'model': widget.structuredModel ? 'STRUCTURED' : 'CLASSIC'},
+      );
+      data = response.data as Map<String, dynamic>?;
+    } catch (_) {
+      // Sin conexión o lo que sea: no bloquea el arranque normal.
+      return;
+    }
+    if (data == null || !mounted) return;
+    final conversationId = data['conversationId'] as String;
+    final items = (data['items'] as List? ?? []).cast<Map<String, dynamic>>();
+    if (items.isEmpty) return;
+    final action = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Text(_trSafe('assistant.resumeTitle')),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(_trSafe('assistant.resumeBody')),
+              const SizedBox(height: 8),
+              for (final item in items)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text('• ${item['label']}'),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop('discard'), child: Text(_trSafe('assistant.resumeDiscard'))),
+          FilledButton(onPressed: () => Navigator.of(ctx).pop('save'), child: Text(_trSafe('assistant.resumeSave'))),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (action == 'save') {
+      try {
+        await ApiClient.instance.dio.post('/me/health-assistant/conversations/$conversationId/confirm-all');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(_trSafe('assistant.resumeSaved'))),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(_errorMessage(e, _trSafe('assistant.resumeSaveError')))),
+          );
+        }
+      }
+    } else if (action == 'discard') {
+      try {
+        await ApiClient.instance.dio.post('/me/health-assistant/conversations/$conversationId/reject-all');
+      } catch (_) {}
+    }
+  }
+
   /// Dispara el primer turno de la IA sin esperar a que el viajero
   /// escriba/hable algo primero. No se muestra como si el viajero
   /// hubiese dicho "Hola" — solo se agrega y (si corresponde) se lee en
@@ -660,6 +1148,7 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
   Future<void> _startConversation() async {
     if (_sending || _conversationId != null) return;
     setState(() => _sending = true);
+    _sendStartedAt = DateTime.now();
     try {
       final response = await ApiClient.instance.dio.post(_chatEndpoint, data: {
         'question': 'Hola',
@@ -684,6 +1173,8 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
         _sending = false;
         _interviewComplete = data['interviewComplete'] as bool? ?? false;
       });
+      _sendStartedAt = null;
+      _touchVoiceActivity();
       _scrollToBottom();
       if (_voiceReplyEnabled) await _speakFirstTurn(reply);
     } catch (e) {
@@ -693,6 +1184,8 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
         _messages.add(_ChatMessage(text: errorText, fromUser: false));
         _sending = false;
       });
+      _sendStartedAt = null;
+      _touchVoiceActivity();
       _scrollToBottom();
       if (_voiceReplyEnabled) await _speak(errorText);
     }
@@ -713,6 +1206,19 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
     } catch (_) {
       // Sigue con los defaults locales — no bloquea el arranque del asistente.
     }
+    try {
+      final profileResponse = await ApiClient.instance.dio.get('/me/profile');
+      // preferred_lang es CHAR(5) en la base — Postgres lo devuelve
+      // relleno con espacios ("es   "), así que sin el trim() esto
+      // nunca coincidía con las claves del mapa y quedaba siempre en
+      // español por defecto (mismo bug que se vio en admin-web).
+      final lang = ((profileResponse.data as Map)['preferred_lang'] as String?)?.trim();
+      if (lang != null && _localeIdByLang.containsKey(lang)) {
+        _localeId = _localeIdByLang[lang]!;
+      }
+    } catch (_) {
+      // Sigue en español (default) — no bloquea el arranque del asistente.
+    }
   }
 
   /// Ni un solo botón: si nadie dijo nada durante la escucha automática,
@@ -727,12 +1233,18 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
     // initState): pauseFor por defecto son solo 2 segundos, así que si
     // la persona se queda pensando un poco entre frases, esto reiniciaba
     // el micrófono en el mismo instante, una y otra vez, sin pausa.
+    // Mismo criterio que error_no_match/error_speech_timeout en
+    // onError (ver _maxConsecutiveSilenceErrors) — este es EL MISMO
+    // caso (silencio real, la persona no dijo nada), solo que llega
+    // como resultado vacío en vez de como error del reconocedor. Con
+    // el presupuesto corto de antes (3), el modo manos libres se
+    // apagaba solo tras ~16-20s de silencio real.
     _consecutiveMicErrors++;
-    if (_consecutiveMicErrors > _maxConsecutiveMicErrors) {
+    if (_consecutiveMicErrors > _maxConsecutiveSilenceErrors) {
       _consecutiveMicErrors = 0;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No se detectó voz — tocá el ícono del micrófono cuando quieras seguir.')),
+          SnackBar(content: Text(_trSafe('assistant.noVoiceDetectedError'))),
         );
       }
       return;
@@ -893,8 +1405,18 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
   /// con un diálogo, porque un toque puede ser accidental), decir la
   /// frase completa por voz/texto YA es en sí mismo confirmar — guarda
   /// directo, sin un diálogo de más que rompería el modo manos libres.
+  ///
+  /// Bug real reportado en vivo: "primero una voz me dice 'listo
+  /// guardado todo' y después otra voz con mejor tono me dice 'listo
+  /// guardé todo en tu historial de salud'" — este método hablaba un
+  /// aviso local ANTES de llamar a _confirmAllPending(), que abajo
+  /// arma y habla su PROPIO mensaje de cierre — dos mensajes
+  /// hablados seguidos para lo mismo, y por una carrera de red entre
+  /// los dos llamados a _speak() uno caía al motor nativo (peor voz)
+  /// y el otro salía por OpenAI (mejor voz), dando la sensación de
+  /// "dos voces distintas". _confirmAllPending() ya avisa que guardó
+  /// — no hace falta un aviso previo redundante.
   Future<void> _handleExitCommand() async {
-    if (_voiceReplyEnabled) await _speak('Listo, guardo lo que contestaste hasta ahora.');
     await _confirmAllPending();
   }
 
@@ -909,7 +1431,11 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
       _controller.clear();
       _handleFinalConfirmation(text);
     } else {
-      _send();
+      // Se pasa el texto explícito en vez de confiar en que
+      // _controller.text ya lo tenga — más robusto ante cualquier
+      // desincronización entre el texto reconocido y lo que quedó
+      // pintado en el campo (ver _send).
+      _send(overrideText: text);
     }
   }
 
@@ -937,8 +1463,22 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
       debugPrint('[MIC] _startListening: ya estaba escuchando, no-op');
       return;
     }
-    final available = _speechAvailable || await (_speechInitFuture ?? Future.value(false));
+    var available = _speechAvailable || await (_speechInitFuture ?? Future.value(false));
     debugPrint('[MIC] _startListening: available=$available structured=${widget.structuredModel}');
+    // Bug real reportado en vivo (Estructurado, permiso de micrófono ya
+    // concedido de antes): "no está escuchando" en el primer turno —
+    // sin reintento, si el servicio de reconocimiento de Android
+    // todavía no terminó de levantar en ese instante exacto (más
+    // probable recién entrando a la pantalla), esto se rendía para
+    // siempre y solo un toque manual del ícono de mic lo destrababa.
+    // Un par de reintentos cortos cubre ese hueco sin tener que tocar
+    // nada a mano.
+    for (var attempt = 1; !available && attempt <= 2 && mounted; attempt++) {
+      debugPrint('[MIC] _startListening: no disponible, reintentando inicialización ($attempt/2)');
+      await Future.delayed(const Duration(milliseconds: 500));
+      available = await _initSpeech();
+      if (mounted) setState(() => _speechAvailable = available);
+    }
     if (!available || !mounted || _listening) return;
     // Bug real reportado en vivo: "a veces me deja de escuchar y tengo
     // que apagar y volver a encender el micrófono" — nuestro booleano
@@ -956,7 +1496,7 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
     try {
       await _speech.listen(
         listenOptions: stt.SpeechListenOptions(
-          localeId: 'es_AR',
+          localeId: _localeId,
           // dictation (no confirmation, pensado para frases cortas) cortaba
           // antes de que la persona terminara de describir un antecedente.
           listenMode: stt.ListenMode.dictation,
@@ -974,6 +1514,7 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
         onResult: (result) {
           debugPrint('[MIC] onResult: final=${result.finalResult} words="${result.recognizedWords}" '
               'confidence=${result.confidence} accumulated="$_accumulatedSpeech" lastPartial="$_lastPartial"');
+          _touchVoiceActivity();
           // Cualquier callback prueba que la sesión sigue viva — reinicia
           // la cuenta regresiva del watchdog (ver su comentario arriba).
           if (result.finalResult) {
@@ -982,6 +1523,11 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
             _armListenWatchdog();
           }
           final words = result.recognizedWords;
+          // Cualquier palabra suelta reconocida (aunque la sesión
+          // termine en error después) prueba que SÍ hay señal de
+          // audio llegando — corta la cuenta de reintentos en
+          // silencio total (ver _checkInAfterSilentRetries).
+          if (words.trim().isNotEmpty) _silentRetriesSinceCheckIn = 0;
 
           // Bug real reportado en vivo, confirmado con logcat: a mitad
           // de UNA misma sesión (sin onStatus ni finalResult de por
@@ -1062,7 +1608,7 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
             _setControllerText(_accumulatedSpeech);
             _consecutiveMicErrors = 0;
 
-            if (wasManualStop) {
+            if (wasManualStop || _isCompleteYesNoOrOption(_accumulatedSpeech)) {
               final text = _accumulatedSpeech;
               _accumulatedSpeech = '';
               _submitRecognizedText(text);
@@ -1080,7 +1626,7 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
       if (mounted) {
         setState(() => _listening = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No se pudo activar el micrófono — revisá el permiso en Ajustes.')),
+          SnackBar(content: Text(_trSafe('assistant.micPermissionError'))),
         );
       }
     }
@@ -1102,6 +1648,30 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
     return null;
   }
 
+  /// Bug real reportado en vivo: a una pregunta de sí/no, decir "sí" se
+  /// trataba igual que una respuesta larga a mitad de frase ("cardiopatía
+  /// congénita" ... pausa ... fecha) — se acumulaba en silencio y seguía
+  /// escuchando SIN avisar, esperando una pausa "real" que nunca se
+  /// distinguía de la que ya hubo. La persona repetía "sí" varias veces
+  /// sin que pasara nada, hasta que el reconocedor terminaba en un error
+  /// de "no speech detected" y se colgaba del todo. Una palabra suelta que
+  /// ES la respuesta completa (sí/no, o una de las opciones que se están
+  /// mostrando ahora mismo, ej. "Diabetes Tipo 1") nunca tiene "más por
+  /// venir" — se envía apenas se reconoce, en vez de esperar un silencio
+  /// que ya pasó.
+  bool _isCompleteYesNoOrOption(String text) {
+    final normalized = _stripAccents(text.trim().toLowerCase());
+    if (normalized.isEmpty) return false;
+    if (normalized == 'si' || normalized == 'no') return true;
+    final lastAssistant = _messages.cast<_ChatMessage?>().lastWhere(
+          (m) => m != null && !m.fromUser,
+          orElse: () => null,
+        );
+    final options = lastAssistant?.options;
+    if (options == null) return false;
+    return options.any((o) => normalizeSpanishAccents(o.trim().toLowerCase()) == normalized);
+  }
+
   /// Toque de un botón de opción (ver ListView.builder más abajo) —
   /// somete la opción tal cual el usuario hubiese tipeado/dicho su
   /// nombre, mismo camino que cualquier otra respuesta.
@@ -1120,7 +1690,7 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
     if (normalized == 'otra' || normalized == 'otro') {
       _setControllerText('');
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Contame cuál — escribilo o decilo por voz.')),
+        SnackBar(content: Text(context.tr('assistant.tellUsWhich'))),
       );
       return;
     }
@@ -1128,9 +1698,22 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
     await _send();
   }
 
-  Future<void> _send() async {
-    final text = normalizeSpanishAccents(_controller.text.trim());
-    if (text.isEmpty || _sending) return;
+  Future<void> _send({String? overrideText}) async {
+    final text = normalizeSpanishAccents((overrideText ?? _controller.text).trim());
+    // Bug real reportado en vivo: "queda colgado" tras contestar por voz
+    // — confirmado con logcat que, cuando el pedido anterior tarda
+    // muchísimo en responder (red lenta/inestable por el túnel USB), CUALQUIER
+    // intento nuevo de _send() (voz o texto) se descartaba en silencio
+    // acá mismo, sin un solo rastro en el log — nada avisaba que había
+    // un pedido viejo todavía colgado bloqueando los nuevos. Este print
+    // no arregla la lentitud de red en sí (eso es de la conexión, no de
+    // este código), pero convierte un cuelgue silencioso e
+    // indiagnosticable en algo visible la próxima vez que pase.
+    if (text.isEmpty) return;
+    if (_sending) {
+      debugPrint('[MIC] _send: descartado, ya hay un pedido en curso ("$text")');
+      return;
+    }
     // Bug real reportado en vivo: _isExitCommand solo se chequeaba en el
     // camino de voz reconocida (_submitRecognizedText) — un pedido de
     // "guardar y salir" ESCRITO iba directo a la IA, que no puede
@@ -1154,6 +1737,7 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
       _sending = true;
       _controller.clear();
     });
+    _sendStartedAt = DateTime.now();
     _scrollToBottom();
     try {
       final response = await ApiClient.instance.dio.post(_chatEndpoint, data: {
@@ -1198,6 +1782,8 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
       // silencio total — sin nada que dispare el próximo _startListening.
       if (_voiceReplyEnabled) _speak(errorText);
     } finally {
+      _sendStartedAt = null;
+      _touchVoiceActivity();
       if (mounted) setState(() => _sending = false);
       _scrollToBottom();
     }
@@ -1211,14 +1797,11 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('¿Guardar y salir?'),
-        content: const Text(
-          'Se guarda todo lo que ya contestaste hasta ahora en tu Historial de Salud, '
-          'aunque no hayas terminado todas las preguntas.',
-        ),
+        title: Text(context.tr('assistant.saveAndExitTitle')),
+        content: Text(context.tr('assistant.saveAndExitBody')),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancelar')),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Guardar y salir')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: Text(context.tr('assistant.cancel'))),
+          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: Text(context.tr('assistant.saveAndExitButton'))),
         ],
       ),
     );
@@ -1229,6 +1812,7 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
     final conversationId = _conversationId;
     if (conversationId == null || _confirmingAll) return;
     setState(() => _confirmingAll = true);
+    _sendStartedAt = DateTime.now();
     try {
       final response = await ApiClient.instance.dio.post(
         '/me/health-assistant/conversations/$conversationId/confirm-all',
@@ -1236,6 +1820,7 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
       final data = response.data as Map<String, dynamic>;
       final confirmedCount = (data['results'] as List? ?? []).length;
       final skipped = (data['skipped'] as List? ?? []).cast<Map<String, dynamic>>();
+      final dateWarnings = (data['dateWarnings'] as List? ?? []).cast<String>();
       if (!mounted) return;
 
       // Pedido explícito del usuario: "con solo decir diabetes tipo 2 la
@@ -1258,11 +1843,11 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
         final confirmed = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: const Text('¿Confirmás el cambio?'),
-            content: Text('Ya tenés "$existingName" registrada. ¿Confirmás que ahora es "$newName"?'),
+            title: Text(context.tr('assistant.confirmChangeTitle')),
+            content: Text(context.tr('assistant.confirmChangeBody', params: {'existing': existingName, 'updated': newName})),
             actions: [
-              TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('No')),
-              FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Sí, reemplazar')),
+              TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: Text(context.tr('assistant.no'))),
+              FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: Text(context.tr('assistant.yesReplace'))),
             ],
           ),
         );
@@ -1304,6 +1889,13 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
         final reasons = unresolvedReasons.toSet().join(', ');
         buffer.write(' Menos esto, que ya lo tenías cargado: $reasons.');
       }
+      // Bug real reportado en vivo: una fecha inválida en un
+      // antecedente nuevo (futura o anterior al nacimiento) se
+      // guardaba igual sin fecha, sin avisar — ver dateWarnings en
+      // AIService.confirmAllProposalsInTx.
+      for (final warning in dateWarnings) {
+        buffer.write(' $warning');
+      }
       final confirmText = buffer.toString();
       setState(() {
         _messages.add(_ChatMessage(text: confirmText, fromUser: false));
@@ -1323,6 +1915,8 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
         );
       }
     } finally {
+      _sendStartedAt = null;
+      _touchVoiceActivity();
       if (mounted) setState(() => _confirmingAll = false);
     }
   }
@@ -1428,14 +2022,14 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        title: const Text('Tenés datos sin confirmar'),
+        title: Text(context.tr('assistant.unconfirmedDataTitle')),
         content: SizedBox(
           width: double.maxFinite,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Todavía no se guardó esto — ¿qué querés hacer?'),
+              Text(context.tr('assistant.unconfirmedDataBody')),
               const SizedBox(height: 12),
               for (final p in pending)
                 Padding(
@@ -1446,9 +2040,9 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop('cancel'), child: const Text('Seguir acá')),
-          TextButton(onPressed: () => Navigator.of(ctx).pop('discard'), child: const Text('Descartar')),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop('confirm'), child: const Text('Confirmar todo')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop('cancel'), child: Text(context.tr('assistant.keepGoingHere'))),
+          TextButton(onPressed: () => Navigator.of(ctx).pop('discard'), child: Text(context.tr('assistant.discard'))),
+          FilledButton(onPressed: () => Navigator.of(ctx).pop('confirm'), child: Text(context.tr('assistant.confirmAll'))),
         ],
       ),
     );
@@ -1490,7 +2084,7 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
       },
       child: Scaffold(
       appBar: AppBar(
-        title: Text(widget.structuredModel ? 'Asistente de salud (Estructurado)' : 'Asistente de salud'),
+        title: Text(widget.structuredModel ? context.tr('assistant.chatTitleStructured') : context.tr('assistant.chatTitleClassic')),
         actions: [
           // Pedido explícito del usuario: "siempre una opción para poder
           // guardar y salir desde cualquier punto que uno esté de las
@@ -1564,12 +2158,29 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
                         child: Wrap(
                           spacing: 8,
                           runSpacing: 8,
-                          children: m.options!
-                              .map((o) => OutlinedButton(
-                                    onPressed: () => _submitOption(o),
-                                    child: Text(o),
-                                  ))
-                              .toList(),
+                          children: [
+                            ...m.options!.map((o) => OutlinedButton(
+                                  onPressed: () => _submitOption(o),
+                                  child: Text(o),
+                                )),
+                            // Pedido explícito del usuario: "sería bueno
+                            // que cuando presenta los botones de SI y NO
+                            // agregue un botón adicional que permita
+                            // grabar y salir" — solo en preguntas de
+                            // sí/no (siempre 2 opciones; ninguna otra
+                            // pregunta de esta tabla usa exactamente 2
+                            // opciones hoy), no en listas de catálogo
+                            // (ej. los subtipos de diabetes), donde no
+                            // pidió esto. Reusa _handleExitCommand — el
+                            // mismo camino ya probado que dispara un
+                            // pedido de cierre por voz/texto.
+                            if (m.options!.length == 2)
+                              OutlinedButton.icon(
+                                onPressed: _handleExitCommand,
+                                icon: const Icon(Icons.save_outlined, size: 18),
+                                label: Text(_trSafe('assistant.saveAndExitButton')),
+                              ),
+                          ],
                         ),
                       ),
                   ],
@@ -1584,19 +2195,19 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               child: Row(
                 children: [
-                  const Expanded(
-                    child: Text('¿Confirmamos todo lo que hablamos?'),
+                  Expanded(
+                    child: Text(context.tr('assistant.confirmEverythingQuestion')),
                   ),
                   TextButton(
                     onPressed: _confirmingAll ? null : () => setState(() => _interviewComplete = false),
-                    child: const Text('Corregir algo'),
+                    child: Text(context.tr('assistant.fixSomething')),
                   ),
                   const SizedBox(width: 8),
                   FilledButton(
                     onPressed: _confirmingAll ? null : _confirmAllPending,
                     child: _confirmingAll
                         ? const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Text('Confirmar todo'),
+                        : Text(context.tr('assistant.confirmAll')),
                   ),
                 ],
               ),
@@ -1608,15 +2219,33 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               child: Row(
                 children: [
-                  const Expanded(child: Text('Guardado. Podés volver cuando quieras.')),
+                  Expanded(child: Text(context.tr('assistant.savedCanReturn'))),
                   FilledButton(
                     onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Cerrar'),
+                    child: Text(context.tr('assistant.close')),
                   ),
                 ],
               ),
             ),
-          if (_sending) const LinearProgressIndicator(),
+          // Pedido explícito del usuario: "cuando ingreso medicamentos
+          // tarda mucho en responder, lo mismo con alergias" — la
+          // demora es real (llamado a IA para interpretar texto libre
+          // contra el catálogo, más lenta que un sí/no determinístico)
+          // y no hay forma de eliminarla del todo, pero antes solo
+          // había una barra de progreso sin texto — se siente más lento
+          // de lo que es cuando no hay ninguna señal de qué está
+          // pasando. Mismo criterio que el indicador ámbar del motor
+          // Realtime (_isProcessingPause).
+          if (_sending) ...[
+            const LinearProgressIndicator(),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: Text(
+                _trSafe('assistant.thinkingIndicator'),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey.shade600),
+              ),
+            ),
+          ],
           if (_listening || _speaking)
             Container(
               width: double.infinity,
@@ -1632,7 +2261,7 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
                         : const CircularProgressIndicator(strokeWidth: 2),
                   ),
                   const SizedBox(width: 8),
-                  Text(_listening ? 'Escuchando…' : 'Hablando…'),
+                  Text(_listening ? context.tr('assistant.listening') : context.tr('assistant.speaking')),
                   const Spacer(),
                   if (_speaking)
                     TextButton(
@@ -1640,7 +2269,7 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
                         _tts.stop();
                         _audioPlayer.stop();
                       },
-                      child: const Text('Detener'),
+                      child: Text(context.tr('assistant.stop')),
                     ),
                 ],
               ),
@@ -1654,7 +2283,7 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
                     controller: _controller,
                     scrollController: _inputScrollController,
                     decoration: InputDecoration(
-                      hintText: _listening ? 'Escuchando…' : 'Contame tus antecedentes…',
+                      hintText: _listening ? context.tr('assistant.listening') : context.tr('assistant.classicInputHint'),
                       border: const OutlineInputBorder(),
                     ),
                     onSubmitted: (_) => _send(),
@@ -1664,7 +2293,7 @@ class _HealthAssistantScreenState extends State<HealthAssistantScreen> {
                   IconButton(
                     icon: Icon(_listening ? Icons.mic : Icons.mic_none),
                     color: _listening ? Theme.of(context).colorScheme.error : null,
-                    tooltip: _listening ? 'Detener' : 'Hablar',
+                    tooltip: _listening ? context.tr('assistant.stop') : context.tr('assistant.speak'),
                     onPressed: _toggleListening,
                   ),
                 IconButton(icon: const Icon(Icons.send), onPressed: _send),

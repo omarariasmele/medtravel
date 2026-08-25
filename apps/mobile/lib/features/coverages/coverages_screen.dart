@@ -2,6 +2,33 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/api_client.dart';
+import '../../l10n/app_strings.dart';
+
+/// Mismo criterio que CatalogValue.label() (catalog_service.dart), para
+/// el JSON crudo de /params/catalogs/:code que esta pantalla consume
+/// directo como Map en vez de a través de CatalogService.
+String _catalogMapLabel(Map<String, dynamic> item, String lang) {
+  final key = switch (lang) {
+    'en' => 'labelEn',
+    'pt' => 'labelPt',
+    'fr' => 'labelFr',
+    _ => 'labelEs',
+  };
+  final value = item[key] as String?;
+  return (value != null && value.trim().isNotEmpty) ? value : item['labelEs'] as String;
+}
+
+/// Bug real reportado en vivo: "la vigencia de la póliza es fecha
+/// desde/hasta solamente, no con hora" — estos valores vienen del
+/// backend como timestamp ISO completo (ej.
+/// "2026-08-01T03:00:00.000Z") y se mostraban tal cual, crudos, en vez
+/// de solo la fecha.
+String _formatDateOnly(dynamic raw) {
+  if (raw == null) return '—';
+  final parsed = DateTime.tryParse(raw as String);
+  if (parsed == null) return raw;
+  return DateFormat('dd/MM/yyyy').format(parsed.toLocal());
+}
 
 /// GET /me/coverages junta health_coverages (obra social/prepaga — ver
 /// más abajo, independiente de cualquier empresa de asistencia al
@@ -51,22 +78,23 @@ class _CoveragesScreenState extends State<CoveragesScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('Declarar mi póliza', style: Theme.of(ctx).textTheme.titleLarge),
-              const Text(
-                'Usá esto si tenés una póliza de asistencia al viajero que todavía no aparece acá — queda pendiente hasta que la empresa la confirme.',
-                style: TextStyle(fontSize: 12, color: Colors.grey),
+              Text(context.tr('coverage.declareFormTitle'), style: Theme.of(ctx).textTheme.titleLarge),
+              Text(
+                context.tr('coverage.declareFormHint'),
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
                 initialValue: tenantId,
-                decoration: const InputDecoration(labelText: 'Empresa de asistencia'),
+                isExpanded: true,
+                decoration: InputDecoration(labelText: context.tr('coverage.assistanceCompanyLabel')),
                 items: companies
-                    .map((c) => DropdownMenuItem(value: c['id'] as String, child: Text(c['name'] as String)))
+                    .map((c) => DropdownMenuItem(value: c['id'] as String, child: Text(c['name'] as String, overflow: TextOverflow.ellipsis)))
                     .toList(),
                 onChanged: (v) => setSheetState(() => tenantId = v),
               ),
               const SizedBox(height: 12),
-              TextField(controller: policyController, decoration: const InputDecoration(labelText: 'N° de póliza')),
+              TextField(controller: policyController, decoration: InputDecoration(labelText: context.tr('coverage.policyNumberLabel'))),
               const SizedBox(height: 16),
               FilledButton(
                 onPressed: (tenantId == null || policyController.text.trim().isEmpty)
@@ -79,7 +107,7 @@ class _CoveragesScreenState extends State<CoveragesScreen> {
                         if (ctx.mounted) Navigator.of(ctx).pop();
                         await _load();
                       },
-                child: const Text('Declarar'),
+                child: Text(context.tr('coverage.declareButton')),
               ),
             ],
           ),
@@ -150,15 +178,16 @@ class _CoveragesScreenState extends State<CoveragesScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(editing == null ? 'Agregar obra social / prepaga' : 'Editar', style: Theme.of(ctx).textTheme.titleLarge),
+                  Text(editing == null ? context.tr('coverage.addFormTitle') : context.tr('coverage.editFormTitle'), style: Theme.of(ctx).textTheme.titleLarge),
                   const SizedBox(height: 4),
                   if (error != null) Text(error!, style: const TextStyle(color: Colors.red)),
                   const SizedBox(height: 8),
                   DropdownButtonFormField<String>(
                     initialValue: providerTypeId,
-                    decoration: const InputDecoration(labelText: 'Tipo'),
+                    isExpanded: true,
+                    decoration: InputDecoration(labelText: context.tr('coverage.typeLabel')),
                     items: providerTypes
-                        .map((t) => DropdownMenuItem(value: t['id'] as String, child: Text(t['labelEs'] as String)))
+                        .map((t) => DropdownMenuItem(value: t['id'] as String, child: Text(_catalogMapLabel(t as Map<String, dynamic>, context.lang), overflow: TextOverflow.ellipsis)))
                         .toList(),
                     onChanged: (v) => setSheetState(() {
                       providerTypeId = v;
@@ -171,10 +200,11 @@ class _CoveragesScreenState extends State<CoveragesScreen> {
                   if (!addingNewProvider) ...[
                     DropdownButtonFormField<String>(
                       initialValue: providerId,
-                      decoration: const InputDecoration(labelText: 'Prestador'),
+                      isExpanded: true,
+                      decoration: InputDecoration(labelText: context.tr('coverage.providerLabel')),
                       items: [
-                        ...providers.map((p) => DropdownMenuItem(value: p['id'] as String, child: Text(p['name'] as String))),
-                        const DropdownMenuItem(value: '__new__', child: Text('No está en la lista — cargar nuevo')),
+                        ...providers.map((p) => DropdownMenuItem(value: p['id'] as String, child: Text(p['name'] as String, overflow: TextOverflow.ellipsis))),
+                        DropdownMenuItem(value: '__new__', child: Text(context.tr('coverage.notInListLoadNew'), overflow: TextOverflow.ellipsis)),
                       ],
                       onChanged: (v) => setSheetState(() {
                         if (v == '__new__') {
@@ -188,10 +218,10 @@ class _CoveragesScreenState extends State<CoveragesScreen> {
                       }),
                     ),
                   ] else ...[
-                    TextField(controller: newProviderController, decoration: const InputDecoration(labelText: 'Nombre del prestador')),
+                    TextField(controller: newProviderController, decoration: InputDecoration(labelText: context.tr('coverage.providerNameLabel'))),
                     TextButton(
                       onPressed: () => setSheetState(() => addingNewProvider = false),
-                      child: const Text('Elegir de la lista en vez de cargar uno nuevo'),
+                      child: Text(context.tr('coverage.chooseFromListInstead')),
                     ),
                   ],
                   const SizedBox(height: 12),
@@ -199,10 +229,11 @@ class _CoveragesScreenState extends State<CoveragesScreen> {
                     if (!addingNewPlan) ...[
                       DropdownButtonFormField<String>(
                         initialValue: planId,
-                        decoration: const InputDecoration(labelText: 'Plan'),
+                        isExpanded: true,
+                        decoration: InputDecoration(labelText: context.tr('coverage.planLabel')),
                         items: [
-                          ...plans.map((p) => DropdownMenuItem(value: p['id'] as String, child: Text(p['name'] as String))),
-                          const DropdownMenuItem(value: '__new__', child: Text('No está en la lista — cargar nuevo')),
+                          ...plans.map((p) => DropdownMenuItem(value: p['id'] as String, child: Text(p['name'] as String, overflow: TextOverflow.ellipsis))),
+                          DropdownMenuItem(value: '__new__', child: Text(context.tr('coverage.notInListLoadNew'), overflow: TextOverflow.ellipsis)),
                         ],
                         onChanged: (v) => setSheetState(() {
                           if (v == '__new__') {
@@ -214,15 +245,15 @@ class _CoveragesScreenState extends State<CoveragesScreen> {
                         }),
                       ),
                     ] else ...[
-                      TextField(controller: newPlanController, decoration: const InputDecoration(labelText: 'Nombre del plan')),
+                      TextField(controller: newPlanController, decoration: InputDecoration(labelText: context.tr('coverage.planNameLabel'))),
                       TextButton(
                         onPressed: () => setSheetState(() => addingNewPlan = false),
-                        child: const Text('Elegir de la lista en vez de cargar uno nuevo'),
+                        child: Text(context.tr('coverage.chooseFromListInstead')),
                       ),
                     ],
                     const SizedBox(height: 12),
                   ],
-                  TextField(controller: memberNumberController, decoration: const InputDecoration(labelText: 'N° de afiliado')),
+                  TextField(controller: memberNumberController, decoration: InputDecoration(labelText: context.tr('coverage.memberNumberLabel'))),
                   const SizedBox(height: 12),
                   Row(
                     children: [
@@ -237,7 +268,7 @@ class _CoveragesScreenState extends State<CoveragesScreen> {
                             );
                             if (picked != null) setSheetState(() => validFrom = picked);
                           },
-                          child: Text('Desde: ${DateFormat('dd/MM/yyyy').format(validFrom)}'),
+                          child: Text(context.tr('coverage.validFrom', params: {'date': DateFormat('dd/MM/yyyy').format(validFrom)})),
                         ),
                       ),
                       Expanded(
@@ -251,7 +282,7 @@ class _CoveragesScreenState extends State<CoveragesScreen> {
                             );
                             if (picked != null) setSheetState(() => validUntil = picked);
                           },
-                          child: Text(validUntil == null ? 'Hasta: vigente' : 'Hasta: ${DateFormat('dd/MM/yyyy').format(validUntil!)}'),
+                          child: Text(validUntil == null ? context.tr('coverage.validUntilActive') : context.tr('coverage.validUntil', params: {'date': DateFormat('dd/MM/yyyy').format(validUntil!)})),
                         ),
                       ),
                     ],
@@ -259,19 +290,20 @@ class _CoveragesScreenState extends State<CoveragesScreen> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: notesController,
-                    decoration: const InputDecoration(labelText: 'Notas'),
+                    decoration: InputDecoration(labelText: context.tr('coverage.notesLabel')),
                     maxLines: 2,
                   ),
                   CheckboxListTile(
                     value: isPrimary,
                     onChanged: (v) => setSheetState(() => isPrimary = v ?? false),
-                    title: const Text('Es mi cobertura principal'),
+                    title: Text(context.tr('coverage.isPrimaryLabel')),
                     contentPadding: EdgeInsets.zero,
                     controlAffinity: ListTileControlAffinity.leading,
                   ),
                   const SizedBox(height: 8),
                   FilledButton(
                     onPressed: () async {
+                      final saveErrorFallback = context.tr('coverage.saveFormError');
                       try {
                         String? finalProviderId = providerId;
                         if (addingNewProvider) {
@@ -313,10 +345,10 @@ class _CoveragesScreenState extends State<CoveragesScreen> {
                         if (ctx.mounted) Navigator.of(ctx).pop();
                         await _load();
                       } catch (_) {
-                        setSheetState(() => error = 'No se pudo guardar — revisá los datos.');
+                        setSheetState(() => error = saveErrorFallback);
                       }
                     },
-                    child: Text(editing == null ? 'Guardar' : 'Guardar cambios'),
+                    child: Text(editing == null ? context.tr('coverage.saveButton') : context.tr('coverage.saveChangesButton')),
                   ),
                 ],
               ),
@@ -330,7 +362,7 @@ class _CoveragesScreenState extends State<CoveragesScreen> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return Scaffold(appBar: AppBar(title: const Text('Mi cobertura')), body: const Center(child: CircularProgressIndicator()));
+      return Scaffold(appBar: AppBar(title: Text(context.tr('coverage.title'))), body: const Center(child: CircularProgressIndicator()));
     }
 
     final enrollments = _data!['travelAssistanceEnrollments'] as List;
@@ -338,19 +370,19 @@ class _CoveragesScreenState extends State<CoveragesScreen> {
     final healthCoverages = _data!['healthCoverages'] as List;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Mi cobertura')),
+      appBar: AppBar(title: Text(context.tr('coverage.title'))),
       body: RefreshIndicator(
         onRefresh: _load,
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            Text('Obra social / Prepaga', style: Theme.of(context).textTheme.titleMedium),
+            Text(context.tr('coverage.healthCoverageSectionTitle'), style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             if (healthCoverages.isEmpty)
-              const Card(
+              Card(
                 child: Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text('Todavía no cargaste tu obra social o prepaga — independiente de tu asistencia al viajero.'),
+                  padding: const EdgeInsets.all(16),
+                  child: Text(context.tr('coverage.noHealthCoverage')),
                 ),
               )
             else
@@ -365,18 +397,26 @@ class _CoveragesScreenState extends State<CoveragesScreen> {
                         Flexible(child: Text(hc['provider_label'] as String? ?? '—')),
                         if (pending) ...[
                           const SizedBox(width: 6),
-                          const Chip(label: Text('En revisión', style: TextStyle(fontSize: 11)), visualDensity: VisualDensity.compact),
+                          Chip(label: Text(context.tr('coverage.pendingReview'), style: const TextStyle(fontSize: 11)), visualDensity: VisualDensity.compact),
                         ],
                         if (hc['is_primary'] == true) ...[
                           const SizedBox(width: 6),
-                          const Chip(label: Text('Principal', style: TextStyle(fontSize: 11)), visualDensity: VisualDensity.compact),
+                          Chip(label: Text(context.tr('coverage.primary'), style: const TextStyle(fontSize: 11)), visualDensity: VisualDensity.compact),
                         ],
                       ],
                     ),
-                    subtitle: Text(
-                      '${hc['plan_name'] ?? ''}${hc['member_number'] != null ? ' · N° ${hc['member_number']}' : ''}\n'
-                      'Desde ${hc['valid_from'] ?? '—'}'
-                      '${hc['valid_until'] != null ? ' hasta ${hc['valid_until']}' : ' — vigente'}',
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('${hc['plan_name'] ?? ''}${hc['member_number'] != null ? context.tr('coverage.memberNumberSuffix', params: {'value': '${hc['member_number']}'}) : ''}'),
+                        Text(
+                          '${context.tr('coverage.validFromInline', params: {'date': _formatDateOnly(hc['valid_from'])})}'
+                          '${hc['valid_until'] != null ? context.tr('coverage.validUntilInline', params: {'date': _formatDateOnly(hc['valid_until'])}) : context.tr('coverage.validUntilActiveInline')}',
+                          style: const TextStyle(fontSize: 12),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
                     ),
                     isThreeLine: true,
                     trailing: IconButton(
@@ -390,18 +430,16 @@ class _CoveragesScreenState extends State<CoveragesScreen> {
             OutlinedButton.icon(
               onPressed: () => _openHealthCoverageForm(),
               icon: const Icon(Icons.add),
-              label: const Text('Agregar obra social / prepaga'),
+              label: Text(context.tr('coverage.addHealthCoverage')),
             ),
             const SizedBox(height: 24),
-            Text('Asistencia al viajero', style: Theme.of(context).textTheme.titleMedium),
+            Text(context.tr('coverage.travelAssistanceSectionTitle'), style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             if (enrollments.isEmpty)
-              const Card(
+              Card(
                 child: Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text(
-                    'Todavía no tenés una cobertura confirmada. Si ya cargaste tu documento en Perfil y la empresa ya subió tu póliza, va a aparecer acá automáticamente.',
-                  ),
+                  padding: const EdgeInsets.all(16),
+                  child: Text(context.tr('coverage.noEnrollment')),
                 ),
               )
             else
@@ -411,21 +449,29 @@ class _CoveragesScreenState extends State<CoveragesScreen> {
                 return Card(
                   child: ListTile(
                     leading: const Icon(Icons.verified_user),
-                    title: Text(enr['plan_name'] as String? ?? 'Plan de asistencia'),
-                    subtitle: Text(
-                      '${enr['tenant_name'] ?? '—'} · Póliza ${enr['policy_number']}\n'
-                      'Vigencia: ${enr['valid_from']} — ${enr['valid_until']}',
+                    title: Text(enr['plan_name'] as String? ?? context.tr('coverage.defaultPlanName')),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('${enr['tenant_name'] ?? '—'} · ${context.tr('coverage.policyWithNumber', params: {'number': '${enr['policy_number']}'})}'),
+                        Text(
+                          context.tr('coverage.validityRange', params: {'from': _formatDateOnly(enr['valid_from']), 'until': _formatDateOnly(enr['valid_until'])}),
+                          style: const TextStyle(fontSize: 12),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
                     ),
                     isThreeLine: true,
                     trailing: authority == 'MEMBER_DECLARED'
-                        ? const Chip(label: Text('Sin validar'), backgroundColor: Colors.amber)
+                        ? Chip(label: Text(context.tr('coverage.unvalidated')), backgroundColor: Colors.amber)
                         : const Icon(Icons.check_circle, color: Colors.green),
                   ),
                 );
               }),
             const SizedBox(height: 20),
             if (declared.isNotEmpty) ...[
-              Text('Pendientes de aprobación', style: Theme.of(context).textTheme.titleMedium),
+              Text(context.tr('coverage.pendingApprovalSectionTitle'), style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
               ...declared.map((d) {
                 final dec = d as Map<String, dynamic>;
@@ -433,8 +479,8 @@ class _CoveragesScreenState extends State<CoveragesScreen> {
                 return Card(
                   child: ListTile(
                     leading: const Icon(Icons.hourglass_top),
-                    title: Text('Póliza ${dec['policy_number']}'),
-                    subtitle: Text('${dec['tenant_name'] ?? '—'} · Esperando confirmación de la empresa'),
+                    title: Text(context.tr('coverage.policyWithNumber', params: {'number': '${dec['policy_number']}'})),
+                    subtitle: Text('${dec['tenant_name'] ?? '—'} · ${context.tr('coverage.waitingCompanyConfirmation')}'),
                   ),
                 );
               }),
@@ -443,7 +489,7 @@ class _CoveragesScreenState extends State<CoveragesScreen> {
             OutlinedButton.icon(
               onPressed: _openDeclareForm,
               icon: const Icon(Icons.add),
-              label: const Text('Declarar una póliza que no aparece'),
+              label: Text(context.tr('coverage.declarePolicy')),
             ),
           ],
         ),

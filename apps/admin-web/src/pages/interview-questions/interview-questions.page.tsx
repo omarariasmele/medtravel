@@ -30,7 +30,7 @@ import { apiClient } from '../../lib/api-client';
 import { usePageTitle } from '../../lib/page-title';
 import { PaginationFooter, usePagination } from '../../lib/pagination';
 
-type ProposalType = 'MEDICATION' | 'ALLERGY' | 'CONDITION' | 'SURGERY' | 'IMPLANT_DEVICE';
+type ProposalType = 'MEDICATION' | 'ALLERGY' | 'CONDITION' | 'SURGERY' | 'IMPLANT_DEVICE' | 'TREATMENT';
 
 const PROPOSAL_TYPE_LABEL: Record<ProposalType, string> = {
   MEDICATION: 'Medicamento',
@@ -38,6 +38,7 @@ const PROPOSAL_TYPE_LABEL: Record<ProposalType, string> = {
   CONDITION: 'Enfermedad / condición',
   SURGERY: 'Cirugía',
   IMPLANT_DEVICE: 'Implante / dispositivo',
+  TREATMENT: 'Tratamiento',
 };
 
 interface InterviewQuestion {

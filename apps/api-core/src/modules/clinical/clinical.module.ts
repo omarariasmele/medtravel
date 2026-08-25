@@ -1,12 +1,15 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { AIModule } from '@modules/ai/ai.module';
+
 import { AllergyEntity } from './entities/allergy.entity';
 import { ConditionEntity } from './entities/condition.entity';
 import { MedicationEntity } from './entities/medication.entity';
 import { SurgeryEntity } from './entities/surgery.entity';
 import { LabResultEntity } from './entities/lab-result.entity';
 import { ImplantDeviceEntity } from './entities/implant-device.entity';
+import { TreatmentEntity } from './entities/treatment.entity';
 import { VitalsHistoryEntity } from './entities/vitals-history.entity';
 import { VaccineEntity } from './entities/vaccine.entity';
 import { ClinicalDocumentEntity } from './entities/clinical-document.entity';
@@ -40,6 +43,7 @@ import { HealthRecordResetController } from './health-record-reset.controller';
       SurgeryEntity,
       LabResultEntity,
       ImplantDeviceEntity,
+      TreatmentEntity,
       VitalsHistoryEntity,
       VaccineEntity,
       ClinicalDocumentEntity,
@@ -57,6 +61,7 @@ import { HealthRecordResetController } from './health-record-reset.controller';
       RecordReviewTaskEntity,
       SubmissionVisibilityPolicyEntity,
     ]),
+    AIModule,
   ],
   controllers: [
     ProfessionalsRegistrationController,

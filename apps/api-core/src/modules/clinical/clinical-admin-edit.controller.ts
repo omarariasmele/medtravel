@@ -14,7 +14,7 @@ import { CLINICAL_REGISTRY } from './clinical.registry';
  * operador) apuntando al MISMO registro/tablas: mismo dato, dos
  * caminos de acceso con gates distintos.
  *
- * Solo se exponen los 5 antecedentes editables desde la ficha médica
+ * Solo se exponen los 6 antecedentes editables desde la ficha médica
  * del panel (no todo CLINICAL_REGISTRY: documentos, profesionales,
  * encounters, etc. tienen sus propias pantallas y no son parte de
  * este pedido).
@@ -25,6 +25,7 @@ const CLINICAL_ADMIN_EDIT_REGISTRY = {
   medications: CLINICAL_REGISTRY.medications,
   surgeries: CLINICAL_REGISTRY.surgeries,
   'implants-devices': CLINICAL_REGISTRY['implants-devices'],
+  treatments: CLINICAL_REGISTRY.treatments,
 };
 
 export const ClinicalAdminEditController = createResourceController(

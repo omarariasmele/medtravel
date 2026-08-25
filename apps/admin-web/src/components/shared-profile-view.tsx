@@ -40,6 +40,7 @@ export interface SharedProfileData {
   }>;
   surgeries: Array<{ procedureName: string; performedAt: string; indication: string | null }>;
   implants: Array<{ deviceName: string; implantedAt: string | null; notes: string | null }>;
+  treatments: Array<{ treatmentName: string; statusCode: string | null; startedAt: string | null; notes: string | null }>;
   vitals: { weightKg: string | null; heightCm: string | null; bmi: string | null; bloodTypeId: string | null } | null;
   emergencyContacts: Array<{
     firstName: string;
@@ -105,6 +106,9 @@ const UI_STRINGS: Record<SupportedLanguage, Record<string, string>> = {
     travelRestrictions: 'Restricciones de viaje',
     implantsTitle: 'Implantes y Dispositivos',
     noImplants: 'Sin implantes ni dispositivos registrados.',
+    treatmentsTitle: 'Tratamientos',
+    noTreatments: 'Sin tratamientos registrados.',
+    treatmentSince: 'desde',
     medicationsTitle: 'Medicamentos actuales',
     noMedications: 'Sin medicamentos registrados.',
     surgeriesTitle: 'Cirugías',
@@ -140,6 +144,9 @@ const UI_STRINGS: Record<SupportedLanguage, Record<string, string>> = {
     travelRestrictions: 'Travel restrictions',
     implantsTitle: 'Implants and Devices',
     noImplants: 'No implants or devices on record.',
+    treatmentsTitle: 'Treatments',
+    noTreatments: 'No treatments on record.',
+    treatmentSince: 'since',
     medicationsTitle: 'Current medications',
     noMedications: 'No medications on record.',
     surgeriesTitle: 'Surgeries',
@@ -175,6 +182,9 @@ const UI_STRINGS: Record<SupportedLanguage, Record<string, string>> = {
     travelRestrictions: 'Restrições de viagem',
     implantsTitle: 'Implantes e Dispositivos',
     noImplants: 'Sem implantes ou dispositivos registrados.',
+    treatmentsTitle: 'Tratamentos',
+    noTreatments: 'Sem tratamentos registrados.',
+    treatmentSince: 'desde',
     medicationsTitle: 'Medicamentos atuais',
     noMedications: 'Sem medicamentos registrados.',
     surgeriesTitle: 'Cirurgias',
@@ -210,6 +220,9 @@ const UI_STRINGS: Record<SupportedLanguage, Record<string, string>> = {
     travelRestrictions: 'Restrictions de voyage',
     implantsTitle: 'Implants et Dispositifs',
     noImplants: 'Aucun implant ni dispositif enregistré.',
+    treatmentsTitle: 'Traitements',
+    noTreatments: 'Aucun traitement enregistré.',
+    treatmentSince: 'depuis',
     medicationsTitle: 'Médicaments actuels',
     noMedications: 'Aucun médicament enregistré.',
     surgeriesTitle: 'Chirurgies',
@@ -254,7 +267,7 @@ export function SharedProfileView({
   const t = (key: string) => UI_STRINGS[lang][key] ?? UI_STRINGS.es[key];
   const dateLocale = DATE_LOCALE[lang];
 
-  const { person, membership, allergies, conditions, medications, surgeries, implants, vitals, emergencyContacts } = data;
+  const { person, membership, allergies, conditions, medications, surgeries, implants, treatments, vitals, emergencyContacts } = data;
   const genderCatalog = useCatalog('GENDER');
   const bloodTypeCatalog = useCatalog('BLOOD_TYPE');
   const severityCatalog = useCatalog('REACTION_SEVERITY');
@@ -372,6 +385,31 @@ export function SharedProfileView({
                 </Typography>
                 {d.notes && (
                   <Typography variant="caption" color="text.secondary">{d.notes}</Typography>
+                )}
+              </Box>
+            ))
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Pedido explícito del usuario: diálisis/quimioterapia/etc. es
+          un TRATAMIENTO, no una enfermedad — dato crítico para un
+          médico de emergencia, tiene su propia sección igual que
+          Implantes. */}
+      <Card sx={{ mb: 2 }}>
+        <CardContent>
+          <Typography variant="subtitle1" gutterBottom>{t('treatmentsTitle')}</Typography>
+          {treatments.length === 0 ? (
+            <Typography variant="body2" color="text.secondary">{t('noTreatments')}</Typography>
+          ) : (
+            treatments.map((tr, i) => (
+              <Box key={i} sx={{ mb: 1 }}>
+                <Typography variant="body2">
+                  <strong>{tr.treatmentName}</strong>
+                  {tr.startedAt ? ` — ${t('treatmentSince')} ${new Date(tr.startedAt).toLocaleDateString(dateLocale, { timeZone: 'UTC' })}` : ''}
+                </Typography>
+                {tr.notes && (
+                  <Typography variant="caption" color="text.secondary">{tr.notes}</Typography>
                 )}
               </Box>
             ))

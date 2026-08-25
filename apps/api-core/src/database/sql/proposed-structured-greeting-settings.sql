@@ -1,6 +1,6 @@
 -- ============================================================
 -- Pedido explícito del usuario: poder editar el saludo inicial del
--- chat Estructurado (beta) desde admin-web, sin tocar/recompilar la
+-- chat Estructurado desde admin-web, sin tocar/recompilar la
 -- app — mismo mecanismo ya usado para voz/pausa del asistente
 -- (params.app_settings, ver AppSettingsPage). Se separan DOS
 -- variantes (primera vez / ya tiene datos) porque structuredIntakeChat
@@ -19,7 +19,7 @@ VALUES
     E'Estos datos son total y absolutamente confidenciales y solo podrán ser utilizados por usted en caso ' ||
     E'de requerir atención médica durante su viaje, y con el objetivo de facilitar el acceso a una correcta atención.\n\n' ||
     E'Comenzaremos a registrar sus datos de salud.',
-    'Saludo inicial del chat Estructurado (beta) cuando el viajero NO tiene datos cargados todavía. Usa {firstName}. Los "\n\n" marcan pausas al leerlo en voz alta.'
+    'Saludo inicial del chat Estructurado cuando el viajero NO tiene datos cargados todavía. Usa {firstName}. Los "\n\n" marcan pausas al leerlo en voz alta.'
   ),
   (
     'assistant.structured_greeting_update',
@@ -27,6 +27,6 @@ VALUES
     E'Ya tenés datos cargados — la última actualización fue el {lastUpdated}. Esto va a funcionar como una ' ||
     E'actualización: voy a saltear lo que ya está confirmado y solo preguntarte por lo que falta o cambió.\n\n' ||
     E'Comenzaremos a repasar sus datos de salud.',
-    'Saludo inicial del chat Estructurado (beta) cuando el viajero YA tiene datos cargados. Usa {firstName} y {lastUpdated}. Los "\n\n" marcan pausas al leerlo en voz alta.'
+    'Saludo inicial del chat Estructurado cuando el viajero YA tiene datos cargados. Usa {firstName} y {lastUpdated}. Los "\n\n" marcan pausas al leerlo en voz alta.'
   )
 ON CONFLICT (setting_key) DO NOTHING;

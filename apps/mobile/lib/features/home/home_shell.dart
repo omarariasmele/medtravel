@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../l10n/app_strings.dart';
 import '../health/health_records_screen.dart';
 import '../coverages/coverages_screen.dart';
 import '../trips/trips_screen.dart';
@@ -36,12 +37,12 @@ class _HomeShellState extends State<HomeShell> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: 'Inicio'),
-          NavigationDestination(icon: Icon(Icons.medical_information_outlined), selectedIcon: Icon(Icons.medical_information), label: 'Salud'),
-          NavigationDestination(icon: Icon(Icons.shield_outlined), selectedIcon: Icon(Icons.shield), label: 'Cobertura'),
-          NavigationDestination(icon: Icon(Icons.flight_outlined), selectedIcon: Icon(Icons.flight), label: 'Viajes'),
-          NavigationDestination(icon: Icon(Icons.emergency_outlined), selectedIcon: Icon(Icons.emergency), label: 'Emergencia'),
+        destinations: [
+          NavigationDestination(icon: const Icon(Icons.home_outlined), selectedIcon: const Icon(Icons.home), label: context.tr('nav.home')),
+          NavigationDestination(icon: const Icon(Icons.medical_information_outlined), selectedIcon: const Icon(Icons.medical_information), label: context.tr('nav.health')),
+          NavigationDestination(icon: const Icon(Icons.shield_outlined), selectedIcon: const Icon(Icons.shield), label: context.tr('nav.coverage')),
+          NavigationDestination(icon: const Icon(Icons.flight_outlined), selectedIcon: const Icon(Icons.flight), label: context.tr('nav.trips')),
+          NavigationDestination(icon: const Icon(Icons.emergency_outlined), selectedIcon: const Icon(Icons.emergency), label: context.tr('nav.emergency')),
         ],
       ),
     );
