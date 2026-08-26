@@ -1891,6 +1891,12 @@ class AppStrings {
       'pt': 'Salvar e sair',
       'fr': 'Enregistrer et quitter',
     },
+    'realtimeAssistant.typeAnswerHint': {
+      'es': 'O escribí tu respuesta…',
+      'en': 'Or type your answer…',
+      'pt': 'Ou digite sua resposta…',
+      'fr': 'Ou tapez votre réponse…',
+    },
     'realtimeAssistant.genericError': {
       'es': 'Ocurrió un error.',
       'en': 'An error occurred.',

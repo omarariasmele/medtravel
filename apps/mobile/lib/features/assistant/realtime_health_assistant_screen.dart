@@ -94,6 +94,7 @@ class _RealtimeHealthAssistantScreenState extends State<RealtimeHealthAssistantS
   late final RealtimeVoiceEngine _engine;
   final List<_RealtimeBubble> _bubbles = [];
   final ScrollController _scrollController = ScrollController();
+  final TextEditingController _textController = TextEditingController();
   _ConnectionState _state = _ConnectionState.connecting;
   String? _errorMessage;
   /// Bug real reportado en vivo: "tardó mucho para corregirla... no me
@@ -224,6 +225,7 @@ class _RealtimeHealthAssistantScreenState extends State<RealtimeHealthAssistantS
   void dispose() {
     _engine.disconnect();
     _scrollController.dispose();
+    _textController.dispose();
     super.dispose();
   }
 
@@ -347,6 +349,13 @@ class _RealtimeHealthAssistantScreenState extends State<RealtimeHealthAssistantS
     _engine.sendTextAnswer(text);
   }
 
+  void _sendTypedAnswer() {
+    final text = _textController.text.trim();
+    if (text.isEmpty) return;
+    _textController.clear();
+    _sendQuickAnswer(text);
+  }
+
   /// El botón "Reintentar" del banner de error tiene que hacer cosas
   /// distintas según qué falló: si falló GUARDAR o DESCARTAR, la
   /// conexión de voz sigue viva — hay que reintentar esa acción
@@ -460,7 +469,7 @@ class _RealtimeHealthAssistantScreenState extends State<RealtimeHealthAssistantS
             // estos botones cubren la gran mayoría de los turnos sin
             // reemplazar la escucha (sigue activa en paralelo, se
             // puede seguir contestando hablando en cualquier momento).
-            if (_state == _ConnectionState.connected && widget.structuredModel)
+            if (_state == _ConnectionState.connected && widget.structuredModel) ...[
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                 child: Row(
@@ -478,9 +487,49 @@ class _RealtimeHealthAssistantScreenState extends State<RealtimeHealthAssistantS
                         child: Text(context.tr('assistant.no')),
                       ),
                     ),
+                    const SizedBox(width: 12),
+                    // Pedido explícito del usuario: "se podrá agregar el
+                    // botón de salir y guardar, como estaba en el otro
+                    // modelo" — mismo botón que ya existe en el ícono de
+                    // la AppBar, repetido acá abajo para que quede a mano
+                    // en el mismo lugar donde está contestando.
+                    OutlinedButton.icon(
+                      onPressed: _handleCloseInterview,
+                      icon: const Icon(Icons.save_outlined, size: 18),
+                      label: Text(context.tr('assistant.saveAndExitButton')),
+                    ),
                   ],
                 ),
               ),
+              // Pedido explícito del usuario: "permitir escribir en el
+              // caso de que el usuario quiera escribir en vez de
+              // hablar" — manda el texto por el mismo canal que
+              // sendTextAnswer (los botones Sí/No), la escucha por voz
+              // sigue activa en paralelo, no es una cosa o la otra.
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _textController,
+                        decoration: InputDecoration(
+                          hintText: context.tr('realtimeAssistant.typeAnswerHint'),
+                          border: const OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => _sendTypedAnswer(),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.send),
+                      onPressed: _sendTypedAnswer,
+                    ),
+                  ],
+                ),
+              ),
+            ],
             if (_state == _ConnectionState.connected)
               Padding(
                 padding: const EdgeInsets.all(16),
