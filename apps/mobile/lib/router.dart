@@ -10,7 +10,8 @@ import 'features/profile/profile_screen.dart';
 import 'features/health/health_records_screen.dart';
 import 'features/share/share_screen.dart';
 import 'features/assistant/assistant_screen.dart';
-import 'features/assistant/health_assistant_screen.dart';
+// ignore: unused_import
+import 'features/assistant/health_assistant_screen.dart'; // motor de texto viejo — plan de contingencia, ver el comentario en /health-assistant más abajo
 import 'features/assistant/realtime_health_assistant_screen.dart';
 import 'features/emergency/case_chat_screen.dart';
 import 'features/emergency/case_detail_screen.dart';
@@ -55,16 +56,18 @@ GoRouter buildRouter(AuthState authState) {
         builder: (context, state) {
           final extra = state.extra as Map<String, dynamic>?;
           final structuredModel = extra?['structuredModel'] as bool? ?? false;
-          // Modo Clásico (structuredModel == false) pasó a usar el
-          // motor nuevo de voz en tiempo real — ver
-          // realtime_health_assistant_screen.dart. Estructurado sigue
-          // usando health_assistant_screen.dart sin ningún cambio, que
-          // además queda como plan de contingencia: si Realtime no
-          // llega sólido a la demo, alcanza con volver esta rama a
-          // `HealthAssistantScreen(structuredModel: false)` (mismo
-          // motor de texto de siempre, sin tocar nada más).
-          if (!structuredModel) return const RealtimeHealthAssistantScreen();
-          return const HealthAssistantScreen(structuredModel: true);
+          // Los dos modos pasaron a usar el motor de voz en tiempo real
+          // (ver realtime_health_assistant_screen.dart) — Estructurado
+          // pide un guion fijo (RealtimeVoiceEngine.structuredModel,
+          // ver AIService.createStructuredRealtimeSession) en vez de la
+          // charla libre de Clásico, pero es la MISMA pantalla y el
+          // MISMO motor. health_assistant_screen.dart (el motor de
+          // texto viejo) queda sin tocar y sigue siendo el plan de
+          // contingencia completo: si Realtime no llega sólido a la
+          // demo, alcanza con volver este `return` a
+          // `HealthAssistantScreen(structuredModel: true)` para
+          // Estructurado, sin tocar nada más.
+          return RealtimeHealthAssistantScreen(structuredModel: structuredModel);
         },
       ),
       GoRoute(

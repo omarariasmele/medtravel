@@ -560,7 +560,32 @@ export interface AIProvider {
     personContext: string | undefined,
     language: SupportedLang | undefined,
     voiceConfig: AIRealtimeVoiceConfig,
+    structuredScript?: RealtimeStructuredScript,
   ): Promise<AIRealtimeSessionResult>;
+}
+
+/**
+ * Pedido explícito del usuario: "por qué no hacemos que el Estructurado
+ * pase a usar el mismo motor de voz continua que el Clásico" — en vez
+ * de un endpoint/prompt separado desde cero, se reusa TODA la
+ * infraestructura Realtime ya probada de Clásico (conexión WebRTC,
+ * tools, guardado de proposals) y solo se le agrega esto: cuando viene
+ * presente, buildRealtimeInstructions arma un guion que obliga al
+ * modelo a preguntar ESTA lista, una por vez, en este orden — en vez
+ * de la charla libre de Clásico. Si no viene (createRealtimeSession de
+ * Clásico nunca lo manda), el comportamiento es EXACTAMENTE el mismo
+ * de siempre — cero riesgo para Clásico.
+ */
+export interface RealtimeStructuredScript {
+  /** Si falta peso/altura/grupo sanguíneo, se pregunta ANTES que cualquier ítem de la lista (mismo criterio que el motor de texto, ver getMissingVitalsQuestion). */
+  missingVitalsQuestion?: string;
+  questions: Array<{
+    /** Texto de la pregunta ya en el idioma del viajero. */
+    text: string;
+    proposalType: string;
+    /** true si, ante una respuesta afirmativa, corresponde pedir fecha aproximada (y "cuál" para CONDITION/SURGERY/TREATMENT/IMPLANT_DEVICE). */
+    asksDate: boolean;
+  }>;
 }
 
 /**

@@ -131,6 +131,7 @@ class RealtimeProposalEvent {
 /// servidor.
 class RealtimeVoiceEngine {
   RealtimeVoiceEngine({
+    this.structuredModel = false,
     this.onAssistantTranscriptDelta,
     this.onAssistantTurnDone,
     this.onUserTranscript,
@@ -145,6 +146,15 @@ class RealtimeVoiceEngine {
     this.onProcessingPauseStart,
     this.onProcessingPauseEnd,
   });
+
+  /// Pedido explícito del usuario: "por qué no hacemos que el
+  /// Estructurado pase a usar el mismo motor de voz continua que el
+  /// Clásico" — mismo motor, misma conexión WebRTC, la única
+  /// diferencia es de qué endpoint se pide la sesión efímera (ver
+  /// connect() más abajo): Estructurado arma un guion fijo con las
+  /// preguntas de ai.interview_questions en vez de la charla libre de
+  /// Clásico (ver AIService.createStructuredRealtimeSession).
+  final bool structuredModel;
 
   /// Texto de la IA a medida que lo va diciendo (para mostrar el
   /// burbujeo en pantalla) — no dispara guardado, solo UI.
@@ -249,8 +259,11 @@ class RealtimeVoiceEngine {
     _pendingResponseCreate = false;
     try {
       debugPrint('[REALTIME] connect: pidiendo sesión efímera...');
+      final sessionEndpoint = structuredModel
+          ? '/me/health-assistant/realtime-session-structured'
+          : '/me/health-assistant/realtime-session';
       final sessionResponse = await withRealtimeNetworkRetry(
-        () => ApiClient.instance.dio.post('/me/health-assistant/realtime-session'),
+        () => ApiClient.instance.dio.post(sessionEndpoint),
       );
       _conversationId = sessionResponse.data['conversationId'] as String;
       final clientSecret = sessionResponse.data['clientSecret'] as String;

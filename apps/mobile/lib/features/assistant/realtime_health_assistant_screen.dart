@@ -73,7 +73,13 @@ String _describeProposal(RealtimeProposalEvent proposal, String lang) {
 /// conexión WebRTC directo con OpenAI, que detecta sola cuándo la
 /// persona terminó de hablar (server_vad).
 class RealtimeHealthAssistantScreen extends StatefulWidget {
-  const RealtimeHealthAssistantScreen({super.key});
+  const RealtimeHealthAssistantScreen({super.key, this.structuredModel = false});
+
+  /// Pedido explícito del usuario: "por qué no hacemos que el
+  /// Estructurado pase a usar el mismo motor de voz continua que el
+  /// Clásico" — misma pantalla, mismo motor, solo cambia qué guion
+  /// pide el backend (ver RealtimeVoiceEngine.structuredModel).
+  final bool structuredModel;
 
   @override
   State<RealtimeHealthAssistantScreen> createState() => _RealtimeHealthAssistantScreenState();
@@ -131,6 +137,7 @@ class _RealtimeHealthAssistantScreenState extends State<RealtimeHealthAssistantS
   void initState() {
     super.initState();
     _engine = RealtimeVoiceEngine(
+      structuredModel: widget.structuredModel,
       onConnected: () {
         if (!mounted) return;
         setState(() => _state = _ConnectionState.connected);
@@ -356,7 +363,7 @@ class _RealtimeHealthAssistantScreenState extends State<RealtimeHealthAssistantS
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(context.tr('assistant.chatTitleClassic')),
+        title: Text(widget.structuredModel ? context.tr('assistant.chatTitleStructured') : context.tr('assistant.chatTitleClassic')),
         actions: [
           if (_state == _ConnectionState.connected)
             IconButton(

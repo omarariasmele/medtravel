@@ -531,6 +531,81 @@ export class AIService {
   }
 
   /**
+   * Pedido explícito del usuario: "por qué no hacemos que el
+   * Estructurado pase a usar el mismo motor de voz continua que el
+   * Clásico" — mismo mecanismo EXACTO de createRealtimeSession de
+   * arriba (misma conexión WebRTC, mismas tools, mismo pipeline de
+   * guardado vía saveRealtimeProposal/confirm-all), la única
+   * diferencia es que acá se arma un guion FIJO (ver
+   * RealtimeStructuredScript) con las preguntas de
+   * ai.interview_questions que todavía falten, en el mismo orden que
+   * ya usa structuredIntakeChat (ver SKIP_IF_ALREADY_HAS_SQL) — en vez
+   * de la charla libre de Clásico. No toca createRealtimeSession ni
+   * ningún llamado existente de Clásico.
+   */
+  async createStructuredRealtimeSession(personId: string): Promise<{
+    conversationId: string;
+    clientSecret: string;
+    expiresAt: number;
+    model: string;
+  }> {
+    return this.txManager.runInTransaction(async (queryRunner) => {
+      const conversationId = await this.startConversation(queryRunner, personId, 'STRUCTURED');
+      const personContext = await this.getPersonContext(queryRunner, personId);
+      const language = await this.getPersonLanguage(queryRunner, personId);
+      const settingsRows = await queryRunner.query(
+        `SELECT setting_key, setting_value FROM params.app_settings WHERE setting_key LIKE 'assistant.realtime_%'`,
+      );
+      const settings = Object.fromEntries(
+        settingsRows.map((r: { setting_key: string; setting_value: string }) => [r.setting_key, r.setting_value]),
+      ) as Record<string, string | undefined>;
+      const configuredVoice = settings['assistant.realtime_voice'];
+      const voice = (REALTIME_VALID_VOICES as readonly string[]).includes(configuredVoice ?? '')
+        ? configuredVoice!
+        : 'marin';
+
+      const missingVitals = await this.getMissingVitalsQuestion(queryRunner, personId, language);
+      const questionRows = await queryRunner.query(
+        `SELECT q.* FROM ai.interview_questions q
+         WHERE q.active = TRUE ${AIService.SKIP_IF_ALREADY_HAS_SQL}
+         ORDER BY q.display_order ASC`,
+        [personId],
+      );
+      const questions = (questionRows as Array<{
+        question_text: string;
+        question_text_en?: string | null;
+        question_text_pt?: string | null;
+        question_text_fr?: string | null;
+        proposal_type: string;
+        asks_date?: boolean;
+      }>).map((q) => ({
+        text: this.formatStructuredQuestion(q as never, language),
+        proposalType: q.proposal_type,
+        asksDate: !!q.asks_date,
+      }));
+
+      const session = await this.provider.createRealtimeSession(
+        personContext,
+        language,
+        {
+          voice,
+          model: settings['assistant.realtime_model'] ?? undefined,
+          silenceDurationMs: Number(settings['assistant.realtime_silence_duration_ms']) || 900,
+          vadThreshold: Number(settings['assistant.realtime_vad_threshold']) || 0.5,
+          prefixPaddingMs: Number(settings['assistant.realtime_prefix_padding_ms']) || 300,
+        },
+        { missingVitalsQuestion: missingVitals?.question, questions },
+      );
+      return {
+        conversationId,
+        clientSecret: session.clientSecret,
+        expiresAt: session.expiresAt,
+        model: session.model,
+      };
+    });
+  }
+
+  /**
    * Solo estos nombres pueden aparecer en ai.proposals.resulting_record_table
    * (los escribe applyConfirmedProposal más abajo, nunca vienen de
    * afuera) — allowlist explícita antes de interpolar el nombre de
@@ -5309,12 +5384,18 @@ export class AIService {
   private async startConversation(
     queryRunner: QueryRunner,
     personId: string,
+    // Pedido explícito del usuario: comparar costo Clásico/Estructurado
+    // (ver ai.get_intake_model_comparison) — el default 'CLASSIC' es a
+    // propósito el mismo que ya usaba este método antes de que
+    // Estructurado también pudiera pasar por acá (createStructuredRealtimeSession),
+    // así que ningún llamado existente cambia de comportamiento.
+    intakeModel: 'CLASSIC' | 'STRUCTURED' = 'CLASSIC',
   ): Promise<string> {
     const [row] = await queryRunner.query(
-      `INSERT INTO ai.conversations (person_id, conversation_type)
-       VALUES ($1, 'HEALTH_DATA_CAPTURE')
+      `INSERT INTO ai.conversations (person_id, conversation_type, intake_model)
+       VALUES ($1, 'HEALTH_DATA_CAPTURE', $2)
        RETURNING id`,
-      [personId],
+      [personId, intakeModel],
     );
     return row.id;
   }

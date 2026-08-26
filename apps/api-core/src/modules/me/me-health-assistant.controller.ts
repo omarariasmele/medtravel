@@ -82,6 +82,20 @@ export class MeHealthAssistantController {
   }
 
   /**
+   * Pedido explícito del usuario: mismo motor de voz continua de
+   * arriba, pero para el modo Estructurado — arma un guion fijo con
+   * las preguntas de ai.interview_questions que todavía falten (ver
+   * AIService.createStructuredRealtimeSession) en vez de la charla
+   * libre de Clásico. Reusa el resto del pipeline (realtime-proposals,
+   * confirm-all) sin cambios.
+   */
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
+  @Post('realtime-session-structured')
+  async createStructuredRealtimeSession(@CurrentContext() context: RequestContextData) {
+    return this.aiService.createStructuredRealtimeSession(context.personId!);
+  }
+
+  /**
    * El celular postea acá cada vez que la tool save_health_proposal se
    * dispara durante una charla del motor Realtime — ver
    * createRealtimeSession arriba. Guarda como PENDING_CONFIRMATION,
