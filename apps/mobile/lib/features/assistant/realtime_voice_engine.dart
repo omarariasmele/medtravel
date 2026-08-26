@@ -940,6 +940,33 @@ class RealtimeVoiceEngine {
     _requestResponseCreate();
   }
 
+  /// Pedido explícito del usuario: "una combinación con botones y
+  /// escucha real como el Clásico" — para las preguntas de sí/no
+  /// (la gran mayoría en Estructurado), agiliza no depender de decirlo
+  /// en voz alta en todos los turnos. Manda el texto tal cual lo
+  /// mandaría el reconocedor de voz (mismo mecanismo que
+  /// _acknowledgeFunctionCall usa para el resultado de una tool: un
+  /// conversation.item.create seguido de response.create), así que
+  /// para el modelo es indistinguible de que el viajero lo haya dicho.
+  /// onUserTranscript se dispara a mano para que la burbuja del chat
+  /// lo muestre igual que una respuesta hablada.
+  void sendTextAnswer(String text) {
+    final dc = _dc;
+    if (dc == null) return;
+    onUserTranscript?.call(text);
+    dc.send(RTCDataChannelMessage(jsonEncode({
+      'type': 'conversation.item.create',
+      'item': {
+        'type': 'message',
+        'role': 'user',
+        'content': [
+          {'type': 'input_text', 'text': text},
+        ],
+      },
+    })));
+    _requestResponseCreate();
+  }
+
   void _requestResponseCreate() {
     if (_responseActive) {
       _pendingResponseCreate = true;

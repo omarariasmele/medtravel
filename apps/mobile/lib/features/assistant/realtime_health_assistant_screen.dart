@@ -342,6 +342,11 @@ class _RealtimeHealthAssistantScreenState extends State<RealtimeHealthAssistantS
     await _engine.connect();
   }
 
+  void _sendQuickAnswer(String text) {
+    if (_state != _ConnectionState.connected) return;
+    _engine.sendTextAnswer(text);
+  }
+
   /// El botón "Reintentar" del banner de error tiene que hacer cosas
   /// distintas según qué falló: si falló GUARDAR o DESCARTAR, la
   /// conexión de voz sigue viva — hay que reintentar esa acción
@@ -448,6 +453,34 @@ class _RealtimeHealthAssistantScreenState extends State<RealtimeHealthAssistantS
                       },
                     ),
             ),
+            // Pedido explícito del usuario: "una combinación con
+            // botones y escucha real como el Clásico... para agilizar
+            // en caso de no usar que el usuario le hable en algunos
+            // momentos" — Estructurado es casi todo sí/no, así que
+            // estos botones cubren la gran mayoría de los turnos sin
+            // reemplazar la escucha (sigue activa en paralelo, se
+            // puede seguir contestando hablando en cualquier momento).
+            if (_state == _ConnectionState.connected && widget.structuredModel)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => _sendQuickAnswer(context.tr('assistant.yes')),
+                        child: Text(context.tr('assistant.yes')),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => _sendQuickAnswer(context.tr('assistant.no')),
+                        child: Text(context.tr('assistant.no')),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             if (_state == _ConnectionState.connected)
               Padding(
                 padding: const EdgeInsets.all(16),

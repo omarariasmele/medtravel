@@ -1700,6 +1700,7 @@ class AppStrings {
       'fr': 'Confirmer le changement ?',
     },
     'assistant.no': {'es': 'No', 'en': 'No', 'pt': 'Não', 'fr': 'Non'},
+    'assistant.yes': {'es': 'Sí', 'en': 'Yes', 'pt': 'Sim', 'fr': 'Oui'},
     'assistant.yesReplace': {
       'es': 'Sí, reemplazar',
       'en': 'Yes, replace',
