@@ -70,17 +70,38 @@ export class ProfessionalsRegistrationController {
 
     try {
       return await this.txManager.runInTransaction(async (queryRunner) => {
+        // Bug real reportado en vivo: "Internal server error" al
+        // registrar un médico — este llamado quedó con la firma vieja
+        // de 5 parámetros de core.register_person_and_user() de antes
+        // de que Fase 3 agregara consentimiento (y antes de eso,
+        // teléfono/idioma) a la función — esas migraciones DROPean la
+        // firma anterior explícitamente (ver proposed-fase3-
+        // registration-consent.sql), así que la de 5 args dejó de
+        // existir de golpe. p_country_id (6to parámetro) es obligatorio
+        // en la firma actual, el resto ya tiene default. Sin
+        // consentimiento acá a propósito: ese consentimiento es del
+        // VIAJERO ("un profesional puede cargarme datos"), no aplica a
+        // que el profesional se registre.
         const [{ person_id, user_id }] = await queryRunner.query(
-          `SELECT * FROM core.register_person_and_user($1, $2, $3, $4, $5)`,
+          `SELECT * FROM core.register_person_and_user($1, $2, $3, $4, $5, $6)`,
           [
             dto.firstName,
             dto.lastName,
             dto.email,
             emailBlindIndex,
             passwordHash,
+            dto.countryId,
           ],
         );
 
+        // Bug real reportado en vivo: un médico recién registrado
+        // (Ignacio Martínez) quedaba is_active = TRUE de entrada, sin
+        // que nadie hubiera validado su matrícula/identidad todavía.
+        // Pedido explícito del usuario: "por el momento es un
+        // profesional registrado pero no activo, esto requiere que se
+        // valide la información" — arranca inactivo, un operador lo
+        // activa manualmente desde Profesionales (PATCH
+        // /clinical/healthcare-professionals/:id, ya soporta isActive).
         const [professional] = await queryRunner.query(
           `INSERT INTO clinical.healthcare_professionals
              (user_id, first_name, last_name, doc_type_id, doc_number, doc_number_idx,
@@ -89,7 +110,7 @@ export class ProfessionalsRegistrationController {
               trust_level_id, is_active)
            VALUES ($1, $2, $3, $4, core.encrypt_pii($5), $6, $7, $8, $9, $10, $11,
               $12, $13, $14, $15, core.encrypt_pii($16),
-              params.catalog_id('PROFESSIONAL_TRUST_LEVEL', 'REGISTERED'), true)
+              params.catalog_id('PROFESSIONAL_TRUST_LEVEL', 'REGISTERED'), false)
            RETURNING id, first_name, last_name, trust_level_id, is_active, created_at`,
           [
             user_id,

@@ -5,6 +5,8 @@ import {
 } from '@nestjs/common';
 import { QueryFailedError } from 'typeorm';
 
+import { InvalidCatalogNameError } from '@modules/params/catalog-resolution.service';
+
 /**
  * Traduce códigos de error de Postgres (no de TypeORM) a excepciones Nest.
  * Cualquier código no listado se re-lanza tal cual — sigue siendo un 500,
@@ -35,11 +37,19 @@ export function mapPgError(error: unknown): never {
  * proposed-prevent-duplicate-clinical-entries.sql); cualquier otro
  * código devuelve null para que el caller lo relance — ahí sí puede ser
  * un bug real que no hay que ocultar.
+ *
+ * Bug real reportado en vivo (demo por voz): la IA puede mandar un
+ * proposal con el nombre del antecedente en null (PROPOSAL_DATA_SCHEMA
+ * lo tipa nullable a propósito, ver InvalidCatalogNameError) — no es un
+ * bug de código, es un dato inválido puntual de ESE antecedente, mismo
+ * criterio que un duplicado: se saltea ese proposal, el resto del lote
+ * sigue.
  */
 export function isSkippableConflict(error: unknown): string | null {
   if (error instanceof QueryFailedError) {
     const code = (error as QueryFailedError & { code?: string }).code;
     if (code === '23505') return error.message;
   }
+  if (error instanceof InvalidCatalogNameError) return error.message;
   return null;
 }

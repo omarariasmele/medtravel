@@ -8,6 +8,7 @@ export const DEFAULT_SHARE_SCOPE = [
   'implants_devices',
   'treatments',
   'emergency_contacts',
+  'documents',
 ];
 
 interface PatientSummaryRow {
@@ -100,6 +101,15 @@ export interface SharedProfileView {
     phone: string | null;
     relationship: string | null;
     relationshipId: string | null;
+  }>;
+  /** Pedido explícito del usuario: análisis/radiografías/estudios subidos por el viajero, visibles para el médico. */
+  documents: Array<{
+    id: string;
+    documentTypeId: string;
+    title: string | null;
+    documentDate: string | null;
+    mimeType: string;
+    fileNameOriginal: string;
   }>;
 }
 
@@ -269,6 +279,18 @@ export async function buildSharedProfile(
       }
     : null;
 
+  const documents = scope.includes('documents')
+    ? await queryRunner.query(
+        `SELECT id, document_type_id AS "documentTypeId", core.decrypt_pii(title) AS title,
+                document_date AS "documentDate", mime_type AS "mimeType",
+                core.decrypt_pii(file_name_original) AS "fileNameOriginal"
+         FROM clinical.documents
+         WHERE person_id = $1 AND show_on_emergency = TRUE AND deleted_at IS NULL
+         ORDER BY document_date DESC NULLS LAST, created_at DESC`,
+        [personId],
+      )
+    : [];
+
   const emergencyContacts = scope.includes('emergency_contacts')
     ? (
         await queryRunner.query(
@@ -304,5 +326,6 @@ export async function buildSharedProfile(
     treatments,
     vitals,
     emergencyContacts,
+    documents,
   };
 }

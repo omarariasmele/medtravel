@@ -4,6 +4,7 @@ import {
   Box,
   Card,
   CardContent,
+  Chip,
   CircularProgress,
   Grid,
   LinearProgress,
@@ -42,7 +43,15 @@ interface TopUser {
   tokensInput: number;
   tokensOutput: number;
   costUsd: number;
+  limitUsd: number;
+  /** Reservado para cuando exista una forma de recargar crédito por usuario — hoy siempre 0. */
+  extraCreditUsd: number;
+  spentThisYearUsd: number;
+  balanceUsd: number;
 }
+
+/** Pedido explícito del usuario: alertar visualmente cuando a un viajero le quedan 50 centavos o menos de saldo. */
+const LOW_BALANCE_THRESHOLD_USD = 0.5;
 
 interface DailyTrendPoint {
   day: string;
@@ -300,7 +309,11 @@ export function AiConsumptionPage() {
       )}
 
       <Typography variant="h6" gutterBottom>
-        Consumo por viajero (últimos 30 días)
+        Consumo por viajero
+      </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        Mensajes/tokens/costo de los últimos 30 días (actividad reciente) — límite, gastado y saldo son del
+        año calendario en curso, mismo criterio que usa el asistente para cortar el uso gratuito.
       </Typography>
       {topUsersQuery.isLoading && <CircularProgress size={24} />}
       {topUsersQuery.data && topUsersQuery.data.length === 0 && (
@@ -315,19 +328,44 @@ export function AiConsumptionPage() {
                 <TableCell align="right">Mensajes</TableCell>
                 <TableCell align="right">Tokens entrada</TableCell>
                 <TableCell align="right">Tokens salida</TableCell>
-                <TableCell align="right">Costo</TableCell>
+                <TableCell align="right">Costo (30 días)</TableCell>
+                <TableCell align="right">Límite anual</TableCell>
+                <TableCell align="right">Gastado (año)</TableCell>
+                <TableCell align="right">Saldo</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {topUsersPageRows.map((u) => (
-                <TableRow key={u.personId}>
-                  <TableCell>{u.fullName}</TableCell>
-                  <TableCell align="right">{u.messageCount}</TableCell>
-                  <TableCell align="right">{u.tokensInput.toLocaleString('es-AR')}</TableCell>
-                  <TableCell align="right">{u.tokensOutput.toLocaleString('es-AR')}</TableCell>
-                  <TableCell align="right">{usd(u.costUsd)}</TableCell>
-                </TableRow>
-              ))}
+              {topUsersPageRows.map((u) => {
+                const lowBalance = u.balanceUsd <= LOW_BALANCE_THRESHOLD_USD;
+                return (
+                  <TableRow key={u.personId}>
+                    <TableCell>{u.fullName}</TableCell>
+                    <TableCell align="right">{u.messageCount}</TableCell>
+                    <TableCell align="right">{u.tokensInput.toLocaleString('es-AR')}</TableCell>
+                    <TableCell align="right">{u.tokensOutput.toLocaleString('es-AR')}</TableCell>
+                    <TableCell align="right">{usd(u.costUsd)}</TableCell>
+                    <TableCell align="right">
+                      {usd(u.limitUsd + u.extraCreditUsd)}
+                      {u.extraCreditUsd > 0 && (
+                        <Typography component="span" variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                          (incluye {usd(u.extraCreditUsd)} recargado)
+                        </Typography>
+                      )}
+                    </TableCell>
+                    <TableCell align="right">{usd(u.spentThisYearUsd)}</TableCell>
+                    <TableCell align="right">
+                      <Tooltip title={lowBalance ? 'Saldo bajo — a punto de llegar al límite gratuito' : ''}>
+                        <Chip
+                          size="small"
+                          label={usd(u.balanceUsd)}
+                          color={lowBalance ? 'error' : 'default'}
+                          variant={lowBalance ? 'filled' : 'outlined'}
+                        />
+                      </Tooltip>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
           <PaginationFooter page={topUsersPage} totalCount={topUsersTotalCount} onPageChange={setTopUsersPage} />

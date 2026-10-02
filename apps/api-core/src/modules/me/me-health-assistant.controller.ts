@@ -18,13 +18,24 @@ import { RealtimeUsageDto } from './dto/realtime-usage.dto';
 import { RealtimeUserMessageDto } from './dto/realtime-user-message.dto';
 import { SynthesizeSpeechDto } from './dto/synthesize-speech.dto';
 
+// Pedido explícito del usuario: cuando la IA no está disponible (por
+// cualquiera de estos límites), recordarle al viajero que no la
+// necesita para mantener su Historial de Salud — el modo Formulario
+// (una sola pantalla, sin chat, mismo selector de "Salud" donde están
+// Clásico/Estructurado/Formulario) hace exactamente lo mismo sin
+// costo de IA.
+const NO_AI_NEEDED_HINT =
+  'No hace falta el asistente de IA para mantener tu Historial de Salud — entrá a "Salud" y usá el modo Formulario para cargar o corregir tus datos directamente.';
+
 const LIMIT_MESSAGES: Record<string, string> = {
   USER_DAILY:
-    'Llegaste al máximo de mensajes de hoy para el asistente de salud. Probá de nuevo mañana, o cargá el dato manualmente desde "Salud".',
+    `Llegaste al máximo de mensajes de hoy para el asistente de salud. Probá de nuevo mañana. ${NO_AI_NEEDED_HINT}`,
   PLATFORM_DAILY_BUDGET:
-    'El asistente de salud alcanzó su límite de uso de hoy en toda la plataforma. Probá de nuevo mañana, o cargá el dato manualmente desde "Salud".',
+    `El asistente de salud alcanzó su límite de uso de hoy en toda la plataforma. Probá de nuevo mañana. ${NO_AI_NEEDED_HINT}`,
   PLATFORM_MONTHLY_BUDGET:
-    'El asistente de salud alcanzó su límite de uso de este mes en toda la plataforma. Cargá el dato manualmente desde "Salud" mientras tanto.',
+    `El asistente de salud alcanzó su límite de uso de este mes en toda la plataforma. ${NO_AI_NEEDED_HINT}`,
+  USER_FREE_LIMIT:
+    `Llegaste a tu límite de uso gratuito del asistente de IA — pronto vamos a sumar planes para ampliar el uso. ${NO_AI_NEEDED_HINT}`,
 };
 
 /**
@@ -189,11 +200,21 @@ export class MeHealthAssistantController {
     @CurrentContext() context: RequestContextData,
     @Body() dto: HealthChatDto,
   ) {
-    return this.aiService.structuredIntakeChat(
+    const outcome = await this.aiService.structuredIntakeChat(
       context.personId!,
       dto.conversationId,
       dto.question,
     );
+    if (outcome.limitReached) {
+      return {
+        conversationId: outcome.conversationId,
+        reply: LIMIT_MESSAGES[outcome.limitReached],
+        interviewComplete: false,
+        options: null,
+        pauseRequested: false,
+      };
+    }
+    return outcome;
   }
 
   /**

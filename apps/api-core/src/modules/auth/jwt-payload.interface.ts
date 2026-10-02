@@ -25,4 +25,14 @@ export interface JwtPayload {
   canEditClinicalData?: boolean;
   /** Email en texto plano, solo para mostrar "conectado como X" en la UI — no es un GUC. */
   email?: string;
+  /**
+   * Fase de acceso restringido del profesional — id de
+   * clinical.healthcare_professionals si este user_id tiene una fila
+   * ahí (se resuelve en login() sin importar clientApp). No es un GUC
+   * (clinical.get_my_encounters() resuelve la identidad del profesional
+   * server-side desde app.current_user_id, no confía en este claim para
+   * autorizar nada) — solo lo usa professional-scope.middleware.ts para
+   * restringir a qué rutas puede llegar esta sesión.
+   */
+  professionalId?: string;
 }

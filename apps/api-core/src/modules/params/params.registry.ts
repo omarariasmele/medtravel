@@ -1,5 +1,7 @@
 import { EntityTarget, ObjectLiteral } from 'typeorm';
 
+import { TenantBrandProfileEntity } from '@modules/identity/entities/tenant-brand-profile.entity';
+
 import { DomainCatalogEntity } from './entities/domain-catalog.entity';
 import { CatalogValueEntity } from './entities/catalog-value.entity';
 import { WorkflowDefinitionEntity } from './entities/workflow-definition.entity';
@@ -53,6 +55,7 @@ export const PARAMS_REGISTRY: Record<string, EntityTarget<ObjectLiteral>> = {
   'integration-contracts': IntegrationContractEntity,
   'feature-flags': FeatureFlagEntity,
   'flag-overrides': FlagOverrideEntity,
+  'tenant-brand-profiles': TenantBrandProfileEntity,
   'operational-limits': OperationalLimitEntity,
   'retention-policies': RetentionPolicyEntity,
   'consent-purposes': ConsentPurposeEntity,

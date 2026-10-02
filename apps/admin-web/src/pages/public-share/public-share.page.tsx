@@ -65,6 +65,12 @@ const NOTE_STRINGS: Record<string, Record<string, string>> = {
     institution: 'Institución (opcional)',
     recommendations: 'Recomendaciones',
     treatment: 'Tratamiento',
+    diagnosisTitle: '¿Diagnosticaste una enfermedad o prescribiste una medicación? (opcional)',
+    conditionName: 'Diagnóstico',
+    conditionIcd10: 'Código ICD-10 (opcional)',
+    medicationName: 'Medicación',
+    medicationDose: 'Dosis (ej. 80mg)',
+    medicationFrequency: 'Frecuencia (ej. 1 vez por día)',
     notes: 'Notas',
     cancel: 'Cancelar',
     save: 'Guardar nota',
@@ -89,6 +95,12 @@ const NOTE_STRINGS: Record<string, Record<string, string>> = {
     institution: 'Institution (optional)',
     recommendations: 'Recommendations',
     treatment: 'Treatment',
+    diagnosisTitle: 'Did you diagnose a condition or prescribe a medication? (optional)',
+    conditionName: 'Diagnosis',
+    conditionIcd10: 'ICD-10 code (optional)',
+    medicationName: 'Medication',
+    medicationDose: 'Dose (e.g. 80mg)',
+    medicationFrequency: 'Frequency (e.g. once a day)',
     notes: 'Notes',
     cancel: 'Cancel',
     save: 'Save note',
@@ -113,6 +125,12 @@ const NOTE_STRINGS: Record<string, Record<string, string>> = {
     institution: 'Instituição (opcional)',
     recommendations: 'Recomendações',
     treatment: 'Tratamento',
+    diagnosisTitle: 'Diagnosticou uma doença ou prescreveu um medicamento? (opcional)',
+    conditionName: 'Diagnóstico',
+    conditionIcd10: 'Código CID-10 (opcional)',
+    medicationName: 'Medicamento',
+    medicationDose: 'Dose (ex. 80mg)',
+    medicationFrequency: 'Frequência (ex. 1 vez por dia)',
     notes: 'Notas',
     cancel: 'Cancelar',
     save: 'Salvar nota',
@@ -137,6 +155,12 @@ const NOTE_STRINGS: Record<string, Record<string, string>> = {
     institution: 'Institution (facultatif)',
     recommendations: 'Recommandations',
     treatment: 'Traitement',
+    diagnosisTitle: 'Avez-vous diagnostiqué une maladie ou prescrit un médicament ? (facultatif)',
+    conditionName: 'Diagnostic',
+    conditionIcd10: 'Code CIM-10 (facultatif)',
+    medicationName: 'Médicament',
+    medicationDose: 'Dose (ex. 80mg)',
+    medicationFrequency: 'Fréquence (ex. 1 fois par jour)',
     notes: 'Notes',
     cancel: 'Annuler',
     save: 'Enregistrer la note',
@@ -177,6 +201,11 @@ export function PublicSharePage() {
   const [recommendations, setRecommendations] = useState('');
   const [treatment, setTreatment] = useState('');
   const [notes, setNotes] = useState('');
+  const [conditionName, setConditionName] = useState('');
+  const [conditionIcd10, setConditionIcd10] = useState('');
+  const [medicationName, setMedicationName] = useState('');
+  const [medicationDose, setMedicationDose] = useState('');
+  const [medicationFrequency, setMedicationFrequency] = useState('');
   const [claimToken, setClaimToken] = useState<string | null>(null);
 
   const query = useQuery({
@@ -207,6 +236,26 @@ export function PublicSharePage() {
     };
   }, [token, query.data?.person?.photoPath]);
 
+  /**
+   * Pedido explícito del usuario: "que pueda abrir el documento de
+   * forma directa, similar a lo que pasa cuando uno visualiza un
+   * documento en Drive" — mismo patrón que la foto de arriba (blob +
+   * objectURL, publicApiClient nunca manda el archivo con auth
+   * rota) pero on-demand (no todos los documentos de una, para no
+   * bajar archivos que el médico nunca llega a mirar). Los navegadores
+   * ya renderizan un blob: de un PDF/imagen inline en la pestaña nueva
+   * — no hace falta un visor propio.
+   */
+  const handleViewDocument = async (doc: SharedProfileData['documents'][number]) => {
+    if (!token) return;
+    const { data } = await publicApiClient.get(`/public/shares/${token}/documents/${doc.id}/file`, {
+      responseType: 'blob',
+    });
+    const objectUrl = URL.createObjectURL(data);
+    window.open(objectUrl, '_blank', 'noopener');
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  };
+
   const submitNote = useMutation({
     mutationFn: async () => {
       const { data } = await publicApiClient.post(`/public/shares/${token}/notes`, {
@@ -217,6 +266,11 @@ export function PublicSharePage() {
         recommendations: recommendations || undefined,
         treatment: treatment || undefined,
         notes: notes || undefined,
+        diagnosedConditionName: conditionName || undefined,
+        diagnosedConditionIcd10: conditionIcd10 || undefined,
+        prescribedMedicationName: medicationName || undefined,
+        prescribedMedicationDose: medicationDose || undefined,
+        prescribedMedicationFrequency: medicationFrequency || undefined,
       });
       return data as { id: string; claimToken: string };
     },
@@ -237,6 +291,10 @@ export function PublicSharePage() {
         { claimToken },
         { headers: { Authorization: `Bearer ${loginData.accessToken}` } },
       );
+      // Mismo storage que professional-portal.page.tsx — para que
+      // "Ver mis atenciones" de acá abajo no le pida loguearse de
+      // nuevo con la misma cuenta que acaba de usar.
+      sessionStorage.setItem('medtravel_professional_token', loginData.accessToken);
       return { certified: claimData.certified as boolean };
     },
     onSuccess: (data) => {
@@ -283,16 +341,26 @@ export function PublicSharePage() {
         {banner.expiresNotice(new Date(query.data.expiresAt).toLocaleString(dateLocale))}
       </Alert>
 
-      <SharedProfileView data={query.data} photoUrl={photoUrl} language={query.data.language} />
+      <SharedProfileView
+        data={query.data}
+        photoUrl={photoUrl}
+        language={query.data.language}
+        onViewDocument={handleViewDocument}
+      />
 
       {query.data.canSubmitNote && (
         <Card sx={{ mt: 2 }}>
           <CardContent>
             {claimedResult ? (
-              <Alert severity="success">
-                {n('claimed')}{' '}
-                {claimedResult.certified ? n('claimedCertified') : n('claimedPending')}
-              </Alert>
+              <Box>
+                <Alert severity="success" sx={{ mb: 2 }}>
+                  {n('claimed')}{' '}
+                  {claimedResult.certified ? n('claimedCertified') : n('claimedPending')}
+                </Alert>
+                <Button variant="contained" onClick={() => navigate('/professional-portal')}>
+                  Ver mis atenciones
+                </Button>
+              </Box>
             ) : claimToken ? (
               <Box>
                 <Alert severity="success" sx={{ mb: 2 }}>
@@ -421,6 +489,48 @@ export function PublicSharePage() {
                   value={treatment}
                   onChange={(e) => setTreatment(e.target.value)}
                 />
+
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+                  {n('diagnosisTitle')}
+                </Typography>
+                <TextField
+                  label={n('conditionName')}
+                  fullWidth
+                  margin="normal"
+                  value={conditionName}
+                  onChange={(e) => setConditionName(e.target.value)}
+                />
+                <TextField
+                  label={n('conditionIcd10')}
+                  fullWidth
+                  margin="normal"
+                  value={conditionIcd10}
+                  onChange={(e) => setConditionIcd10(e.target.value)}
+                />
+                <TextField
+                  label={n('medicationName')}
+                  fullWidth
+                  margin="normal"
+                  value={medicationName}
+                  onChange={(e) => setMedicationName(e.target.value)}
+                />
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <TextField
+                    label={n('medicationDose')}
+                    fullWidth
+                    margin="normal"
+                    value={medicationDose}
+                    onChange={(e) => setMedicationDose(e.target.value)}
+                  />
+                  <TextField
+                    label={n('medicationFrequency')}
+                    fullWidth
+                    margin="normal"
+                    value={medicationFrequency}
+                    onChange={(e) => setMedicationFrequency(e.target.value)}
+                  />
+                </Box>
+
                 <TextField
                   label={n('notes')}
                   fullWidth

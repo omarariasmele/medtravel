@@ -17,8 +17,19 @@ import {
 
 import { publicApiClient } from '../../lib/public-api-client';
 import { useCatalog } from '../../lib/catalog-hooks';
-import { setTokens } from '../../lib/api-client';
 import { apiErrorMessage } from '../../lib/api-error';
+
+// Mismo storage que professional-portal.page.tsx — a propósito NUNCA
+// el localStorage de apiClient (ver api-client.ts/setTokens): ese es
+// la sesión del PANEL DE OPERADORES. Un profesional que se registra
+// nunca debe terminar "logueado" ahí — antes esto guardaba el token
+// del médico con setTokens(), así que si después entraba a cualquier
+// ruta del panel (aunque sea por error), <ProtectedRoute> lo dejaba
+// pasar y le mostraba el Dashboard/sidebar completo (vacíos porque
+// professional-scope.middleware.ts bloquea los datos, pero igual
+// mostraba la interfaz que el usuario pidió explícitamente que un
+// médico NUNCA vea).
+const PROFESSIONAL_TOKEN_KEY = 'medtravel_professional_token';
 
 /**
  * Alta pública de médico/institución — llega acá desde el link de
@@ -117,7 +128,7 @@ export function ProfessionalRegistrationPage() {
         email,
         password,
       });
-      setTokens(loginData.accessToken, loginData.refreshToken);
+      sessionStorage.setItem(PROFESSIONAL_TOKEN_KEY, loginData.accessToken);
 
       if (claimToken) {
         const { data: claimData } = await publicApiClient.post(
@@ -127,7 +138,7 @@ export function ProfessionalRegistrationPage() {
         );
         setClaimResult({ certified: claimData.certified });
       } else {
-        navigate('/');
+        navigate('/professional-portal');
       }
     },
   });
@@ -135,12 +146,15 @@ export function ProfessionalRegistrationPage() {
   if (claimResult) {
     return (
       <Container maxWidth="sm" sx={{ mt: 6 }}>
-        <Alert severity="success">
+        <Alert severity="success" sx={{ mb: 2 }}>
           Cuenta creada y nota reclamada correctamente.{' '}
           {claimResult.certified
             ? 'Como tu identidad ya está verificada, quedó certificada directamente en el Historial de Salud.'
             : 'Quedó pendiente de confirmación del viajero (nivel de confianza todavía no verificado).'}
         </Alert>
+        <Button variant="contained" onClick={() => navigate('/professional-portal')}>
+          Ver mis atenciones
+        </Button>
       </Container>
     );
   }

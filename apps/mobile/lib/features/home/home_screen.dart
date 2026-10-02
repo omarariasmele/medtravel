@@ -8,9 +8,11 @@ import 'package:provider/provider.dart';
 
 import '../../core/api_client.dart';
 import '../../core/auth_state.dart';
+import '../../core/brand_logo.dart';
 import '../../core/jwt.dart';
+import '../../core/tenant_config_service.dart';
 import '../../l10n/app_strings.dart';
-import '../assistant/health_assistant_screen.dart' show openHealthAssistant;
+import '../assistant/health_assistant_screen.dart' show healthDataVersion, openHealthAssistant;
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -36,6 +38,17 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _load();
     _maybeShowOnboarding();
+    // Ver el comentario de healthDataVersion en health_assistant_screen.dart
+    // — mismo bug de "no se enteró de los datos nuevos", pero para cuando
+    // el asistente se abrió desde OTRA pantalla que no es esta (ej. la
+    // pestaña "Salud"), no solo desde acá (eso ya lo cubre _navigateAndRefresh).
+    healthDataVersion.addListener(_load);
+  }
+
+  @override
+  void dispose() {
+    healthDataVersion.removeListener(_load);
+    super.dispose();
   }
 
   /// Mensaje de bienvenida general, una sola vez (marca vista en el
@@ -109,6 +122,14 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (_) {
       // Silencioso — ver comentario arriba.
     }
+    // Bug real reportado en vivo: un admin cambia los flags/marca de una
+    // empresa desde el panel y el viajero, ya logueado, no lo ve hasta
+    // cerrar sesión — TenantConfigService solo se refrescaba en
+    // login/registro/bootstrap. Se refresca también acá (Inicio ya se
+    // recarga solo, pull-to-refresh y al volver de cualquier pantalla)
+    // para que un cambio de configuración llegue sin pedirle al viajero
+    // que cierre sesión.
+    if (mounted) await context.read<TenantConfigService>().refresh();
   }
 
   Future<void> _loadPhoto() async {
@@ -154,10 +175,12 @@ class _HomeScreenState extends State<HomeScreen> {
     final name = _profile != null
         ? '${_profile!['first_name']} ${_profile!['last_name']}'
         : null;
+    final tenantConfig = context.watch<TenantConfigService>();
+    final assistantEnabled = tenantConfig.isFeatureEnabled('ai.assistant_enabled');
 
     return Scaffold(
       appBar: AppBar(
-        title: Image.asset('assets/images/logo-horizontal-blanco.png', height: 32),
+        title: const BrandLogo(height: 32),
         actions: [
           IconButton(
             icon: const Icon(Icons.logout),
@@ -168,11 +191,13 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _load,
-              child: ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
+          : Stack(
+              children: [
+                RefreshIndicator(
+                  onRefresh: _load,
+                  child: ListView(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+                    children: [
                   if (_missingProfileEssentials.isNotEmpty)
                     _IncompleteProfileBanner(
                       missing: _missingProfileEssentials,
@@ -205,7 +230,16 @@ class _HomeScreenState extends State<HomeScreen> {
                     icon: Icons.smart_toy_outlined,
                     title: context.tr('home.assistantHelpTitle'),
                     subtitle: context.tr('home.assistantHelpSubtitle'),
-                    onTap: () => context.push('/assistant'),
+                    locked: !assistantEnabled,
+                    onTap: () {
+                      if (!assistantEnabled) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(context.tr('home.featureLockedByTenant'))),
+                        );
+                        return;
+                      }
+                      context.push('/assistant');
+                    },
                   ),
                   _QuickAction(
                     icon: Icons.health_and_safety_outlined,
@@ -213,8 +247,24 @@ class _HomeScreenState extends State<HomeScreen> {
                     subtitle: context.tr('home.updateHealthSubtitle'),
                     onTap: () => _navigateAndRefresh(() => openHealthAssistant(context)),
                   ),
-                ],
-              ),
+                    ],
+                  ),
+                ),
+                // Pedido explícito del usuario: leyenda fija abajo a la
+                // derecha de Inicio — Positioned (no parte del
+                // ListView) para que quede siempre visible en esa
+                // esquina sin importar el scroll.
+                Positioned(
+                  right: 12,
+                  bottom: 8,
+                  child: IgnorePointer(
+                    child: Text(
+                      context.tr('home.poweredBy'),
+                      style: TextStyle(fontSize: 10, color: Colors.grey.shade500),
+                    ),
+                  ),
+                ),
+              ],
             ),
     );
   }
@@ -326,28 +376,34 @@ class _IncompleteProfileBanner extends StatelessWidget {
   }
 }
 
+/// `locked` (Fase 1): la empresa activa del viajero no habilitó esta
+/// función — pedido explícito del usuario: se muestra igual (no se
+/// oculta), pero con candado y sin navegar al tocarla.
 class _QuickAction extends StatelessWidget {
   const _QuickAction({
     required this.icon,
     required this.title,
     required this.subtitle,
     required this.onTap,
+    this.locked = false,
   });
 
   final IconData icon;
   final String title;
   final String subtitle;
   final VoidCallback onTap;
+  final bool locked;
 
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
-        leading: Icon(icon, color: Theme.of(context).colorScheme.primary),
-        title: Text(title),
+        leading: Icon(icon, color: locked ? colors.outline : colors.primary),
+        title: Text(title, style: locked ? TextStyle(color: colors.outline) : null),
         subtitle: Text(subtitle),
-        trailing: const Icon(Icons.chevron_right),
+        trailing: Icon(locked ? Icons.lock_outline : Icons.chevron_right),
         onTap: onTap,
       ),
     );

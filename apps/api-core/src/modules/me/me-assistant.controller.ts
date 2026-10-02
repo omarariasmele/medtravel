@@ -30,6 +30,19 @@ export class MeAssistantController {
     return this.aiService.appHelpChat(context.personId!, dto.question);
   }
 
+  /**
+   * Pedido explícito del usuario: migrar este asistente al mismo motor
+   * de voz continua (Realtime) que ya usan Clásico/Estructurado — ver
+   * AIService.createAppHelpRealtimeSession. Mismo patrón que
+   * MeHealthAssistantController.createRealtimeSession: token efímero
+   * de corta duración, la app se conecta directo a OpenAI por WebRTC.
+   */
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
+  @Post('realtime-session')
+  async createRealtimeSession(@CurrentContext() context: RequestContextData) {
+    return this.aiService.createAppHelpRealtimeSession(context.personId!);
+  }
+
   /** Mensaje de bienvenida general, mostrado la primera vez que se abre la app (ver home_screen.dart). */
   @Get('onboarding-message')
   async onboardingMessage() {

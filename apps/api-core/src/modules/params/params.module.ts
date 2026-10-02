@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { TenantBrandProfileEntity } from '@modules/identity/entities/tenant-brand-profile.entity';
+
 import { DomainCatalogEntity } from './entities/domain-catalog.entity';
 import { CatalogValueEntity } from './entities/catalog-value.entity';
 import { CatalogTranslationEntity } from './entities/catalog-translation.entity';
@@ -28,6 +30,7 @@ import { JurisdictionRuleEntity } from './entities/jurisdiction-rule.entity';
 import { CatalogsService } from './catalogs.service';
 import { CatalogsController } from './catalogs.controller';
 import { ParamsAdminResourceController } from './params-admin-resource.controller';
+import { TenantBrandUploadController } from './tenant-brand-upload.controller';
 import { SmtpSettingsService } from './smtp-settings.service';
 import { SmtpSettingsController } from './smtp-settings.controller';
 import { AppSettingsService } from './app-settings.service';
@@ -36,6 +39,7 @@ import { CatalogResolutionService } from './catalog-resolution.service';
 import { CatalogValuesController } from './catalog-values.controller';
 import { CatalogMergeService } from './catalog-merge.service';
 import { CatalogMergeController } from './catalog-merge.controller';
+import { FeatureFlagEvaluationService } from './feature-flag-evaluation.service';
 
 @Module({
   imports: [
@@ -63,6 +67,7 @@ import { CatalogMergeController } from './catalog-merge.controller';
       RetentionPolicyEntity,
       ConsentPurposeEntity,
       JurisdictionRuleEntity,
+      TenantBrandProfileEntity,
     ]),
   ],
   // SmtpSettingsController va ANTES: mismo motivo que
@@ -75,6 +80,7 @@ import { CatalogMergeController } from './catalog-merge.controller';
     CatalogMergeController,
     SmtpSettingsController,
     AppSettingsController,
+    TenantBrandUploadController,
     ParamsAdminResourceController,
   ],
   providers: [
@@ -83,7 +89,8 @@ import { CatalogMergeController } from './catalog-merge.controller';
     CatalogMergeService,
     SmtpSettingsService,
     AppSettingsService,
+    FeatureFlagEvaluationService,
   ],
-  exports: [TypeOrmModule, CatalogResolutionService],
+  exports: [TypeOrmModule, CatalogResolutionService, FeatureFlagEvaluationService],
 })
 export class ParamsModule {}

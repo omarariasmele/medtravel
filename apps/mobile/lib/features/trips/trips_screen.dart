@@ -2,11 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 
 import '../../core/api_client.dart';
 import '../../core/catalog_service.dart';
 import '../../core/error_message.dart';
 import '../../core/remote_tts_player.dart';
+import '../../core/tenant_config_service.dart';
 import '../../l10n/app_strings.dart';
 
 /// /me/trips (a diferencia de /operations/trips genérico) ya resuelve
@@ -296,6 +298,40 @@ class _TripsScreenState extends State<TripsScreen> {
   /// Pedido explícito del usuario: que la IA lea la info en voz alta
   /// de entrada (no hace falta tocar nada), con un botón de parlante
   /// para silenciarla si no la quiere escuchar.
+  /// Pedido explícito del usuario: "no entiendo por qué tarda tanto en
+  /// decir que no hay información... se puede mejorar" — antes, la
+  /// falta de fila curada disparaba SIEMPRE una búsqueda web real con IA
+  /// (hasta 20s) antes de poder mostrar nada, aunque fuera solo para
+  /// decir "no hay datos". El pedido de arriba ahora usa autoSearch=false
+  /// (ver AIService.getDestinationHealthInfo) — solo consulta la tabla
+  /// curada, instantáneo — y los países sin fila llegan con
+  /// source=null. El diálogo de resultados muestra esos casos con un
+  /// botón aparte para recién ahí, a demanda, disparar la búsqueda lenta.
+  static List<String> _buildSpeakableParts(BuildContext context, List<dynamic> countries) {
+    final speakableParts = <String>[];
+    for (final c in countries) {
+      final country = c as Map<String, dynamic>;
+      final label = country['countryLabel'] as String? ?? '';
+      final sections = [
+        (context.tr('trips.vaccinations'), country['vaccinations'] as String?),
+        (context.tr('trips.healthRisks'), country['healthRisks'] as String?),
+        (context.tr('trips.securityAlerts'), country['securityAlerts'] as String?),
+        (context.tr('trips.tips'), country['generalTips'] as String?),
+      ].where((s) => (s.$2 ?? '').trim().isNotEmpty).toList();
+      if (sections.isEmpty) {
+        speakableParts.add(context.tr('trips.noInfoYetFor', params: {'place': label}));
+        continue;
+      }
+      for (var i = 0; i < sections.length; i++) {
+        final (sectionLabel, sectionText) = sections[i];
+        // Solo el primer trozo de cada país repite el nombre del país,
+        // para que no suene "Argentina. Vacunas... Argentina. Riesgos...".
+        speakableParts.add(i == 0 ? '$label. $sectionLabel: $sectionText' : '$sectionLabel: $sectionText');
+      }
+    }
+    return speakableParts;
+  }
+
   Future<void> _showDestinationInfo(String tripId, String place) async {
     showDialog(
       context: context,
@@ -328,7 +364,6 @@ class _TripsScreenState extends State<TripsScreen> {
       return;
     }
 
-    final resolvedCountries = countries!;
     // Bug real reportado en vivo: "tarda demasiado en empezar a hablar" —
     // un trozo por PAÍS (las 4 secciones juntas) seguía siendo un texto
     // largo para el primer pedido de síntesis. Ahora el trozo es por
@@ -337,27 +372,7 @@ class _TripsScreenState extends State<TripsScreen> {
     // paralelo mientras suena la anterior (ver RemoteTtsPlayer.speakChunks)
     // — la impaciencia real de la gente para estos temas pesa más que
     // agrupar prolijo por país.
-    final speakableParts = <String>[];
-    for (final c in resolvedCountries) {
-      final country = c as Map<String, dynamic>;
-      final label = country['countryLabel'] as String? ?? '';
-      final sections = [
-        (context.tr('trips.vaccinations'), country['vaccinations'] as String?),
-        (context.tr('trips.healthRisks'), country['healthRisks'] as String?),
-        (context.tr('trips.securityAlerts'), country['securityAlerts'] as String?),
-        (context.tr('trips.tips'), country['generalTips'] as String?),
-      ].where((s) => (s.$2 ?? '').trim().isNotEmpty).toList();
-      if (sections.isEmpty) {
-        speakableParts.add(context.tr('trips.noInfoYetFor', params: {'place': label}));
-        continue;
-      }
-      for (var i = 0; i < sections.length; i++) {
-        final (sectionLabel, sectionText) = sections[i];
-        // Solo el primer trozo de cada país repite el nombre del país,
-        // para que no suene "Argentina. Vacunas... Argentina. Riesgos...".
-        speakableParts.add(i == 0 ? '$label. $sectionLabel: $sectionText' : '$sectionLabel: $sectionText');
-      }
-    }
+    var resolvedCountries = countries!;
     // Pedido explícito del usuario: arranca SIEMPRE con el micrófono/voz
     // apagado (solo lectura) — si el viajero la prende a propósito, ahí
     // sí se lee en voz alta; antes esto empezaba a hablar solo apenas se
@@ -371,104 +386,157 @@ class _TripsScreenState extends State<TripsScreen> {
     // que ya estaba trabajando, parecía trabado. Este spinner cubre
     // justo esa espera inicial.
     bool voiceLoading = false;
+    bool searchingMissing = false;
+    final aiDestinationSearchEnabled =
+        context.read<TenantConfigService>().isFeatureEnabled('ai.destination_search_enabled');
 
     if (!mounted) return;
     await showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          title: Row(
-            children: [
-              Expanded(child: Text('${context.tr('trips.destinationInfoTooltip')}\n$place', style: Theme.of(ctx).textTheme.titleMedium)),
-              if (voiceLoading)
-                const Padding(
-                  padding: EdgeInsets.all(12),
-                  child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
-                )
-              else
-                IconButton(
-                  icon: Icon(voiceEnabled ? Icons.volume_up : Icons.volume_off),
-                  tooltip: voiceEnabled ? context.tr('trips.mute') : context.tr('trips.enableVoice'),
-                  onPressed: () {
-                    if (voiceEnabled) {
-                      _tts.stop();
-                      setDialogState(() => voiceEnabled = false);
-                    } else if (speakableParts.isNotEmpty) {
-                      setDialogState(() => voiceLoading = true);
-                      unawaited(_tts.speakChunks(
-                        speakableParts,
-                        onFirstAudioStart: () {
-                          if (ctx.mounted) setDialogState(() => voiceLoading = false);
-                        },
-                      ));
-                      setDialogState(() => voiceEnabled = true);
-                    }
-                  },
-                ),
-            ],
-          ),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (final c in resolvedCountries) ...[
-                    Text(c['countryLabel'] as String? ?? '', style: Theme.of(ctx).textTheme.titleSmall),
-                    const SizedBox(height: 8),
-                    () {
-                      final sections = [
-                        (context.tr('trips.vaccinations'), c['vaccinations'] as String?),
-                        (context.tr('trips.healthRisks'), c['healthRisks'] as String?),
-                        (context.tr('trips.securityAlerts'), c['securityAlerts'] as String?),
-                        (context.tr('trips.tips'), c['generalTips'] as String?),
-                      ].where((s) => (s.$2 ?? '').trim().isNotEmpty).toList();
-                      if (sections.isEmpty) {
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: Text(context.tr('trips.noInfoYet')),
-                        );
+        builder: (ctx, setDialogState) {
+          final speakableParts = _buildSpeakableParts(context, resolvedCountries);
+          final missingCountries = resolvedCountries
+              .cast<Map<String, dynamic>>()
+              .where((c) => c['source'] == null)
+              .toList();
+
+          Future<void> searchMissingWithAi() async {
+            setDialogState(() => searchingMissing = true);
+            try {
+              final response = await ApiClient.instance.dio.get(
+                '/me/trips/$tripId/destination-info',
+                queryParameters: {'autoSearch': 'true'},
+              );
+              if (!ctx.mounted) return;
+              setDialogState(() {
+                resolvedCountries = response.data as List<dynamic>;
+                searchingMissing = false;
+              });
+            } catch (e) {
+              if (!ctx.mounted) return;
+              setDialogState(() => searchingMissing = false);
+              ScaffoldMessenger.of(ctx).showSnackBar(
+                SnackBar(content: Text(dioErrorMessage(e, ctx.tr('trips.destinationInfoError')))),
+              );
+            }
+          }
+
+          return AlertDialog(
+            title: Row(
+              children: [
+                Expanded(child: Text('${context.tr('trips.destinationInfoTooltip')}\n$place', style: Theme.of(ctx).textTheme.titleMedium)),
+                if (voiceLoading)
+                  const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+                  )
+                else
+                  IconButton(
+                    icon: Icon(voiceEnabled ? Icons.volume_up : Icons.volume_off),
+                    tooltip: voiceEnabled ? context.tr('trips.mute') : context.tr('trips.enableVoice'),
+                    onPressed: () {
+                      if (voiceEnabled) {
+                        _tts.stop();
+                        setDialogState(() => voiceEnabled = false);
+                      } else if (speakableParts.isNotEmpty) {
+                        setDialogState(() => voiceLoading = true);
+                        unawaited(_tts.speakChunks(
+                          speakableParts,
+                          onFirstAudioStart: () {
+                            if (ctx.mounted) setDialogState(() => voiceLoading = false);
+                          },
+                        ));
+                        setDialogState(() => voiceEnabled = true);
                       }
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          for (final s in sections)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 12),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(s.$1, style: const TextStyle(fontWeight: FontWeight.bold)),
-                                  const SizedBox(height: 4),
-                                  Text(s.$2!),
-                                ],
-                              ),
-                            ),
-                        ],
-                      );
-                    }(),
-                    if (resolvedCountries.indexOf(c) < resolvedCountries.length - 1) const Divider(height: 24),
-                  ],
-                  const Divider(height: 24),
-                  Text(
-                    context.tr('trips.disclaimer'),
-                    style: Theme.of(ctx).textTheme.bodySmall?.copyWith(color: Colors.grey),
+                    },
                   ),
-                ],
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final c in resolvedCountries) ...[
+                      Text(c['countryLabel'] as String? ?? '', style: Theme.of(ctx).textTheme.titleSmall),
+                      const SizedBox(height: 8),
+                      () {
+                        final sections = [
+                          (context.tr('trips.vaccinations'), c['vaccinations'] as String?),
+                          (context.tr('trips.healthRisks'), c['healthRisks'] as String?),
+                          (context.tr('trips.securityAlerts'), c['securityAlerts'] as String?),
+                          (context.tr('trips.tips'), c['generalTips'] as String?),
+                        ].where((s) => (s.$2 ?? '').trim().isNotEmpty).toList();
+                        if (sections.isEmpty) {
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: Text(context.tr('trips.noInfoYet')),
+                          );
+                        }
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            for (final s in sections)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 12),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(s.$1, style: const TextStyle(fontWeight: FontWeight.bold)),
+                                    const SizedBox(height: 4),
+                                    Text(s.$2!),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        );
+                      }(),
+                      if (resolvedCountries.indexOf(c) < resolvedCountries.length - 1) const Divider(height: 24),
+                    ],
+                    // Ver el comentario de _buildSpeakableParts arriba —
+                    // acá es donde el viajero dispara, a demanda, la
+                    // búsqueda lenta con IA para los países que llegaron
+                    // sin datos de la tabla curada.
+                    if (missingCountries.isNotEmpty && aiDestinationSearchEnabled) ...[
+                      const Divider(height: 24),
+                      if (searchingMissing)
+                        Row(
+                          children: [
+                            const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                            const SizedBox(width: 12),
+                            Expanded(child: Text(context.tr('trips.searchingWithAi'))),
+                          ],
+                        )
+                      else
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.travel_explore_outlined),
+                          label: Text(context.tr('trips.searchMissingWithAiButton')),
+                          onPressed: searchMissingWithAi,
+                        ),
+                    ],
+                    const Divider(height: 24),
+                    Text(
+                      context.tr('trips.disclaimer'),
+                      style: Theme.of(ctx).textTheme.bodySmall?.copyWith(color: Colors.grey),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                _tts.stop();
-                Navigator.of(ctx).pop();
-              },
-              child: Text(context.tr('trips.close')),
-            ),
-          ],
-        ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  _tts.stop();
+                  Navigator.of(ctx).pop();
+                },
+                child: Text(context.tr('trips.close')),
+              ),
+            ],
+          );
+        },
       ),
     );
     _tts.stop();
@@ -584,7 +652,11 @@ class _TripsScreenState extends State<TripsScreen> {
                       children: [
                         if (destinations.isNotEmpty)
                           IconButton(
-                            icon: const Icon(Icons.health_and_safety_outlined),
+                            // Pedido explícito de la product owner: amarillo
+                            // bien visible (shade200 quedó demasiado pálido,
+                            // no se notaba como advertencia) para que se
+                            // distinga a simple vista del ícono de editar.
+                            icon: Icon(Icons.health_and_safety_outlined, color: Colors.amber.shade700),
                             tooltip: context.tr('trips.destinationInfoTooltip'),
                             onPressed: () => _showDestinationInfo(t['id'] as String, title),
                           ),

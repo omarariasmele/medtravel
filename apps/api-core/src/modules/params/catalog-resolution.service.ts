@@ -12,6 +12,27 @@ export interface ResolvedCatalogValue {
   created: boolean;
 }
 
+/**
+ * Bug real reportado en vivo (durante una demo, cargando antecedentes
+ * seguidos por voz): PROPOSAL_DATA_SCHEMA tipa genericName/
+ * conditionName/allergenName/etc como `[string, null]` a propósito
+ * (JSON Schema en modo estricto exige que TODOS los campos figuren en
+ * "required", así que cada proposal type manda los del resto en null)
+ * — pero nada impedía que la IA mandara null en el nombre del campo
+ * que SÍ correspondía a este proposal puntual (ej. un MEDICATION con
+ * genericName: null). rawText.trim() explotaba con un TypeError crudo
+ * (500, sin ningún mensaje útil) en vez de rechazar just esa propuesta
+ * puntual — ver isSkippableConflict en pg-error.mapper.ts, que ahora
+ * la reconoce y la resuelve como cualquier otro conflicto esperado
+ * (se guarda como REJECTED, el resto del lote sigue).
+ */
+export class InvalidCatalogNameError extends Error {
+  constructor(domainCode: string) {
+    super(`No se pudo determinar un nombre válido para el antecedente (dominio ${domainCode}).`);
+    this.name = 'InvalidCatalogNameError';
+  }
+}
+
 function slugify(text: string): string {
   const base = text
     .trim()
@@ -41,8 +62,11 @@ export class CatalogResolutionService {
 
   async resolveOrCreate(
     domainCode: string,
-    rawText: string,
+    rawText: string | null | undefined,
   ): Promise<ResolvedCatalogValue> {
+    if (typeof rawText !== 'string' || !rawText.trim()) {
+      throw new InvalidCatalogNameError(domainCode);
+    }
     const trimmed = rawText.trim();
     const normalized = trimmed.toLowerCase();
 

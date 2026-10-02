@@ -210,6 +210,23 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
   final List<_MedicationRow> _medications = [];
   final List<_NameDateRow> _surgeries = [];
   final List<_NameDateRow> _implants = [];
+  /// Pedido explícito del usuario: "Fracturas" es la primera pregunta
+  /// de _questions genuinamente multi-instancia (varias fracturas
+  /// reales, cada una con su propio lugar y fecha) — a diferencia del
+  /// resto de _conditionRows (un checkbox = un antecedente), esta usa
+  /// el mismo patrón de lista repetible que cirugías/implantes en vez
+  /// del campo único de _ConditionRowState. Ver _conditionTile (código
+  /// 'BONE_FRACTURE' especial) y clinical.prevent_duplicate_condition_by_question
+  /// (proposed-allow-multiple-fractures.sql: sin ese cambio del lado
+  /// del backend, la segunda fractura se rechazaba como "duplicada").
+  final List<_NameDateRow> _fractures = [];
+  bool _fracturesChecked = false;
+  Map<String, dynamic>? get _fractureQuestion {
+    for (final q in _questions) {
+      if (q['code'] == 'BONE_FRACTURE') return q;
+    }
+    return null;
+  }
 
   /// Pedido explícito del usuario: mostrar arriba cuándo se cargaron
   /// los últimos datos, mismo dato (`health_record_last_updated_at`)
@@ -404,6 +421,21 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
             }
           }
 
+          if (matchedQuestion != null && matchedQuestion['code'] == 'BONE_FRACTURE') {
+            // Ver el comentario de _fractures más arriba: varias
+            // fracturas ya cargadas antes son varias filas de
+            // clinical.conditions con el MISMO sourceQuestionId — cada
+            // una es su propia entrada en la lista, nunca se pisan.
+            _fracturesChecked = true;
+            final entry = _NameDateRow();
+            entry.existingId = row['id'] as String?;
+            entry.nameController.text = conditionName;
+            if (row['diagnosedAt'] != null) entry.dateController.text = _formatDdMmYyyy(row['diagnosedAt'] as String);
+            entry.snapshot();
+            _fractures.add(entry);
+            continue;
+          }
+
           if (matchedQuestion != null) {
             final q = matchedQuestion;
             final questionText = q['questionText'] as String;
@@ -595,6 +627,7 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
     for (final r in _medications) { r.dispose(); }
     for (final r in _surgeries) { r.dispose(); }
     for (final r in _implants) { r.dispose(); }
+    for (final r in _fractures) { r.dispose(); }
     super.dispose();
   }
 
@@ -632,11 +665,12 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
       } : <String, dynamic>{},
       'conditions': [
         for (final q in _questions)
-          // Cualquier edición de una fila YA existente (tipo, detalle
-          // y/o fecha) se resuelve con PATCH directo (ver
-          // _syncConditionEdits) — este flujo de propuestas es solo
-          // para antecedentes NUEVOS (existingId == null).
-          if (_conditionRows[q['id'] as String]!.isNewOrChanged && _conditionRows[q['id'] as String]!.existingId == null)
+          if (q['code'] != 'BONE_FRACTURE' &&
+              // Cualquier edición de una fila YA existente (tipo, detalle
+              // y/o fecha) se resuelve con PATCH directo (ver
+              // _syncConditionEdits) — este flujo de propuestas es solo
+              // para antecedentes NUEVOS (existingId == null).
+              _conditionRows[q['id'] as String]!.isNewOrChanged && _conditionRows[q['id'] as String]!.existingId == null)
             {
               'questionId': q['id'] as String,
               'label': q['questionText'] as String,
@@ -644,6 +678,19 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
                 'dateRaw': _conditionRows[q['id'] as String]!.dateController.text.trim(),
               if (_detailFor(q)?.isNotEmpty ?? false) 'detail': _detailFor(q)!,
             },
+        // Ver el comentario de _fractures: una entrada por fractura
+        // NUEVA, todas con el MISMO questionId (BONE_FRACTURE ya
+        // permite varias respuestas activas del mismo lado del backend,
+        // ver proposed-allow-multiple-fractures.sql).
+        if (_fracturesChecked && _fractureQuestion != null)
+          for (final f in _fractures)
+            if (f.nameController.text.trim().isNotEmpty && f.isNewOrChanged)
+              {
+                'questionId': _fractureQuestion!['id'] as String,
+                'label': _fractureQuestion!['questionText'] as String,
+                if (f.dateController.text.trim().isNotEmpty) 'dateRaw': f.dateController.text.trim(),
+                'detail': f.nameController.text.trim(),
+              },
       ],
       'allergies': [
         for (final a in _allergies)
@@ -882,6 +929,7 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
           _medications.any((m) => m.nameController.text.trim().isNotEmpty) ||
           _surgeries.any((s) => s.nameController.text.trim().isNotEmpty) ||
           _implants.any((im) => im.nameController.text.trim().isNotEmpty) ||
+          _fractures.any((f) => f.nameController.text.trim().isNotEmpty) ||
           _birthDateController.text.trim().isNotEmpty ||
           _weightController.text.trim().isNotEmpty ||
           _heightController.text.trim().isNotEmpty;
@@ -1158,6 +1206,10 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
   /// de texto libre — generalizado, no hay ningún caso especial para
   /// diabetes en particular acá.
   Widget _conditionTile(Map<String, dynamic> question) {
+    // Ver el comentario de _fractures: única pregunta multi-instancia
+    // hoy, con su propia lista repetible en vez del campo único de
+    // _ConditionRowState.
+    if (question['code'] == 'BONE_FRACTURE') return _fractureTile(question);
     final id = question['id'] as String;
     final label = question['questionText'] as String;
     final options = (question['options'] as List?)?.cast<String>();
@@ -1247,6 +1299,46 @@ class _HealthFormScreenState extends State<HealthFormScreen> {
                 child: TextField(
                   controller: row.detailController,
                   decoration: _lightLabelDecoration(context.tr('form.detailOptionalLabel')),
+                ),
+              ),
+            ]),
+          ),
+      ],
+    );
+  }
+
+  /// Ver el comentario de _fractures: mismo patrón visual que
+  /// cirugías/implantes (lista repetible de lugar+fecha), pero
+  /// escondida detrás de un checkbox como el resto de _questions —
+  /// "¿tuviste alguna fractura?" primero, y solo si contesta que sí
+  /// aparecen las filas para cargar cada una.
+  Widget _fractureTile(Map<String, dynamic> question) {
+    final label = question['questionText'] as String;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          Checkbox(
+            value: _fracturesChecked,
+            onChanged: (v) => setState(() {
+              _fracturesChecked = v ?? false;
+              if (_fracturesChecked && _fractures.isEmpty) _fractures.add(_NameDateRow());
+            }),
+          ),
+          Expanded(child: Text(label, style: const TextStyle(fontSize: 14))),
+        ]),
+        if (_fracturesChecked)
+          Padding(
+            padding: const EdgeInsets.only(left: 16, bottom: 4),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              for (var i = 0; i < _fractures.length; i++)
+                _nameDateRow(_fractures, i, context.tr('form.fractureLocationLabel'), 'conditions'),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () => setState(() => _fractures.add(_NameDateRow())),
+                  icon: const Icon(Icons.add),
+                  label: Text(context.tr('form.addFractureButton')),
                 ),
               ),
             ]),

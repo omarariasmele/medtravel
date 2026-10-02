@@ -192,6 +192,14 @@ export class MeTripsController {
     @CurrentContext() context: RequestContextData,
     @Param('tripId') tripId: string,
     @Query('refresh') refresh?: string,
+    // Pedido explícito del usuario: separar el chequeo rápido de la
+    // tabla curada (instantáneo) de la búsqueda real con IA (hasta 20s)
+    // — ver el comentario de autoSearch en AIService.getDestinationHealthInfo.
+    // autoSearch=false por default acá porque este es el primer llamado
+    // que hace la pantalla al abrir el diálogo; el celular vuelve a
+    // pedir con autoSearch=true sólo si el viajero toca "Buscar con IA"
+    // para los destinos que salieron sin datos.
+    @Query('autoSearch') autoSearch?: string,
   ) {
     const destinations: { country_id: string; country_label: string }[] = await this.txManager.runInTransaction(
       (queryRunner) =>
@@ -216,7 +224,11 @@ export class MeTripsController {
     // mismo pool de conexiones para un solo request.
     const results = [];
     for (const d of destinations) {
-      const info = await this.aiService.getDestinationHealthInfo(d.country_id, refresh === 'true');
+      const info = await this.aiService.getDestinationHealthInfo(
+        d.country_id,
+        refresh === 'true',
+        autoSearch === 'true',
+      );
       results.push({ ...info, countryLabel: d.country_label });
     }
     return results;

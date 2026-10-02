@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
@@ -7,6 +7,7 @@ import { validateEnv } from '@config/env.validation';
 
 import { RequestContextModule } from '@common/request-context/request-context.module';
 import { PgSessionContextInterceptor } from '@common/request-context/pg-session-context.interceptor';
+import { ProfessionalScopeMiddleware } from '@common/auth/professional-scope.middleware';
 import { DatabaseModule } from '@common/database/database.module';
 
 import { ParamsModule } from '@modules/params/params.module';
@@ -52,4 +53,8 @@ import { AppController } from './app.controller';
     { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(ProfessionalScopeMiddleware).forRoutes('*');
+  }
+}

@@ -1,4 +1,5 @@
 import {
+  Equals,
   IsEmail,
   IsNotEmpty,
   IsOptional,
@@ -42,4 +43,13 @@ export class RegisterDto {
   @IsOptional()
   @IsString()
   phone?: string;
+
+  /**
+   * Fase 3 — consentimiento explícito para que un profesional de salud
+   * pueda cargar información clínica sobre el viajero. @Equals(true)
+   * a propósito: ni ausente ni en false pasan la validación, así el
+   * checkbox del registro no puede quedar destildado y enviarse igual.
+   */
+  @Equals(true)
+  consentAccepted: boolean;
 }

@@ -31,11 +31,6 @@ export class UpdateProfileDto {
   @IsString()
   phone?: string;
 
-  /** FK a params.catalog_values (dominio BLOOD_TYPE) — atributo fijo de la persona, no un signo vital repetible (ver core.persons.blood_type_id). */
-  @IsOptional()
-  @IsUUID()
-  bloodTypeId?: string;
-
   /** Si viene y es distinto al actual, resetea emailVerified a FALSE y dispara un código de verificación nuevo — ver MeProfileController.update(). */
   @IsOptional()
   @IsEmail()

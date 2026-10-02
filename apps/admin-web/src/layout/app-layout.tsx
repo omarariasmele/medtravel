@@ -3,6 +3,7 @@ import { Link as RouterLink, Outlet, useLocation } from 'react-router-dom';
 import {
   AppBar,
   Box,
+  Collapse,
   Divider,
   Drawer,
   IconButton,
@@ -10,10 +11,11 @@ import {
   ListItemButton,
   ListItemIcon,
   ListItemText,
-  ListSubheader,
   Toolbar,
   Typography,
 } from '@mui/material';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import MenuIcon from '@mui/icons-material/Menu';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import PeopleIcon from '@mui/icons-material/People';
@@ -62,12 +64,30 @@ const DRAWER_WIDTH = 240;
 const NAV_ITEMS = [
   { label: 'Dashboard', path: '/', icon: <DashboardIcon /> },
   { label: 'Usuarios', path: '/travelers', icon: <PeopleIcon /> },
+  // Pedido explícito del usuario: subir "Usuarios sin cobertura" para
+  // que quede justo debajo de "Usuarios" — sigue gateado por
+  // canManageConfig (cross-tenant por definición, ver
+  // travelers-without-tenant.controller.ts), solo cambió de lugar.
+  { label: 'Usuarios sin cobertura', path: '/travelers-without-coverage', icon: <PersonOffIcon />, requiresConfig: true },
   { label: 'Pólizas', path: '/partner-records', icon: <AssignmentIcon /> },
   { label: 'Viajes', path: '/trips', icon: <FlightIcon /> },
   { label: 'Casos de asistencia', path: '/cases', icon: <EmergencyIcon /> },
   { label: 'Centros médicos', path: '/medical-centers', icon: <LocalHospitalIcon /> },
   { label: 'Profesionales', path: '/professionals', icon: <BadgeIcon /> },
+];
+
+/** Pedido explícito del usuario: agrupar Catálogos/Parámetros, Correo SMTP, Parámetros de la App y Base de Conocimiento IA en un submenú "Configuración". */
+const CONFIG_SECTION_ITEMS = [
+  { label: 'Catálogos / Parámetros', path: '/catalogs-admin', icon: <TuneIcon /> },
+  { label: 'Correo (SMTP)', path: '/smtp-settings', icon: <MailOutlineIcon /> },
+  { label: 'Parámetros de la app', path: '/app-settings', icon: <SettingsIcon /> },
+  { label: 'Base de conocimiento (IA)', path: '/knowledge-base', icon: <PsychologyIcon /> },
+];
+
+/** Pedido explícito del usuario: agrupar Auditoría de accesos y Consumo de IA en un submenú "Auditoría". */
+const AUDIT_SECTION_ITEMS = [
   { label: 'Auditoría de accesos', path: '/audit', icon: <HistoryIcon /> },
+  { label: 'Consumo de IA', path: '/ai-consumption', icon: <SmartToyIcon />, requiresConfig: true },
 ];
 
 /**
@@ -75,17 +95,94 @@ const NAV_ITEMS = [
  * actualizan seguido (Enfermedades, Estudios, Tipos de Implantes,
  * Cirugías) sin tener que entrar a Catálogos/Parámetros y buscar el
  * dominio en el selector — cada link deep-linkea a esa misma pantalla
- * con ?domain= precargado.
+ * con ?domain= precargado (el path completo, con query, es lo que
+ * NavSection compara contra location.pathname + location.search).
  */
-const SYSTEM_TABLES = [
-  { label: 'Enfermedades', domain: 'CONDITION_CATALOG', icon: <MonitorHeartIcon /> },
-  { label: 'Medicamentos', domain: 'MEDICATION', icon: <MedicationIcon /> },
-  { label: 'Alérgenos', domain: 'ALLERGEN', icon: <ReportProblemIcon /> },
-  { label: 'Indicadores de estudios', domain: 'LAB_INDICATOR', icon: <ScienceIcon /> },
-  { label: 'Tipos de implantes', domain: 'IMPLANT_TYPE', icon: <MemoryIcon /> },
-  { label: 'Cirugías', domain: 'SURGERY_CATALOG', icon: <HealingIcon /> },
-  { label: 'Tipos de tratamiento', domain: 'TREATMENT_TYPE', icon: <VaccinesIcon /> },
+const SYSTEM_TABLES_ITEMS = [
+  { label: 'Enfermedades', path: '/catalogs-admin?domain=CONDITION_CATALOG', icon: <MonitorHeartIcon /> },
+  { label: 'Medicamentos', path: '/catalogs-admin?domain=MEDICATION', icon: <MedicationIcon /> },
+  { label: 'Alérgenos', path: '/catalogs-admin?domain=ALLERGEN', icon: <ReportProblemIcon /> },
+  { label: 'Indicadores de estudios', path: '/catalogs-admin?domain=LAB_INDICATOR', icon: <ScienceIcon /> },
+  { label: 'Tipos de implantes', path: '/catalogs-admin?domain=IMPLANT_TYPE', icon: <MemoryIcon /> },
+  { label: 'Cirugías', path: '/catalogs-admin?domain=SURGERY_CATALOG', icon: <HealingIcon /> },
+  { label: 'Tipos de tratamiento', path: '/catalogs-admin?domain=TREATMENT_TYPE', icon: <VaccinesIcon /> },
 ];
+
+/** Pedido explícito del usuario: mismo criterio colapsable que Configuración/Auditoría. */
+const ADMIN_SECTION_ITEMS = [
+  { label: 'Empresas', path: '/tenants', icon: <BusinessIcon />, requiresConfig: true },
+  { label: 'Planes de asistencia', path: '/assistance-plans', icon: <CardMembershipIcon />, requiresConfig: true },
+  { label: 'Operadores', path: '/operators', icon: <SupervisorAccountIcon />, requiresOperators: true },
+  { label: 'Preguntas del asistente (Estructurado)', path: '/interview-questions', icon: <ChecklistIcon />, requiresConfig: true },
+  { label: 'Info de destinos (salud/seguridad)', path: '/destination-health-info', icon: <PublicIcon />, requiresConfig: true },
+  { label: 'Prestadores (prepagas)', path: '/healthcare-providers', icon: <LocalPharmacyIcon />, requiresConfig: true },
+  { label: 'Obras sociales', path: '/healthcare-social-security', icon: <VolunteerActivismIcon />, requiresConfig: true },
+  { label: 'Consentimientos (pruebas)', path: '/test-consents', icon: <WarningIcon color="warning" />, requiresConfig: true },
+];
+
+interface NavSectionItem {
+  label: string;
+  path: string;
+  icon: ReactNode;
+  requiresConfig?: boolean;
+  requiresOperators?: boolean;
+}
+
+/**
+ * Submenú colapsable — arranca abierto si la ruta activa es una de sus
+ * hijas (para no esconder dónde estás parado), cerrado en cualquier
+ * otro caso. `currentPath` se compara contra pathname+search para que
+ * los links con query string (Tablas Sistema) también puedan marcarse
+ * como seleccionados.
+ */
+function NavSection({
+  label,
+  icon,
+  items,
+  currentPath,
+  canManageConfig,
+  canManageOperators,
+}: {
+  label: string;
+  icon: ReactNode;
+  items: NavSectionItem[];
+  currentPath: string;
+  canManageConfig: boolean | undefined;
+  canManageOperators: boolean | undefined;
+}) {
+  const visibleItems = items.filter(
+    (item) => (!item.requiresConfig || canManageConfig) && (!item.requiresOperators || canManageOperators),
+  );
+  const [open, setOpen] = useState(() => visibleItems.some((item) => item.path === currentPath));
+
+  if (visibleItems.length === 0) return null;
+
+  return (
+    <>
+      <ListItemButton onClick={() => setOpen((v) => !v)}>
+        <ListItemIcon>{icon}</ListItemIcon>
+        <ListItemText primary={label} />
+        {open ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+      </ListItemButton>
+      <Collapse in={open} timeout="auto" unmountOnExit>
+        <List component="div" disablePadding>
+          {visibleItems.map((item) => (
+            <ListItemButton
+              key={item.path}
+              component={RouterLink}
+              to={item.path}
+              selected={currentPath === item.path}
+              sx={{ pl: 4 }}
+            >
+              <ListItemIcon>{item.icon}</ListItemIcon>
+              <ListItemText primary={item.label} />
+            </ListItemButton>
+          ))}
+        </List>
+      </Collapse>
+    </>
+  );
+}
 
 export function AppLayout() {
   const [open, setOpen] = useState(true);
@@ -94,10 +191,13 @@ export function AppLayout() {
   const { logout, claims } = useAuth();
 
   const showAdminSection = claims?.canManageConfig || claims?.canManageOperators;
+  // NavSection compara path completo (con query) para que Tablas
+  // Sistema (?domain=...) también pueda marcarse como seleccionado.
+  const fullPath = location.pathname + location.search;
 
   const drawerContent = (
     <List>
-      {NAV_ITEMS.map((item) => (
+      {NAV_ITEMS.filter((item) => !item.requiresConfig || claims?.canManageConfig).map((item) => (
         <ListItemButton
           key={item.path}
           component={RouterLink}
@@ -112,191 +212,42 @@ export function AppLayout() {
       {showAdminSection && (
         <>
           <Divider sx={{ my: 1 }} />
-          <ListSubheader>Tablas Sistema</ListSubheader>
-          {SYSTEM_TABLES.map((t) => (
-            <ListItemButton
-              key={t.domain}
-              component={RouterLink}
-              to={`/catalogs-admin?domain=${t.domain}`}
-              selected={location.pathname === '/catalogs-admin' && location.search === `?domain=${t.domain}`}
-            >
-              <ListItemIcon>{t.icon}</ListItemIcon>
-              <ListItemText primary={t.label} />
-            </ListItemButton>
-          ))}
-
-          <Divider sx={{ my: 1 }} />
-          <ListSubheader>Administración</ListSubheader>
-          {claims?.canManageConfig && (
-            <ListItemButton
-              component={RouterLink}
-              to="/tenants"
-              selected={location.pathname === '/tenants'}
-            >
-              <ListItemIcon>
-                <BusinessIcon />
-              </ListItemIcon>
-              <ListItemText primary="Empresas" />
-            </ListItemButton>
-          )}
-          {claims?.canManageConfig && (
-            <ListItemButton
-              component={RouterLink}
-              to="/assistance-plans"
-              selected={location.pathname === '/assistance-plans'}
-            >
-              <ListItemIcon>
-                <CardMembershipIcon />
-              </ListItemIcon>
-              <ListItemText primary="Planes de asistencia" />
-            </ListItemButton>
-          )}
-          {claims?.canManageOperators && (
-            <ListItemButton
-              component={RouterLink}
-              to="/operators"
-              selected={location.pathname === '/operators'}
-            >
-              <ListItemIcon>
-                <SupervisorAccountIcon />
-              </ListItemIcon>
-              <ListItemText primary="Operadores" />
-            </ListItemButton>
-          )}
-          {claims?.canManageConfig && (
-            <ListItemButton
-              component={RouterLink}
-              to="/catalogs-admin"
-              selected={location.pathname === '/catalogs-admin'}
-            >
-              <ListItemIcon>
-                <TuneIcon />
-              </ListItemIcon>
-              <ListItemText primary="Catálogos / Parámetros" />
-            </ListItemButton>
-          )}
-          {claims?.canManageConfig && (
-            <ListItemButton
-              component={RouterLink}
-              to="/ai-consumption"
-              selected={location.pathname === '/ai-consumption'}
-            >
-              <ListItemIcon>
-                <SmartToyIcon />
-              </ListItemIcon>
-              <ListItemText primary="Consumo de IA" />
-            </ListItemButton>
-          )}
-          {claims?.canManageConfig && (
-            <ListItemButton
-              component={RouterLink}
-              to="/smtp-settings"
-              selected={location.pathname === '/smtp-settings'}
-            >
-              <ListItemIcon>
-                <MailOutlineIcon />
-              </ListItemIcon>
-              <ListItemText primary="Correo (SMTP)" />
-            </ListItemButton>
-          )}
-          {claims?.canManageConfig && (
-            <ListItemButton
-              component={RouterLink}
-              to="/app-settings"
-              selected={location.pathname === '/app-settings'}
-            >
-              <ListItemIcon>
-                <SettingsIcon />
-              </ListItemIcon>
-              <ListItemText primary="Parámetros de la app" />
-            </ListItemButton>
-          )}
-          {claims?.canManageConfig && (
-            <ListItemButton
-              component={RouterLink}
-              to="/knowledge-base"
-              selected={location.pathname === '/knowledge-base'}
-            >
-              <ListItemIcon>
-                <PsychologyIcon />
-              </ListItemIcon>
-              <ListItemText primary="Base de conocimiento (IA)" />
-            </ListItemButton>
-          )}
-          {claims?.canManageConfig && (
-            <ListItemButton
-              component={RouterLink}
-              to="/interview-questions"
-              selected={location.pathname === '/interview-questions'}
-            >
-              <ListItemIcon>
-                <ChecklistIcon />
-              </ListItemIcon>
-              <ListItemText primary="Preguntas del asistente (Estructurado)" />
-            </ListItemButton>
-          )}
-          {claims?.canManageConfig && (
-            <ListItemButton
-              component={RouterLink}
-              to="/destination-health-info"
-              selected={location.pathname === '/destination-health-info'}
-            >
-              <ListItemIcon>
-                <PublicIcon />
-              </ListItemIcon>
-              <ListItemText primary="Info de destinos (salud/seguridad)" />
-            </ListItemButton>
-          )}
-          {claims?.canManageConfig && (
-            <ListItemButton
-              component={RouterLink}
-              to="/travelers-without-coverage"
-              selected={location.pathname === '/travelers-without-coverage'}
-            >
-              <ListItemIcon>
-                <PersonOffIcon />
-              </ListItemIcon>
-              <ListItemText primary="Usuarios sin cobertura" />
-            </ListItemButton>
-          )}
-          {claims?.canManageConfig && (
-            <ListItemButton
-              component={RouterLink}
-              to="/healthcare-providers"
-              selected={location.pathname === '/healthcare-providers'}
-            >
-              <ListItemIcon>
-                <LocalPharmacyIcon />
-              </ListItemIcon>
-              <ListItemText primary="Prestadores (prepagas)" />
-            </ListItemButton>
-          )}
-          {claims?.canManageConfig && (
-            <ListItemButton
-              component={RouterLink}
-              to="/healthcare-social-security"
-              selected={location.pathname === '/healthcare-social-security'}
-            >
-              <ListItemIcon>
-                <VolunteerActivismIcon />
-              </ListItemIcon>
-              <ListItemText primary="Obras sociales" />
-            </ListItemButton>
-          )}
-          {claims?.canManageConfig && (
-            <ListItemButton
-              component={RouterLink}
-              to="/test-consents"
-              selected={location.pathname === '/test-consents'}
-            >
-              <ListItemIcon>
-                <WarningIcon color="warning" />
-              </ListItemIcon>
-              <ListItemText primary="Consentimientos (pruebas)" />
-            </ListItemButton>
-          )}
+          <NavSection
+            label="Tablas Sistema"
+            icon={<TuneIcon />}
+            items={SYSTEM_TABLES_ITEMS}
+            currentPath={fullPath}
+            canManageConfig={claims?.canManageConfig}
+            canManageOperators={claims?.canManageOperators}
+          />
+          <NavSection
+            label="Administración"
+            icon={<BusinessIcon />}
+            items={ADMIN_SECTION_ITEMS}
+            currentPath={fullPath}
+            canManageConfig={claims?.canManageConfig}
+            canManageOperators={claims?.canManageOperators}
+          />
         </>
       )}
+
+      <Divider sx={{ my: 1 }} />
+      <NavSection
+        label="Configuración"
+        icon={<SettingsIcon />}
+        items={CONFIG_SECTION_ITEMS}
+        currentPath={fullPath}
+        canManageConfig={claims?.canManageConfig}
+        canManageOperators={claims?.canManageOperators}
+      />
+      <NavSection
+        label="Auditoría"
+        icon={<HistoryIcon />}
+        items={AUDIT_SECTION_ITEMS}
+        currentPath={fullPath}
+        canManageConfig={claims?.canManageConfig}
+        canManageOperators={claims?.canManageOperators}
+      />
 
       <Divider sx={{ my: 1 }} />
       <ListItemButton onClick={() => logout()}>

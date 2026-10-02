@@ -24,6 +24,7 @@ import {
 } from './emergency-share-token.guard';
 import { buildSharedProfile } from './shared-profile.helper';
 import { SubmitShareNoteDto } from './dto/submit-share-note.dto';
+import { CLINICAL_DOCUMENTS_DIR } from '@modules/clinical/patient-document-file.controller';
 
 interface SubmitNoteRow {
   ok: boolean;
@@ -121,6 +122,59 @@ export class PublicSharesController {
   }
 
   /**
+   * Pedido explícito del usuario: el médico que entra por QR/link
+   * también tiene que poder abrir los análisis/radiografías/estudios
+   * subidos por el viajero — mismo mecanismo de las dos GUCs de arriba.
+   * A diferencia de PatientDocumentFileController.getFile() (bajo JWT,
+   * donde RLS por sí sola alcanza), acá se agrega a mano
+   * "AND person_id = $2": el token de emergencia solo prueba acceso a
+   * SU persona, nunca a cualquier documentId que alguien pruebe a mano
+   * (RLS lo dejaría pasar igual si el document_id existe, da lo mismo
+   * de qué persona — este chequeo extra evita esa enumeración).
+   */
+  @Throttle({ default: { ttl: 60_000, limit: 20 } })
+  @UseGuards(EmergencyShareTokenGuard)
+  @Get(':token/documents/:documentId/file')
+  async getDocumentFile(
+    @Req() request: ShareRequest,
+    @Param('documentId') documentId: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    const { personId, scope } = request.shareContext;
+    if (!scope.includes('documents')) {
+      throw new NotFoundException('Documento no encontrado');
+    }
+
+    const row = await this.txManager.runInTransaction(async (queryRunner) => {
+      await queryRunner.query(
+        `SELECT set_config('app.emergency_token_active', 'true', true)`,
+      );
+      await queryRunner.query(
+        `SELECT set_config('app.emergency_token_person_id', $1, true)`,
+        [personId],
+      );
+      const [doc] = await queryRunner.query(
+        `SELECT file_name_storage, mime_type, core.decrypt_pii(file_name_original) AS file_name_original
+         FROM clinical.documents
+         WHERE id = $1 AND person_id = $2 AND show_on_emergency = TRUE AND deleted_at IS NULL`,
+        [documentId, personId],
+      );
+      return doc;
+    });
+
+    if (!row) {
+      throw new NotFoundException('Documento no encontrado');
+    }
+
+    res.setHeader('Content-Type', row.mime_type);
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${encodeURIComponent(row.file_name_original ?? row.file_name_storage)}"`,
+    );
+    res.sendFile(row.file_name_storage, { root: CLINICAL_DOCUMENTS_DIR });
+  }
+
+  /**
    * Nota anónima del médico, sin registro. Valida el token de nuevo
    * (independiente del GET — puede llamarse después de haber leído, o
    * directamente) porque requiere 'submit_note' en el scope, algo que
@@ -136,7 +190,7 @@ export class PublicSharesController {
     const [result]: SubmitNoteRow[] = await this.txManager.runInTransaction(
       (queryRunner) =>
         queryRunner.query(
-          `SELECT * FROM emergency.submit_anonymous_share_note($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          `SELECT * FROM emergency.submit_anonymous_share_note($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
           [
             token,
             dto.accessorName,
@@ -147,6 +201,11 @@ export class PublicSharesController {
             dto.treatment ?? null,
             dto.notes ?? null,
             request.ip,
+            dto.diagnosedConditionName ?? null,
+            dto.diagnosedConditionIcd10 ?? null,
+            dto.prescribedMedicationName ?? null,
+            dto.prescribedMedicationDose ?? null,
+            dto.prescribedMedicationFrequency ?? null,
           ],
         ),
     );

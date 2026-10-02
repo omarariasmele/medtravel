@@ -43,8 +43,16 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
         'code': _codeController.text.trim(),
       });
       if (!mounted) return;
-      // Esto hace que el redirect de router.dart deje pasar a "/" solo.
       await context.read<AuthState>().refreshEmailVerified();
+      // Bug real reportado en vivo: "dice sí verificado pero no salió
+      // de la pantalla" — redirect (router.dart) solo evita ENTRAR a
+      // una ruta inválida, no saca de una que sigue siendo válida.
+      // /verify-email deja de exigirse pero nada empujaba la
+      // navegación — antes esto quedaba tapado porque el router se
+      // reconstruía enseguida por otro motivo (ver bug del titileo,
+      // main.dart) y por accidente volvía a "/" (initialLocation). Acá
+      // hace falta el go() explícito.
+      if (mounted) context.go('/');
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = dioErrorMessage(e, context.tr('verifyEmail.invalidCodeError')));

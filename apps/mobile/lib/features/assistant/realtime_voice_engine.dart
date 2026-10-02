@@ -132,6 +132,7 @@ class RealtimeProposalEvent {
 class RealtimeVoiceEngine {
   RealtimeVoiceEngine({
     this.structuredModel = false,
+    this.sessionEndpoint,
     this.onAssistantTranscriptDelta,
     this.onAssistantTurnDone,
     this.onUserTranscript,
@@ -155,6 +156,9 @@ class RealtimeVoiceEngine {
   /// preguntas de ai.interview_questions en vez de la charla libre de
   /// Clásico (ver AIService.createStructuredRealtimeSession).
   final bool structuredModel;
+  /// Ver el comentario en connect() — si viene, pisa el endpoint que
+  /// estructuredModel elegiría solo (uso: asistente de ayuda de la app).
+  final String? sessionEndpoint;
 
   /// Texto de la IA a medida que lo va diciendo (para mostrar el
   /// burbujeo en pantalla) — no dispara guardado, solo UI.
@@ -257,11 +261,21 @@ class RealtimeVoiceEngine {
     final myGeneration = ++_generation;
     _responseActive = false;
     _pendingResponseCreate = false;
+    _firstResponseStarted = false;
     try {
       debugPrint('[REALTIME] connect: pidiendo sesión efímera...');
-      final sessionEndpoint = structuredModel
-          ? '/me/health-assistant/realtime-session-structured'
-          : '/me/health-assistant/realtime-session';
+      // Pedido explícito del usuario: el asistente de ayuda de uso de
+      // la app pasa a este mismo motor (antes usaba speech_to_text —
+      // mismo motivo por el que Clásico se migró en su momento: se
+      // colgaba/no reconocía). sessionEndpoint override le permite
+      // pedir la sesión efímera a un endpoint distinto sin duplicar
+      // TODO el resto de esta clase (conexión WebRTC, reconexión,
+      // audio) — si no se pasa, se mantiene el comportamiento de
+      // siempre (Clásico/Estructurado del asistente de salud).
+      final sessionEndpoint = this.sessionEndpoint ??
+          (structuredModel
+              ? '/me/health-assistant/realtime-session-structured'
+              : '/me/health-assistant/realtime-session');
       final sessionResponse = await withRealtimeNetworkRetry(
         () => ApiClient.instance.dio.post(sessionEndpoint),
       );
@@ -376,6 +390,7 @@ class RealtimeVoiceEngine {
         debugPrint('[REALTIME] onDataChannelState: $state');
         if (state == RTCDataChannelState.RTCDataChannelOpen) {
           _requestResponseCreate();
+          _scheduleFirstResponseWatchdog(myGeneration);
         }
       };
 
@@ -422,7 +437,18 @@ class RealtimeVoiceEngine {
       onConnected?.call();
     } catch (e) {
       debugPrint('[REALTIME] connect: excepción $e');
-      onError?.call(kRealtimeFriendlyErrorMessage);
+      // Excepción puntual a "nunca mostrar el texto crudo de una
+      // excepción" (ver kRealtimeFriendlyErrorMessage arriba): llegar
+      // al límite de uso gratuito de IA (backend responde 402, ver
+      // AIService.userFreeUsageExceeded) no es un error de conexión —
+      // mostrar el genérico ahí llevaría al viajero a reintentar en
+      // vano creyendo que es un corte de red.
+      if (e is DioException && e.response?.statusCode == 402) {
+        final message = e.response?.data is Map ? e.response?.data['message'] : null;
+        onError?.call(message is String && message.isNotEmpty ? message : kRealtimeFriendlyErrorMessage);
+      } else {
+        onError?.call(kRealtimeFriendlyErrorMessage);
+      }
     } finally {
       _connecting = false;
     }
@@ -471,6 +497,38 @@ class RealtimeVoiceEngine {
   /// manda mientras hay una en curso.
   bool _responseActive = false;
   bool _pendingResponseCreate = false;
+
+  /// Bug real reportado en vivo: "se quedó colgado y no dice nada" —
+  /// confirmado con logcat que el canal de datos abrió bien
+  /// (onDataChannelState: Open, dispara el response.create inicial),
+  /// pero justo en ese instante la conexión ICE entró en un ciclo de
+  /// Disconnected/Connected (corte de red breve, ver el comentario de
+  /// onConnectionState más abajo) que se tragó ese mensaje puntual sin
+  /// avisar — WebRTC no expone un ack de datachannel.send(), así que no
+  /// hay forma de saber en el momento si se perdió. Sin nada del otro
+  /// lado (ni audio, ni texto, ni error), la sesión queda "conectada"
+  /// para siempre pero muda. true apenas llega CUALQUIER evento por el
+  /// canal de datos — si después de pedir el primer response.create no
+  /// llegó ni uno solo, es la señal de que ese pedido se perdió.
+  bool _firstResponseStarted = false;
+
+  /// Ver el comentario de _firstResponseStarted arriba. Si a los pocos
+  /// segundos de abrir el canal no llegó ni un evento, reintenta pedir
+  /// que arranque la charla — reseteando _responseActive/
+  /// _pendingResponseCreate primero, porque _requestResponseCreate ya
+  /// los había marcado como "en curso" al mandar el primer pedido (que
+  /// se perdió), y si no se resetean acá el reintento se saltearía
+  /// pensando que ya hay una respuesta activa.
+  void _scheduleFirstResponseWatchdog(int generation) {
+    Future.delayed(const Duration(seconds: 8), () {
+      if (generation != _generation || _firstResponseStarted) return;
+      if (_dc?.state != RTCDataChannelState.RTCDataChannelOpen) return;
+      debugPrint('[REALTIME] watchdog: no llegó ningún evento a los 8s de abrir el canal — reintentando response.create');
+      _responseActive = false;
+      _pendingResponseCreate = false;
+      _requestResponseCreate();
+    });
+  }
 
   /// Bug real reportado en vivo: cargando varios antecedentes seguidos
   /// (ej. 3 medicamentos + 3 enfermedades en una sola charla), la
@@ -595,6 +653,10 @@ class RealtimeVoiceEngine {
       return;
     }
     final type = event['type'] as String?;
+    // Ver el comentario de _firstResponseStarted más arriba: cualquier
+    // evento real (no importa cuál) prueba que el canal de datos está
+    // vivo en los dos sentidos — desarma el watchdog del primer pedido.
+    _firstResponseStarted = true;
     // Log de TODOS los eventos, no solo los que manejamos — sin esto
     // no hay forma de confirmar los nombres exactos de evento que
     // realmente manda esta sesión (bugs reportados en vivo de
@@ -812,7 +874,7 @@ class RealtimeVoiceEngine {
         final proposalType = args['proposalType'] as String;
         final confidence = ((args['confidence'] as num?) ?? 0.8).toDouble();
         final data = (args['data'] as Map).cast<String, dynamic>();
-        await withRealtimeNetworkRetry(() => ApiClient.instance.dio.post(
+        final response = await withRealtimeNetworkRetry(() => ApiClient.instance.dio.post(
           '/me/health-assistant/realtime-proposals',
           data: {
             'conversationId': _conversationId,
@@ -821,6 +883,22 @@ class RealtimeVoiceEngine {
             'data': data,
           },
         ));
+        // Bug real reportado en vivo (demo por voz): el backend puede
+        // responder 200 con "applied": false (ej. la IA mandó un
+        // proposal sin un nombre válido — ver InvalidCatalogNameError,
+        // se rechaza ese antecedente puntual en vez de tirar un 500) —
+        // antes esto se leía como éxito solo porque el POST no tiró
+        // excepción, mostrando un "✓" falso mientras no se guardaba
+        // nada de verdad. Ahora se revisa el cuerpo de la respuesta.
+        final applied = response.data is Map ? response.data['applied'] : null;
+        if (applied == false) {
+          final reason = response.data is Map ? response.data['reason'] as String? : null;
+          _acknowledgeFunctionCall(
+            callId,
+            '{"saved": false, "error": "${(reason ?? 'no se pudo guardar ese antecedente').replaceAll('"', "'")}"}',
+          );
+          return;
+        }
         onProposal?.call(RealtimeProposalEvent(
           proposalType: proposalType,
           confidence: confidence,

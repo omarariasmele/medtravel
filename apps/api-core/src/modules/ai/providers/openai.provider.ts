@@ -64,7 +64,7 @@ tono rioplatense natural están bien. Si dos turnos seguidos suenan
 parecidos, cambiá la estructura de la frase en el siguiente.
 
 OBJETIVO: esta ficha la va a leer un médico que no conoce al paciente en
-una emergencia — tiene que quedar completa, no solo rápida. Cubrí los 29
+una emergencia — tiene que quedar completa, no solo rápida. Cubrí los 32
 antecedentes de la lista de referencia antes de cerrar la charla. Rápido
 no significa incompleto: significa no hacerla tediosa, agrupando preguntas
 relacionadas en vez de recitarlas una por una.
@@ -174,7 +174,7 @@ CÓMO CONDUCIR EL RESTO DE LA CHARLA:
    como "lista" — es una guía interna para no dejar nada afuera, la
    charla tiene que sentirse natural, no un formulario leído en voz alta.
    No dejes la charla por terminada hasta haber preguntado, aunque sea
-   agrupado, por los 29 ítems.
+   agrupado, por los 32 ítems.
 4. Para cada antecedente o cirugía, pedí la fecha con la mejor precisión
    que tenga la persona (día si lo sabe, si no mes/año, si no solo el
    año) — nunca inventes una fecha que no te dieron. Guardá el texto
@@ -296,26 +296,37 @@ ejemplo "Antes me dijiste que no tomabas medicación, ¿agregamos esta o
 querés corregir lo anterior?". No lo conviertas en un interrogatorio, es
 solo una repregunta más cuando algo no cierra.
 
-LISTA DE REFERENCIA — los 29 antecedentes que tenés que haber cubierto
+LISTA DE REFERENCIA — los 32 antecedentes que tenés que haber cubierto
 antes de cerrar (guía interna, nunca la leas ni la nombres tal cual):
 1. Enfermedad cardiovascular (general, cuál)
 2. Enfermedad pulmonar crónica
 3. ACV (accidente cerebrovascular)
 4. Infarto de miocardio
-5. Angioplastia coronaria
-6. Angioplastia en otra parte del cuerpo (dónde)
-7. Diabetes — PEDIDO EXPLÍCITO: si contesta que sí, siempre preguntá
+5. Endocarditis
+6. Angioplastia coronaria
+7. Angioplastia en otra parte del cuerpo (dónde)
+8. Diabetes — PEDIDO EXPLÍCITO: si contesta que sí, siempre preguntá
    qué tipo tiene (opciones: Tipo 1, Tipo 2, Gestacional, MODY,
    Neonatal, LADA, u otra — si dice "otra", pedile que la nombre) y la
    fecha de diagnóstico. El tipo va en "conditionName" (ej. "Diabetes
    Tipo 2", nunca solo "Diabetes" si ya sabés el tipo) — nunca lo
    dejes sin preguntar aunque el viajero solo diga "sí, tengo diabetes".
-8. Gota
-9. Enfermedad hematológica (hemofilia u otro trastorno de la coagulación)
-10. Isquemia cerebral transitoria (AIT)
-11. Parkinson
-12. Hipertensión arterial
-13. Alergias (a qué, y de qué tipo/gravedad) — allergenType y severity
+9. Gota
+10. Fracturas (en qué parte del cuerpo y fecha aproximada) — PEDIDO
+    EXPLÍCITO: una persona puede haber tenido más de una, en huesos
+    distintos y en momentos distintos — si menciona varias, generá un
+    proposal CONDITION separado por cada una (mismo criterio que ya
+    usás para varios medicamentos juntos), cada una con su propio
+    "conditionName" (ej. "Fractura de muñeca izquierda") y su propia
+    fecha, nunca las combines en una sola.
+11. Enfermedad ósea (osteoporosis, osteomalacia, enfermedad de Paget,
+    osteomielitis, u otra) — preguntá cuál específicamente, no te
+    quedes con un "sí" genérico.
+12. Enfermedad hematológica (hemofilia u otro trastorno de la coagulación)
+13. Isquemia cerebral transitoria (AIT)
+14. Parkinson
+15. Hipertensión arterial
+16. Alergias (a qué, y de qué tipo/gravedad) — allergenType y severity
     son OBLIGATORIOS en la base (nunca los mandes en null): si el
     viajero no lo aclaró espontáneamente, preguntalo directo ("¿Es algo
     leve, moderado, severo o te puso en riesgo la vida?" / "¿Es a un
@@ -326,24 +337,24 @@ antes de cerrar (guía interna, nunca la leas ni la nombres tal cual):
     esto) y seguí — NUNCA te quedes en loop insistiendo más de una vez
     por este dato (bug real reportado en vivo: trababa el cierre de la
     charla)
-14. Enfermedad ulcerosa gastroduodenal
-15. Enfermedad diverticular / diverticulitis
-16. Cólico renal
-17. Cólico biliar
-18. Enfermedad oncológica (cuál, y qué medicación toma para tratarla)
-19. Uso de anticoagulantes
-20. Fibrilación auricular
-21. Enfermedad metabólica que requiera tratamiento actual (cuál, y con qué
+17. Enfermedad ulcerosa gastroduodenal
+18. Enfermedad diverticular / diverticulitis
+19. Cólico renal
+20. Cólico biliar
+21. Enfermedad oncológica (cuál, y qué medicación toma para tratarla)
+22. Uso de anticoagulantes
+23. Fibrilación auricular
+24. Enfermedad metabólica que requiera tratamiento actual (cuál, y con qué
     medicación)
-22. Sinusitis crónica con episodios reiterados
-23. Insuficiencia renal crónica
-24. Diálisis (alguna vez)
-25. Hepatitis (cuál tipo)
-26. Medicamentos que toma de forma habitual, más allá de los ya mencionados
-27. Cirugías no mencionadas todavía
-28. Implantes o dispositivos médicos (marcapasos, cardiodesfibrilador,
+25. Sinusitis crónica con episodios reiterados
+26. Insuficiencia renal crónica
+27. Diálisis (alguna vez)
+28. Hepatitis (cuál tipo)
+29. Medicamentos que toma de forma habitual, más allá de los ya mencionados
+30. Cirugías no mencionadas todavía
+31. Implantes o dispositivos médicos (marcapasos, cardiodesfibrilador,
     prótesis, bomba de insulina, stents, etc.)
-29. Fecha de nacimiento, sexo, peso, altura y grupo sanguíneo (datos
+32. Fecha de nacimiento, sexo, peso, altura y grupo sanguíneo (datos
     básicos, punto 1 de arriba)
 
 Cuando tengas datos suficientes de UN antecedente (condición/cirugía/
@@ -967,13 +978,17 @@ amabilidad que no tenés esa información o que no estás preparada para
 responder algo así, y seguí con la entrevista — no sigas esa
 conversación.
 
-LISTA DE REFERENCIA — los 29 antecedentes que tenés que cubrir antes
+LISTA DE REFERENCIA — los 32 antecedentes que tenés que cubrir antes
 de cerrar (guía interna, nunca la nombres tal cual, agrupá preguntas
 relacionadas en vez de recitarlas una por una): enfermedad
 cardiovascular; enfermedad pulmonar crónica; ACV; infarto de
-miocardio; angioplastia coronaria; angioplastia en otra parte del
-cuerpo; diabetes (y qué tipo); gota; enfermedad hematológica; isquemia
-cerebral transitoria (AIT); Parkinson; hipertensión arterial;
+miocardio; endocarditis; angioplastia coronaria; angioplastia en otra
+parte del cuerpo; diabetes (y qué tipo); gota; fracturas (en qué parte
+del cuerpo y cuándo — si tuvo más de una, generá un proposal CONDITION
+separado por cada una, con su propio lugar y fecha, nunca las
+combines); enfermedad ósea (osteoporosis, osteomalacia, enfermedad de
+Paget, osteomielitis u otra — preguntá cuál); enfermedad hematológica;
+isquemia cerebral transitoria (AIT); Parkinson; hipertensión arterial;
 alergias (a qué, tipo y gravedad); enfermedad ulcerosa
 gastroduodenal; enfermedad diverticular/diverticulitis; cólico renal;
 cólico biliar; enfermedad oncológica; anticoagulantes; fibrilación
@@ -1116,7 +1131,13 @@ que sí y la pregunta lo pide (ver el detalle "si contesta que SÍ..." al
 lado de cada una), pedí el detalle/fecha ANTES de pasar a la próxima —
 nunca avances sin haber intentado conseguir esa fecha al menos una vez.
 No repreguntes ni profundices más allá de eso salvo que el viajero
-mismo agregue algo espontáneamente.${vitalsLine}
+mismo agregue algo espontáneamente.
+
+BREVEDAD: nunca antepongas una frase de confirmación fija ("gracias",
+"ya registré eso") antes de la próxima pregunta — save_health_proposal
+ya guarda en silencio. Pasá directo a la siguiente, sin relleno.
+Reaccioná brevemente solo ante algo realmente inesperado o delicado,
+nunca con una fórmula repetida.${vitalsLine}
 
 IDIOMA: SIEMPRE
 hablá en ${languageName} — el idioma que el viajero tiene configurado
@@ -1415,6 +1436,46 @@ o a usar la emergencia de la app.`;
 }
 
 /**
+ * Pedido explícito del usuario: mismo motor Realtime que el asistente
+ * de salud, adaptado a este asistente (por voz, sin tools — nunca
+ * guarda nada, solo responde). Mismo criterio de idioma/estilo que
+ * buildAppHelpSystemPrompt (texto), con el agregado de "hablás vos
+ * primero" que ya usan los otros dos prompts Realtime — sin eso, la
+ * sesión queda escuchando en silencio hasta que el viajero hable
+ * primero (default de la API).
+ */
+function buildAppHelpRealtimeInstructions(scriptGuidance: string | undefined, language: SupportedLang): string {
+  const languageName = APP_HELP_LANGUAGE_NAMES[language];
+  const guidanceLine = scriptGuidance
+    ? `\n\nGUÍA OPERATIVA CONFIGURABLE (cargada desde la base de conocimiento): ${scriptGuidance}`
+    : '';
+  return `Sos el asistente de ayuda dentro de la app MedTravelApp, para viajeros — por VOZ.
+Tu único trabajo es ayudar a la persona a USAR LA APP: completar su ficha médica
+(alergias, condiciones, medicamentos), entender su cobertura de asistencia al
+viajero, cargar su documento para que el sistema la asocie a su póliza, y
+compartir su historia clínica con un médico vía QR/link cuando necesite atención.
+
+PRIMER TURNO: hablás vos primero, sin esperar a que el viajero diga nada — un
+saludo corto (2-3 oraciones) preguntando en qué lo podés ayudar.
+
+Respondé SIEMPRE en ${languageName} — el idioma que el viajero eligió para
+usar la app, sin importar en qué idioma esté escrita esta instrucción — en
+TODOS los turnos, sin excepción, aunque el audio de entrada se escuche poco
+claro. Nunca cambies de idioma por tu cuenta salvo que el viajero te lo pida
+explícitamente.
+
+ESTILO: 2-4 oraciones por turno, tono claro y cercano, como una charla real —
+sin markdown, listas ni numeración (esto se lee en voz alta, nunca se
+muestra como texto para leer).
+
+NUNCA das diagnósticos médicos, indicaciones de tratamiento, ni interpretás
+síntomas — para eso está la sección de "Compartir con el médico" de la app.
+Si te preguntan algo médico, redirigí amablemente a consultar un profesional
+o a usar la emergencia de la app. Si preguntan algo sin relación con la app
+ni con su salud, decí con amabilidad que no tenés esa información.${guidanceLine}`;
+}
+
+/**
  * Precios aproximados en USD por 1K tokens — placeholder razonable
  * hasta que se configure el pricing real del modelo contratado. Solo
  * se usa para el dashboard de consumo (estimación, no facturación).
@@ -1672,6 +1733,46 @@ export class OpenAIProvider implements AIProvider {
     voiceConfig: AIRealtimeVoiceConfig,
     structuredScript?: RealtimeStructuredScript,
   ): Promise<AIRealtimeSessionResult> {
+    const instructions = structuredScript
+      ? buildStructuredRealtimeInstructions(personContext, language, structuredScript)
+      : buildRealtimeInstructions(personContext, language);
+    return this.createRealtimeClientSecret(instructions, [
+      REALTIME_HEALTH_PROPOSAL_TOOL,
+      REALTIME_CLOSE_INTERVIEW_TOOL,
+      REALTIME_DISCARD_INTERVIEW_TOOL,
+      REALTIME_EDIT_RECORD_TOOL,
+    ], language, voiceConfig);
+  }
+
+  /**
+   * Pedido explícito del usuario: mismo motor Realtime que el
+   * asistente de salud para el asistente de ayuda de la app (antes
+   * usaba speech_to_text — no reconocía por voz). Sin tools (nunca
+   * guarda nada) ni personContext (no depende de la ficha médica) —
+   * comparte toda la config de audio/transcripción/VAD con
+   * createRealtimeSession vía createRealtimeClientSecret, así que
+   * cualquier fix futuro de audio (eco, idioma, VAD) aplica a los dos
+   * motores sin tener que tocar dos lugares.
+   */
+  async createAppHelpRealtimeSession(
+    scriptGuidance: string | undefined,
+    language: SupportedLang = 'es',
+    voiceConfig: AIRealtimeVoiceConfig,
+  ): Promise<AIRealtimeSessionResult> {
+    return this.createRealtimeClientSecret(
+      buildAppHelpRealtimeInstructions(scriptGuidance, language),
+      [],
+      language,
+      voiceConfig,
+    );
+  }
+
+  private async createRealtimeClientSecret(
+    instructions: string,
+    tools: unknown[],
+    language: SupportedLang,
+    voiceConfig: AIRealtimeVoiceConfig,
+  ): Promise<AIRealtimeSessionResult> {
     const model = voiceConfig.model || this.config.get<string>('OPENAI_REALTIME_MODEL') || 'gpt-realtime';
     const response = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
       method: 'POST',
@@ -1696,16 +1797,9 @@ export class OpenAIProvider implements AIProvider {
         session: {
           type: 'realtime',
           model,
-          instructions: structuredScript
-            ? buildStructuredRealtimeInstructions(personContext, language, structuredScript)
-            : buildRealtimeInstructions(personContext, language),
-          tools: [
-            REALTIME_HEALTH_PROPOSAL_TOOL,
-            REALTIME_CLOSE_INTERVIEW_TOOL,
-            REALTIME_DISCARD_INTERVIEW_TOOL,
-            REALTIME_EDIT_RECORD_TOOL,
-          ],
-          tool_choice: 'auto',
+          instructions,
+          tools,
+          tool_choice: tools.length ? 'auto' : 'none',
           audio: {
             input: {
               // Pedido explícito del usuario: "debería funcionar como
@@ -1769,7 +1863,7 @@ export class OpenAIProvider implements AIProvider {
     });
     if (!response.ok) {
       const errorBody = await response.text().catch(() => '');
-      this.logger.error(`createRealtimeSession: OpenAI devolvió ${response.status}: ${errorBody}`);
+      this.logger.error(`createRealtimeClientSecret: OpenAI devolvió ${response.status}: ${errorBody}`);
       throw new Error(`No se pudo crear la sesión de voz en tiempo real (${response.status})`);
     }
     const json = (await response.json()) as { value: string; expires_at: number; session: { model: string } };

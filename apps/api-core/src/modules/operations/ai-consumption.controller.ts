@@ -26,6 +26,11 @@ interface TopUserRow {
   cost_usd: string;
 }
 
+interface YearSpendRow {
+  person_id: string;
+  spent: string;
+}
+
 interface DailyTrendRow {
   day: string;
   cost_usd: string;
@@ -78,19 +83,59 @@ export class AiConsumptionController {
     };
   }
 
+  /**
+   * Pedido explícito del usuario: en esta misma pantalla, mostrar
+   * también el límite gratuito de IA de cada viajero (gasto de ESTE
+   * año calendario — mismo criterio que AIService.userFreeUsageExceeded,
+   * no la ventana de "días" de arriba, que es solo para el ranking de
+   * actividad reciente), lo que lleva gastado, y el saldo. `extraCreditUsd`
+   * queda en 0 a propósito — todavía no existe forma de recargar
+   * crédito por usuario, pero el campo ya está para cuando se sume esa
+   * función sin tener que volver a tocar esta pantalla.
+   */
   @Get('top-users')
   async topUsers(@Query('days') days?: string) {
-    const rows: TopUserRow[] = await this.txManager.runInTransaction((queryRunner) =>
-      queryRunner.query(`SELECT * FROM ai.get_top_users($1, $2)`, [Number(days) || 30, 20]),
-    );
-    return rows.map((r) => ({
-      personId: r.person_id,
-      fullName: `${r.first_name} ${r.last_name}`.trim(),
-      messageCount: Number(r.message_count),
-      tokensInput: Number(r.tokens_input),
-      tokensOutput: Number(r.tokens_output),
-      costUsd: Number(r.cost_usd),
-    }));
+    return this.txManager.runInTransaction(async (queryRunner) => {
+      const rows: TopUserRow[] = await queryRunner.query(
+        `SELECT * FROM ai.get_top_users($1, $2)`,
+        [Number(days) || 30, 20],
+      );
+
+      const [limitSetting] = await queryRunner.query(
+        `SELECT setting_value FROM params.app_settings WHERE setting_key = 'ai.free_usage_limit_usd'`,
+      );
+      const limitUsd = Number(limitSetting?.setting_value) || 5;
+
+      const personIds = rows.map((r) => r.person_id);
+      const yearSpendByPerson: Record<string, number> = {};
+      if (personIds.length) {
+        const yearRows: YearSpendRow[] = await queryRunner.query(
+          `SELECT person_id, COALESCE(SUM(estimated_cost_usd), 0) AS spent
+           FROM ai.messages
+           WHERE person_id = ANY($1) AND created_at >= date_trunc('year', now())
+           GROUP BY person_id`,
+          [personIds],
+        );
+        for (const r of yearRows) yearSpendByPerson[r.person_id] = Number(r.spent);
+      }
+
+      return rows.map((r) => {
+        const spentThisYearUsd = yearSpendByPerson[r.person_id] ?? 0;
+        const extraCreditUsd = 0;
+        return {
+          personId: r.person_id,
+          fullName: `${r.first_name} ${r.last_name}`.trim(),
+          messageCount: Number(r.message_count),
+          tokensInput: Number(r.tokens_input),
+          tokensOutput: Number(r.tokens_output),
+          costUsd: Number(r.cost_usd),
+          limitUsd,
+          extraCreditUsd,
+          spentThisYearUsd,
+          balanceUsd: Math.max(0, limitUsd + extraCreditUsd - spentThisYearUsd),
+        };
+      });
+    });
   }
 
   @Get('daily-trend')

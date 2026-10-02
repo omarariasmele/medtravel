@@ -562,6 +562,22 @@ export interface AIProvider {
     voiceConfig: AIRealtimeVoiceConfig,
     structuredScript?: RealtimeStructuredScript,
   ): Promise<AIRealtimeSessionResult>;
+
+  /**
+   * Pedido explícito del usuario: "el asistente de ayuda de la app no
+   * recibe lo que uno le consulta por voz" — hasta acá ese asistente
+   * usaba speech_to_text (reconocimiento en el propio teléfono), el
+   * mismo motor que Clásico tenía ANTES de migrar a Realtime por el
+   * mismo motivo (se colgaba/no reconocía, ver comentario histórico en
+   * pubspec.yaml). Mismo motor Realtime que health-assistant, sin
+   * ninguna tool (este asistente nunca guarda nada, solo responde) ni
+   * personContext (no depende de la ficha médica).
+   */
+  createAppHelpRealtimeSession(
+    scriptGuidance: string | undefined,
+    language: SupportedLang | undefined,
+    voiceConfig: AIRealtimeVoiceConfig,
+  ): Promise<AIRealtimeSessionResult>;
 }
 
 /**

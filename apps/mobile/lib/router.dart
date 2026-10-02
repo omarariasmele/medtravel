@@ -9,7 +9,9 @@ import 'features/home/home_shell.dart';
 import 'features/profile/profile_screen.dart';
 import 'features/health/health_records_screen.dart';
 import 'features/share/share_screen.dart';
-import 'features/assistant/assistant_screen.dart';
+// ignore: unused_import
+import 'features/assistant/assistant_screen.dart'; // motor de voz viejo (speech_to_text) — plan de contingencia, ver el comentario en /assistant más abajo
+import 'features/assistant/realtime_app_help_screen.dart';
 // ignore: unused_import
 import 'features/assistant/health_assistant_screen.dart'; // motor de texto viejo — plan de contingencia, ver el comentario en /health-assistant más abajo
 import 'features/assistant/realtime_health_assistant_screen.dart';
@@ -50,7 +52,13 @@ GoRouter buildRouter(AuthState authState) {
       GoRoute(path: '/profile', builder: (context, state) => const ProfileScreen()),
       GoRoute(path: '/health', builder: (context, state) => const HealthRecordsScreen()),
       GoRoute(path: '/share', builder: (context, state) => const ShareScreen()),
-      GoRoute(path: '/assistant', builder: (context, state) => const AssistantScreen()),
+      // Pedido explícito del usuario: "migrar a voz en tiempo real" —
+      // mismo motor Realtime que Clásico/Estructurado (ver
+      // realtime_app_help_screen.dart). assistant_screen.dart (el motor
+      // viejo, speech_to_text) queda sin tocar como plan de contingencia:
+      // si hace falta volver atrás, alcanza con cambiar este `builder` a
+      // `const AssistantScreen()`, sin tocar nada más.
+      GoRoute(path: '/assistant', builder: (context, state) => const RealtimeAppHelpScreen()),
       GoRoute(
         path: '/health-assistant',
         builder: (context, state) {

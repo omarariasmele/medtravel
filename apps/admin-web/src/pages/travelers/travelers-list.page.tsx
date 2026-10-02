@@ -62,9 +62,17 @@ export function TravelersListPage() {
   const statusCatalog = useCatalog('MEMBER_STATUS');
   const countryCatalog = useCatalog('COUNTRY');
 
+  // Pedido explícito del usuario: al dar de baja un member (ej. Pedro
+  // Artigas en Assist Card), quería que desapareciera de esta lista —
+  // antes quedaba visible con el chip "Inactivo" para siempre, mezclado
+  // con los viajeros activos.
+  const inactiveStatusIds = new Set(
+    (statusCatalog.data ?? []).filter((s) => s.code === 'INACTIVE').map((s) => s.id),
+  );
   const normalizedSearch = search.trim().toLowerCase();
   const filteredRows = (overviewQuery.data ?? []).filter(
     (r) =>
+      !inactiveStatusIds.has(r.statusId) &&
       (!tenantFilter || r.tenantId === tenantFilter) &&
       (!countryFilter || r.countryResidenceId === countryFilter) &&
       (!normalizedSearch ||

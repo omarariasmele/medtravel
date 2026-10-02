@@ -27,6 +27,7 @@ import { PartnerRecordsPage } from './pages/partner-records/partner-records.page
 import { AssistancePlansPage } from './pages/assistance-plans/assistance-plans.page';
 import { PublicSharePage } from './pages/public-share/public-share.page';
 import { ProfessionalRegistrationPage } from './pages/professional-registration/professional-registration.page';
+import { ProfessionalPortalPage } from './pages/professional-portal/professional-portal.page';
 import { SharePreviewPage } from './pages/share-preview/share-preview.page';
 import { AiConsumptionPage } from './pages/ai-consumption/ai-consumption.page';
 import { TravelersWithoutCoveragePage } from './pages/travelers-without-coverage/travelers-without-coverage.page';
@@ -42,6 +43,7 @@ function App() {
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/public/shares/:token" element={<PublicSharePage />} />
       <Route path="/professional-registration" element={<ProfessionalRegistrationPage />} />
+      <Route path="/professional-portal" element={<ProfessionalPortalPage />} />
       <Route path="/share-preview/:personId" element={<SharePreviewPage />} />
 
       <Route element={<ProtectedRoute />}>

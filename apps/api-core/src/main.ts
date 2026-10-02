@@ -4,7 +4,10 @@
 // esto, ConfigModule.forRoot() ya no llega a tiempo para esos casos.
 import 'dotenv/config';
 
+import { join } from 'path';
+
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { ConfigService } from '@nestjs/config';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
@@ -40,10 +43,22 @@ function scheduleTripStatusSync(app: Awaited<ReturnType<typeof NestFactory.creat
 }
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const config = app.get(ConfigService);
 
   app.use(helmet());
+  // Fase 1 — logos de marca por empresa: a diferencia de uploads/avatars
+  // (dato personal, servido solo autenticado vía patient-photo.controller),
+  // esto NO es sensible — se sirve público a propósito, para que
+  // Image.network (mobile, sin poder mandar headers de auth) y el
+  // <img> del panel lo muestren sin volver a autenticar cada request.
+  app.useStaticAssets(join(process.cwd(), 'uploads', 'tenant-brands'), {
+    prefix: '/uploads/tenant-brands',
+    // helmet() de arriba pone Cross-Origin-Resource-Policy: same-origin
+    // por defecto — bloquearía el <img> de admin-web (puerto/origen
+    // distinto al de la API) aunque el archivo sea público a propósito.
+    setHeaders: (res) => res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin'),
+  });
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   const extraOrigins =
     config

@@ -7,6 +7,13 @@
       "runtimeArgs": ["run", "dev"],
       "cwd": "apps/admin-web",
       "port": 5173
+    },
+    {
+      "name": "api-core",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "start:dev"],
+      "cwd": "apps/api-core",
+      "port": 3000
     }
   ]
 }

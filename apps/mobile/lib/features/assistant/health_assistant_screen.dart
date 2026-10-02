@@ -11,9 +11,25 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import '../../core/api_client.dart';
 import '../../core/auth_state.dart';
+import '../../core/tenant_config_service.dart';
 import '../../core/text_normalize.dart';
 import '../../l10n/app_strings.dart';
+import '../health/documents_screen.dart' show showUploadDocumentsPrompt;
 import 'health_form_screen.dart';
+
+/// Bug real reportado en vivo: "acabamos de ingresar los datos... la
+/// pantalla de Salud dice que no hay datos ingresados" — HomeShell
+/// mantiene "Inicio" y "Salud" vivos a la vez en un IndexedStack (ver
+/// health_records_screen.dart::_reloadKey); si el asistente se abrió
+/// desde Inicio, solo Inicio se enteraba de que volvió (cada pantalla
+/// solo se refrescaba a sí misma) — "Salud" seguía mostrando lo que
+/// había cargado una sola vez, al arrancar la app. Este contador
+/// global se incrementa acá, en el ÚNICO lugar por el que pasan las
+/// tres formas de cargar datos (Clásico/Estructurado/Formulario) sin
+/// importar desde qué pantalla se haya abierto — cualquier pantalla
+/// que escuche esto (ver health_records_screen.dart) se entera de que
+/// hay datos nuevos, la haya abierto ella o no.
+final ValueNotifier<int> healthDataVersion = ValueNotifier(0);
 
 /// Pedido explícito del usuario: TRES formas de cargar la Ficha de
 /// Salud — Clásico (charla libre), Estructurado (pregunta por
@@ -21,6 +37,13 @@ import 'health_form_screen.dart';
 /// point desde donde antes se navegaba directo a HealthAssistantScreen
 /// (home y "Salud"), ahora pasa primero por este selector.
 Future<void> openHealthAssistant(BuildContext context) async {
+  // Fase 1 — pedido explícito del usuario: Formulario queda siempre
+  // habilitado (es una de las 3 funciones base), Clásico y Estructurado
+  // se configuran por empresa.
+  final tenantConfig = context.read<TenantConfigService>();
+  final classicEnabled = tenantConfig.isFeatureEnabled('health.classic_mode_enabled');
+  final structuredEnabled = tenantConfig.isFeatureEnabled('health.structured_mode_enabled');
+
   final choice = await showModalBottomSheet<String>(
     context: context,
     builder: (ctx) => SafeArea(
@@ -32,16 +55,40 @@ Future<void> openHealthAssistant(BuildContext context) async {
             child: Text(context.tr('assistant.chooserTitle')),
           ),
           ListTile(
-            leading: const Icon(Icons.chat_outlined),
-            title: Text(context.tr('assistant.classicTitle')),
+            leading: Icon(Icons.chat_outlined, color: classicEnabled ? null : Theme.of(ctx).disabledColor),
+            title: Text(
+              context.tr('assistant.classicTitle'),
+              style: classicEnabled ? null : TextStyle(color: Theme.of(ctx).disabledColor),
+            ),
             subtitle: Text(context.tr('assistant.classicSubtitle')),
-            onTap: () => Navigator.of(ctx).pop('classic'),
+            trailing: classicEnabled ? null : const Icon(Icons.lock_outline),
+            onTap: () {
+              if (!classicEnabled) {
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                  SnackBar(content: Text(ctx.tr('home.featureLockedByTenant'))),
+                );
+                return;
+              }
+              Navigator.of(ctx).pop('classic');
+            },
           ),
           ListTile(
-            leading: const Icon(Icons.checklist_outlined),
-            title: Text(context.tr('assistant.structuredTitle')),
+            leading: Icon(Icons.checklist_outlined, color: structuredEnabled ? null : Theme.of(ctx).disabledColor),
+            title: Text(
+              context.tr('assistant.structuredTitle'),
+              style: structuredEnabled ? null : TextStyle(color: Theme.of(ctx).disabledColor),
+            ),
             subtitle: Text(context.tr('assistant.structuredSubtitle')),
-            onTap: () => Navigator.of(ctx).pop('structured'),
+            trailing: structuredEnabled ? null : const Icon(Icons.lock_outline),
+            onTap: () {
+              if (!structuredEnabled) {
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                  SnackBar(content: Text(ctx.tr('home.featureLockedByTenant'))),
+                );
+                return;
+              }
+              Navigator.of(ctx).pop('structured');
+            },
           ),
           ListTile(
             leading: const Icon(Icons.article_outlined),
@@ -66,9 +113,18 @@ Future<void> openHealthAssistant(BuildContext context) async {
     // temprano (antes de que hubiera nada nuevo para mostrar) y nunca
     // se repetía al cerrar.
     await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const HealthFormScreen()));
+    healthDataVersion.value++;
+    if (context.mounted) await showUploadDocumentsPrompt(context);
     return;
   }
   await context.push('/health-assistant', extra: {'structuredModel': choice == 'structured'});
+  healthDataVersion.value++;
+  // Pedido explícito del usuario: al terminar de cargar datos de salud
+  // por cualquiera de las tres formas (Clásico/Estructurado/Formulario),
+  // avisar que también se pueden subir estudios/análisis/radiografías —
+  // este único punto cubre las tres, sea texto o voz, porque todas
+  // pasan por acá antes de volver a la pantalla que las abrió.
+  if (context.mounted) await showUploadDocumentsPrompt(context);
 }
 
 /// Mensaje de error puntual del backend (ej. "Ya tenés cargada esa

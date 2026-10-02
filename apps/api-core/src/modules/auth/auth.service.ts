@@ -25,6 +25,14 @@ import { RequestPasswordResetDto } from './dto/request-password-reset.dto';
 import { ConfirmPasswordResetDto } from './dto/confirm-password-reset.dto';
 import { JwtPayload } from './jwt-payload.interface';
 
+/**
+ * Fase 3 — versión del texto de consentimiento que se le muestra al
+ * viajero en el registro (ver register_screen.dart). Cambiarla no
+ * reconsulta a los ya registrados retroactivamente — eso es un
+ * PATCH /me/consents de re-consentimiento, no construido todavía.
+ */
+const REGISTRATION_CONSENT_TEXT_VERSION = 'v1';
+
 interface LoginCredentialsRow {
   user_id: string;
   person_id: string;
@@ -88,7 +96,7 @@ export class AuthService {
     try {
       result = await this.txManager.runInTransaction(async (queryRunner) => {
         const rows = await queryRunner.query(
-          `SELECT * FROM core.register_person_and_user($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          `SELECT * FROM core.register_person_and_user($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
           [
             dto.firstName,
             dto.lastName,
@@ -99,6 +107,8 @@ export class AuthService {
             dto.preferredLang ?? 'es',
             dto.phone ?? null,
             phoneBlindIndex,
+            dto.consentAccepted,
+            REGISTRATION_CONSENT_TEXT_VERSION,
           ],
         );
         const registered = rows[0];
@@ -442,6 +452,21 @@ export class AuthService {
       }
     }
 
+    // Fase de acceso restringido del profesional — se resuelve siempre
+    // (sin importar clientApp), igual que operatorContext arriba, para
+    // que professional-scope.middleware.ts pueda restringir la sesión
+    // apenas exista una fila en clinical.healthcare_professionals para
+    // este user_id, sea cual sea el cliente por el que entró.
+    const professional = await this.txManager.runInTransaction<
+      { id: string } | undefined
+    >(async (queryRunner) => {
+      const rows = await queryRunner.query(
+        `SELECT id FROM clinical.healthcare_professionals WHERE user_id = $1`,
+        [credentials.user_id],
+      );
+      return rows[0];
+    });
+
     return this.issueTokenPair(
       {
         userId: credentials.user_id,
@@ -453,6 +478,7 @@ export class AuthService {
         canAccessMedical: operatorContext?.can_access_medical,
         canEditClinicalData: operatorContext?.can_edit_clinical_data,
         email: dto.email,
+        professionalId: professional?.id,
       },
       undefined,
       deviceFingerprint,
@@ -784,6 +810,7 @@ export class AuthService {
       canAccessMedical?: boolean;
       canEditClinicalData?: boolean;
       email?: string;
+      professionalId?: string;
     },
     existingSessionId?: string,
     deviceFingerprint?: string,
@@ -800,6 +827,7 @@ export class AuthService {
       canAccessMedical: claims.canAccessMedical,
       canEditClinicalData: claims.canEditClinicalData,
       email: claims.email,
+      professionalId: claims.professionalId,
       sessionId,
     };
 

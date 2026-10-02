@@ -99,6 +99,16 @@ export class MeProfileController {
     @CurrentContext() context: RequestContextData,
     @Body() dto: UpdateProfileDto,
   ) {
+    // Pedido explícito del usuario: el grupo sanguíneo dejó de poder
+    // editarse desde Perfil — se cargaba ahí como un dato fijo más
+    // (igual que sexo), pero eso lo hacía terminar seteado ANTES de
+    // pasar nunca por el asistente de salud (Clásico/Estructurado/
+    // Formulario ya lo piden como parte de "Datos básicos"), y
+    // getPersonContext lo cuenta como antecedente clínico real — un
+    // viajero de prueba recién registrado, sin tocar el asistente,
+    // podía quedar marcado como "ya tiene ficha cargada" con una fecha
+    // inventada por la IA (bug real reportado en vivo). UpdateProfileDto
+    // ya no tiene bloodTypeId — se ignora cualquier valor que llegue acá.
     await this.txManager.runInTransaction((queryRunner) =>
       queryRunner.query(
         `UPDATE core.persons SET
@@ -107,8 +117,7 @@ export class MeProfileController {
            birth_date     = COALESCE($4, birth_date),
            preferred_lang = COALESCE($5, preferred_lang),
            timezone       = COALESCE($6, timezone),
-           gender_id      = COALESCE($7, gender_id),
-           blood_type_id  = COALESCE($8, blood_type_id)
+           gender_id      = COALESCE($7, gender_id)
          WHERE id = $1`,
         [
           context.personId,
@@ -118,7 +127,6 @@ export class MeProfileController {
           dto.preferredLang ?? null,
           dto.timezone ?? null,
           dto.genderId ?? null,
-          dto.bloodTypeId ?? null,
         ],
       ),
     );

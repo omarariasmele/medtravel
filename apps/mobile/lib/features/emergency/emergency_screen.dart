@@ -228,7 +228,8 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
       builder: (ctx) => Padding(
         padding: EdgeInsets.only(left: 16, right: 16, top: 16, bottom: MediaQuery.of(ctx).viewInsets.bottom + 16),
         child: StatefulBuilder(
-          builder: (ctx, setSheetState) => Column(
+          builder: (ctx, setSheetState) => SingleChildScrollView(
+            child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -286,6 +287,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                     : () => Navigator.of(ctx).pop(true),
               ),
             ],
+            ),
           ),
         ),
       ),

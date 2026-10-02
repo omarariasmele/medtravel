@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+version: 1.1.0+3
 
 environment:
   sdk: ^3.12.2
@@ -67,6 +67,17 @@ dependencies:
   image_picker: ^1.1.2
   # Recortar/centrar la foto de perfil antes de subirla
   image_cropper: ^8.1.0
+  # Subir estudios/análisis/radiografías (PDF/JPG/PNG) desde el
+  # almacenamiento del teléfono — a diferencia de image_picker (solo
+  # cámara/galería de fotos), permite elegir un PDF ya guardado.
+  file_picker: ^8.1.7
+  # Pedido explícito del usuario: "ver" un documento (abrirlo con el
+  # visor nativo del celular) tiene que ser una acción DISTINTA de
+  # "compartir" (share_plus abre el selector de apps para ENVIARLO a
+  # otro lado, no para mirarlo). open_filex delega en la app asociada
+  # al tipo de archivo (visor de PDF, galería de fotos), sin sumar un
+  # renderer propio.
+  open_filex: ^4.7.0
   speech_to_text: ^7.4.0
   flutter_tts: ^4.2.5
   audioplayers: ^6.8.1

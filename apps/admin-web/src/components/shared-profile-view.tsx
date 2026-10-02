@@ -1,4 +1,6 @@
-import { Alert, Avatar, Box, Card, CardContent, Chip, Grid, Typography } from '@mui/material';
+import { Alert, Avatar, Box, Button, Card, CardContent, Chip, Grid, List, ListItem, ListItemIcon, ListItemText, Typography } from '@mui/material';
+import PictureAsPdfOutlinedIcon from '@mui/icons-material/PictureAsPdfOutlined';
+import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
 
 import { labelFor, useCatalog } from '../lib/catalog-hooks';
 
@@ -48,6 +50,14 @@ export interface SharedProfileData {
     phone: string | null;
     relationship: string | null;
     relationshipId: string | null;
+  }>;
+  documents: Array<{
+    id: string;
+    documentTypeId: string;
+    title: string | null;
+    documentDate: string | null;
+    mimeType: string;
+    fileNameOriginal: string;
   }>;
 }
 
@@ -117,6 +127,9 @@ const UI_STRINGS: Record<SupportedLanguage, Record<string, string>> = {
     noConditions: 'Sin otras enfermedades registradas.',
     contactsTitle: 'Contactos de emergencia',
     noContacts: 'Sin contactos de emergencia registrados.',
+    documentsTitle: 'Documentos',
+    noDocuments: 'Sin análisis, radiografías ni estudios cargados.',
+    viewDocument: 'Ver',
   },
   en: {
     noData: 'No data available.',
@@ -155,6 +168,9 @@ const UI_STRINGS: Record<SupportedLanguage, Record<string, string>> = {
     noConditions: 'No other conditions on record.',
     contactsTitle: 'Emergency contacts',
     noContacts: 'No emergency contacts on record.',
+    documentsTitle: 'Documents',
+    noDocuments: 'No lab tests, X-rays, or studies on record.',
+    viewDocument: 'View',
   },
   pt: {
     noData: 'Sem dados disponíveis.',
@@ -193,6 +209,9 @@ const UI_STRINGS: Record<SupportedLanguage, Record<string, string>> = {
     noConditions: 'Sem outras doenças registradas.',
     contactsTitle: 'Contatos de emergência',
     noContacts: 'Sem contatos de emergência registrados.',
+    documentsTitle: 'Documentos',
+    noDocuments: 'Sem exames, radiografias ou estudos enviados.',
+    viewDocument: 'Ver',
   },
   fr: {
     noData: 'Aucune donnée disponible.',
@@ -231,6 +250,9 @@ const UI_STRINGS: Record<SupportedLanguage, Record<string, string>> = {
     noConditions: 'Aucune autre maladie enregistrée.',
     contactsTitle: "Contacts d'urgence",
     noContacts: "Aucun contact d'urgence enregistré.",
+    documentsTitle: 'Documents',
+    noDocuments: 'Aucune analyse, radiographie ou examen enregistré.',
+    viewDocument: 'Voir',
   },
 };
 
@@ -255,11 +277,14 @@ export function SharedProfileView({
   data,
   photoUrl,
   language = 'es',
+  onViewDocument,
 }: {
   data: SharedProfileData;
   /** URL ya resuelta (objectURL de un fetch autenticado/con token) — este componente nunca decide de dónde sale, cada página lo trae con su propio cliente (JWT vs token público). */
   photoUrl?: string | null;
   language?: string;
+  /** Mismo criterio que photoUrl: quien haga el fetch (JWT vs token público) lo decide la página, este componente solo dispara el pedido cuando el médico toca "Ver". */
+  onViewDocument?: (doc: SharedProfileData['documents'][number]) => void;
 }) {
   const lang: SupportedLanguage = (['es', 'en', 'pt', 'fr'] as const).includes(language as SupportedLanguage)
     ? (language as SupportedLanguage)
@@ -267,7 +292,7 @@ export function SharedProfileView({
   const t = (key: string) => UI_STRINGS[lang][key] ?? UI_STRINGS.es[key];
   const dateLocale = DATE_LOCALE[lang];
 
-  const { person, membership, allergies, conditions, medications, surgeries, implants, treatments, vitals, emergencyContacts } = data;
+  const { person, membership, allergies, conditions, medications, surgeries, implants, treatments, vitals, emergencyContacts, documents } = data;
   const genderCatalog = useCatalog('GENDER');
   const bloodTypeCatalog = useCatalog('BLOOD_TYPE');
   const severityCatalog = useCatalog('REACTION_SEVERITY');
@@ -479,7 +504,7 @@ export function SharedProfileView({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card sx={{ mb: 2 }}>
         <CardContent>
           <Typography variant="subtitle1" gutterBottom>{t('contactsTitle')}</Typography>
           {emergencyContacts.length === 0 ? (
@@ -491,6 +516,35 @@ export function SharedProfileView({
                 {c.phone ? ` — ${c.phone}` : ''}
               </Typography>
             ))
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent>
+          <Typography variant="subtitle1" gutterBottom>{t('documentsTitle')}</Typography>
+          {documents.length === 0 ? (
+            <Typography variant="body2" color="text.secondary">{t('noDocuments')}</Typography>
+          ) : (
+            <List dense disablePadding>
+              {documents.map((doc) => (
+                <ListItem
+                  key={doc.id}
+                  disableGutters
+                  secondaryAction={
+                    <Button size="small" onClick={() => onViewDocument?.(doc)}>{t('viewDocument')}</Button>
+                  }
+                >
+                  <ListItemIcon sx={{ minWidth: 36 }}>
+                    {doc.mimeType === 'application/pdf' ? <PictureAsPdfOutlinedIcon fontSize="small" /> : <ImageOutlinedIcon fontSize="small" />}
+                  </ListItemIcon>
+                  <ListItemText
+                    primary={doc.title?.trim() || doc.fileNameOriginal}
+                    secondary={doc.documentDate ? new Date(doc.documentDate).toLocaleDateString(dateLocale, { timeZone: 'UTC' }) : undefined}
+                  />
+                </ListItem>
+              ))}
+            </List>
           )}
         </CardContent>
       </Card>

@@ -1,0 +1,65 @@
+# Caddyfile de PRODUCCION — corre en el servidor (192.168.0.150), no en
+# la PC de desarrollo. Diferencia clave con el Caddyfile de desarrollo
+# (.claude/Caddyfile): el panel ya NO se sirve por reverse_proxy al dev
+# server de Vite (:5173) sino como archivos estaticos ya compilados.
+# Vite dev no esta hecho para atender trafico publico y ademas se caia
+# unos segundos cada vez que se guardaba un archivo.
+#
+# Los puertos publicos son los MISMOS que ya usaba la PC (8443 API /
+# 8444 panel) a proposito: asi no hay que tocar CORS_ORIGIN, ni los
+# links de QR/compartir ya emitidos, ni la resolucion de URL de la API
+# del panel (apps/admin-web/src/lib/api-client.ts, que asume :8443
+# cuando el host es el dominio publico). Mover la app de maquina no
+# deberia requerir tocar codigo.
+
+{
+	http_port 8100
+	https_port 8443
+	auto_https disable_redirects
+	skip_install_trust
+}
+
+# Certificado real de Let's Encrypt para medtravelapp.oysgroup.com.ar,
+# emitido con win-acme por validacion dns-01 manual (el puerto 80 esta
+# ocupado por otro forward, asi que Caddy no puede sacarlo solo y caia
+# a su CA interna -> ERR_CERT_AUTHORITY_INVALID en el navegador).
+# Vence 2026-12-09. Al renovar hay que regenerar estos .pem desde el
+# .pfx, copiarlos a C:\MedTravelApp\certs y recargar Caddy
+# (`nssm restart MedTravelApp-Caddy`), si no sigue sirviendo el viejo.
+(letsencrypt) {
+	tls "C:/MedTravelApp/certs/medtravelapp-fullchain.pem" "C:/MedTravelApp/certs/medtravelapp-key.pem" {
+		curves x25519 secp256r1 secp384r1
+	}
+}
+
+# ── API publica ───────────────────────────────────────────────────
+medtravelapp.oysgroup.com.ar:8443 {
+	import letsencrypt
+	reverse_proxy localhost:3000
+}
+
+# ── Panel admin-web publico (estatico) ────────────────────────────
+medtravelapp.oysgroup.com.ar:8444 {
+	import letsencrypt
+	root * C:/MedTravelApp/apps/admin-web/dist
+	encode gzip
+	# SPA: cualquier ruta que no sea un archivo real cae en index.html,
+	# si no un F5 dentro del panel (ej. /tenants/123) daria 404.
+	try_files {path} /index.html
+	file_server
+}
+
+# ── Acceso por LAN, sin TLS ───────────────────────────────────────
+# Sirve para probar TODO desde otra PC de la oficina ANTES de mover el
+# port forwarding del router al servidor. Por IP el certificado no
+# valida (esta emitido para el dominio), por eso estos dos van en HTTP
+# plano y solo son alcanzables dentro de la red.
+:8100 {
+	reverse_proxy localhost:3000
+}
+
+:8101 {
+	root * C:/MedTravelApp/apps/admin-web/dist
+	try_files {path} /index.html
+	file_server
+}

@@ -281,11 +281,29 @@ class _RealtimeHealthAssistantScreenState extends State<RealtimeHealthAssistantS
         return;
       }
       setState(() => _state = _ConnectionState.saved);
-      // Bug real reportado en vivo: "salió el mensaje pero no volvió
-      // al menú principal" — se queda 2s mostrando la confirmación
-      // (para que se alcance a leer) y recién ahí vuelve sola, sin
-      // necesitar un toque más.
-      await Future.delayed(const Duration(seconds: 2));
+      // Bug real reportado en vivo: "no avisó que iba a grabar la
+      // información... solo envió la pantalla de si tenía algún
+      // estudio para subir" — antes esto era solo el banner verde de
+      // _StatusBanner con un cierre automático a los 2s, fácil de
+      // perderse (sobre todo viniendo de una charla por voz, con la
+      // atención puesta en escuchar, no en leer la pantalla). Ahora es
+      // un diálogo bloqueante que hay que tocar para cerrar — mismo
+      // criterio que el diálogo de dateWarnings de arriba — así el
+      // aviso de "se guardó tu información" no puede pasar inadvertido.
+      if (mounted) {
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: Text(context.tr('realtimeAssistant.savedDialogTitle')),
+            content: Text(_proposalsSaved == 1
+                ? context.tr('realtimeAssistant.savedOne')
+                : context.tr('realtimeAssistant.savedMany', params: {'count': '$_proposalsSaved'})),
+            actions: [
+              FilledButton(onPressed: () => Navigator.of(ctx).pop(), child: Text(context.tr('form.errorDialogOk'))),
+            ],
+          ),
+        );
+      }
       if (mounted) Navigator.of(context).pop();
     } catch (e) {
       debugPrint('[REALTIME] _handleCloseInterview: error guardando: $e');

@@ -26,6 +26,7 @@ import {
 import AutorenewIcon from '@mui/icons-material/Autorenew';
 
 import { apiClient } from '../../lib/api-client';
+import { apiErrorMessage } from '../../lib/api-error';
 import { usePageTitle } from '../../lib/page-title';
 import { useCatalog, labelFor } from '../../lib/catalog-hooks';
 import { PaginationFooter, usePagination } from '../../lib/pagination';
@@ -103,6 +104,15 @@ export function DestinationHealthInfoPage() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
+  // Bug real reportado en vivo: "Actualizar con IA" se queda girando y
+  // no resuelve diciendo que no hay información — en realidad SÍ
+  // resolvía (el backend tiene timeout de 20s para la búsqueda web,
+  // ver AIService.lookupDestinationHealthInfo), pero refreshMutation no
+  // tenía onError: un fallo real (la IA no encontró nada confiable, o
+  // un error de red/API key) terminaba en silencio total, el ícono
+  // volvía a la normalidad sin decir nada — indistinguible de que
+  // "seguía cargando" si no se miraba con atención.
+  const [refreshNotice, setRefreshNotice] = useState<{ severity: 'error' | 'info'; message: string } | null>(null);
 
   const listQuery = useQuery({
     queryKey: ['ai', 'destination-health-info'],
@@ -154,11 +164,26 @@ export function DestinationHealthInfoPage() {
   const refreshMutation = useMutation({
     mutationFn: async (countryId: string) => {
       setRefreshingId(countryId);
-      const { data } = await apiClient.post(`/ai/admin/destination-health-info/${countryId}/refresh`);
+      const { data } = await apiClient.post<DestinationHealthInfo>(`/ai/admin/destination-health-info/${countryId}/refresh`);
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['ai', 'destination-health-info'] });
+      const hasContent = data.vaccinations || data.healthRisks || data.securityAlerts || data.generalTips;
+      setRefreshNotice(
+        hasContent
+          ? null
+          : {
+              severity: 'info',
+              message: 'La IA no encontró información confiable y vigente para este país — probá de nuevo más tarde, o cargala a mano.',
+            },
+      );
+    },
+    onError: (err) => {
+      setRefreshNotice({
+        severity: 'error',
+        message: apiErrorMessage(err, 'No se pudo actualizar la información de este país.'),
+      });
     },
     onSettled: () => setRefreshingId(null),
   });
@@ -175,6 +200,12 @@ export function DestinationHealthInfoPage() {
           Agregar país
         </Button>
       </Box>
+
+      {refreshNotice && (
+        <Alert severity={refreshNotice.severity} onClose={() => setRefreshNotice(null)} sx={{ mb: 2 }}>
+          {refreshNotice.message}
+        </Alert>
+      )}
 
       {listQuery.isLoading && <CircularProgress />}
       {listQuery.isError && <Alert severity="error">No se pudo cargar la lista.</Alert>}

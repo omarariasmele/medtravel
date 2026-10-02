@@ -34,6 +34,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool _loadingCatalogs = true;
   String? _error;
   bool _obscurePassword = true;
+  /// Fase 3 — consentimiento explícito para que un profesional de
+  /// salud pueda cargar información clínica sobre el viajero (ver
+  /// core.person_consents, escrito por register_person_and_user).
+  bool _consentAccepted = false;
 
   List<CatalogValue> _docTypes = [];
   List<CatalogValue> _countries = [];
@@ -80,6 +84,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             docCountryId: _docCountryId!,
             phone: _phoneController.text.trim(),
             preferredLang: _preferredLang,
+            consentAccepted: _consentAccepted,
           );
     } catch (e) {
       setState(() => _error = dioErrorMessage(e, _t('register.error')));
@@ -101,7 +106,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
       _passwordController.text.length >= 8 &&
       _docTypeId != null &&
       _docNumberController.text.trim().isNotEmpty &&
-      _docCountryId != null;
+      _docCountryId != null &&
+      _consentAccepted;
 
   @override
   Widget build(BuildContext context) {
@@ -257,7 +263,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                 .toList(),
                             onChanged: (v) => setLocalState(() => _docCountryId = v),
                           ),
-                          const SizedBox(height: 20),
+                          const SizedBox(height: 12),
+                          CheckboxListTile(
+                            value: _consentAccepted,
+                            onChanged: (v) => setLocalState(() => _consentAccepted = v ?? false),
+                            controlAffinity: ListTileControlAffinity.leading,
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(_t('register.consentText'), style: const TextStyle(fontSize: 13)),
+                          ),
+                          const SizedBox(height: 8),
                           FilledButton(
                             onPressed: (_loading || !_isFormValid) ? null : _submit,
                             child: _loading

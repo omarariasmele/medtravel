@@ -28,4 +28,32 @@ export class SubmitShareNoteDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  /**
+   * Pedido explícito del usuario: si el médico detecta una enfermedad
+   * o prescribe una medicación, tiene que poder cargarla como tal —
+   * queda como clinical.conditions/medications reales (no solo texto
+   * suelto), pendiente de confirmación igual que el resto de la nota
+   * (ver emergency.claim_share_note). Todo opcional: una nota puede
+   * seguir siendo solo texto libre.
+   */
+  @IsOptional()
+  @IsString()
+  diagnosedConditionName?: string;
+
+  @IsOptional()
+  @IsString()
+  diagnosedConditionIcd10?: string;
+
+  @IsOptional()
+  @IsString()
+  prescribedMedicationName?: string;
+
+  @IsOptional()
+  @IsString()
+  prescribedMedicationDose?: string;
+
+  @IsOptional()
+  @IsString()
+  prescribedMedicationFrequency?: string;
 }

@@ -3,7 +3,6 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { TenantEntity } from './entities/tenant.entity';
 import { TenantAppVariantEntity } from './entities/tenant-app-variant.entity';
-import { TenantBrandProfileEntity } from './entities/tenant-brand-profile.entity';
 import { PersonEntity } from './entities/person.entity';
 import { ExternalIdentifierEntity } from './entities/external-identifier.entity';
 import { UserEntity } from './entities/user.entity';
@@ -29,7 +28,6 @@ import { DeleteTestTravelerController } from './delete-test-traveler.controller'
     TypeOrmModule.forFeature([
       TenantEntity,
       TenantAppVariantEntity,
-      TenantBrandProfileEntity,
       PersonEntity,
       ExternalIdentifierEntity,
       UserEntity,

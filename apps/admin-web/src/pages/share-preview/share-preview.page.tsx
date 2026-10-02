@@ -76,6 +76,14 @@ export function SharePreviewPage() {
     },
   });
 
+  /** Mismo endpoint autenticado que ya usa clinical-history.section.tsx — acá no hace falta ningún token, el operador ya tiene su propia sesión. */
+  const handleViewDocument = async (doc: SharedProfileData['documents'][number]) => {
+    const { data } = await apiClient.get(`/clinical/documents/${doc.id}/file`, { responseType: 'blob' });
+    const objectUrl = URL.createObjectURL(data);
+    window.open(objectUrl, '_blank', 'noopener');
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  };
+
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   useEffect(() => {
     if (!query.data?.person?.photoPath || !personId) {
@@ -165,7 +173,12 @@ export function SharePreviewPage() {
                 </Alert>
               )}
             </Box>
-            <SharedProfileView data={query.data} photoUrl={photoUrl} language={language ?? 'es'} />
+            <SharedProfileView
+              data={query.data}
+              photoUrl={photoUrl}
+              language={language ?? 'es'}
+              onViewDocument={handleViewDocument}
+            />
           </>
         )}
       </Container>

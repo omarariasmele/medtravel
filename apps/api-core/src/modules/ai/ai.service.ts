@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, HttpException, HttpStatus, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { QueryFailedError, QueryRunner } from 'typeorm';
 
@@ -50,7 +50,7 @@ interface HealthChatOutcome {
     data: Record<string, unknown>;
   }>;
   limitReached?:
-    'USER_DAILY' | 'PLATFORM_DAILY_BUDGET' | 'PLATFORM_MONTHLY_BUDGET';
+    'USER_DAILY' | 'PLATFORM_DAILY_BUDGET' | 'PLATFORM_MONTHLY_BUDGET' | 'USER_FREE_LIMIT';
 }
 
 /**
@@ -143,15 +143,28 @@ export class AIService {
   async getDestinationHealthInfo(
     countryId: string,
     forceRefresh = false,
+    // Pedido explícito del usuario: "no entiendo por qué tarda tanto en
+    // decir que no hay información... se puede mejorar" — antes, la
+    // falta de fila curada disparaba SIEMPRE una búsqueda web real (con
+    // IA, hasta 20s, ver el timeout de lookupDestinationHealthInfo) antes
+    // de poder devolver cualquier cosa, aunque el llamante solo quisiera
+    // saber si había datos. Con autoSearch=false se corta ahí mismo y se
+    // devuelve "no hay nada todavía" al instante (una sola consulta de
+    // tabla) — el celular usa esto para el chequeo inicial, y ofrece un
+    // botón aparte para recién ahí, a demanda, disparar la búsqueda
+    // lenta. Default true: preserva el comportamiento de siempre para
+    // cualquier otro llamante (ej. el botón "Actualizar con IA" de
+    // admin-web, que sí espera la búsqueda real).
+    autoSearch = true,
   ): Promise<{
     countryId: string;
     vaccinations: string | null;
     healthRisks: string | null;
     securityAlerts: string | null;
     generalTips: string | null;
-    source: 'manual' | 'ai_web_search';
+    source: 'manual' | 'ai_web_search' | null;
     sourceNotes: string | null;
-    updatedAt: Date;
+    updatedAt: Date | null;
   }> {
     return this.txManager.runInTransaction(async (queryRunner) => {
       if (!forceRefresh) {
@@ -168,6 +181,19 @@ export class AIService {
         if (existing && (existing.vaccinations || existing.health_risks || existing.security_alerts || existing.general_tips)) {
           return this.mapDestinationHealthInfoRow(existing);
         }
+      }
+
+      if (!autoSearch) {
+        return {
+          countryId,
+          vaccinations: null,
+          healthRisks: null,
+          securityAlerts: null,
+          generalTips: null,
+          source: null,
+          sourceNotes: null,
+          updatedAt: null,
+        };
       }
 
       if (!this.config.get<boolean>('AI_ENABLED')) {
@@ -486,6 +512,21 @@ export class AIService {
     model: string;
   }> {
     return this.txManager.runInTransaction(async (queryRunner) => {
+      // Mismo tope de consumo gratuito por usuario/año que el motor de
+      // texto (ver userFreeUsageExceeded) — se chequea ANTES de abrir
+      // la sesión de voz (que ya tiene costo propio de conexión) para
+      // no arrancar algo que se va a cortar igual.
+      if (await this.userFreeUsageExceeded(queryRunner, personId)) {
+        // 402 (no 400): así el cliente móvil puede distinguir "llegaste
+        // al límite de uso" de un error de validación genérico y
+        // mostrar el mensaje real en vez de kRealtimeFriendlyErrorMessage
+        // (ver realtime_voice_engine.dart — por diseño nunca muestra el
+        // texto crudo de una excepción, salvo este caso puntual).
+        throw new HttpException(
+          'Llegaste a tu límite de uso gratuito del asistente de IA — pronto vamos a sumar planes para ampliar el uso. No hace falta el asistente de IA para mantener tu Historial de Salud: entrá a "Salud" y usá el modo Formulario para cargar o corregir tus datos directamente.',
+          HttpStatus.PAYMENT_REQUIRED,
+        );
+      }
       const conversationId = await this.startConversation(queryRunner, personId);
       const personContext = await this.getPersonContext(queryRunner, personId);
       const language = await this.getPersonLanguage(queryRunner, personId);
@@ -531,6 +572,62 @@ export class AIService {
   }
 
   /**
+   * Pedido explícito del usuario: migrar el asistente de ayuda de uso
+   * de la app ("Asistente", /me/assistant/ask) del motor viejo
+   * (speech_to_text, que "hace la introducción pero no recibe lo que
+   * uno le consulta por voz") al mismo motor Realtime que ya usan
+   * Clásico/Estructurado — mismo mecanismo de conexión WebRTC y mismo
+   * tope de uso gratuito compartido ("tiene que cubrir todo junto"),
+   * pero SIN tools (este asistente no propone datos clínicos, sólo
+   * responde preguntas de uso de la app) y con su propio tipo de
+   * conversación (APPLICATION_HELP, ver startAppHelpConversation).
+   */
+  async createAppHelpRealtimeSession(personId: string): Promise<{
+    conversationId: string;
+    clientSecret: string;
+    expiresAt: number;
+    model: string;
+  }> {
+    return this.txManager.runInTransaction(async (queryRunner) => {
+      // Mismo tope de consumo gratuito por usuario/año que el resto de
+      // los motores de IA — ver userFreeUsageExceeded/createRealtimeSession.
+      if (await this.userFreeUsageExceeded(queryRunner, personId)) {
+        throw new HttpException(
+          'Llegaste a tu límite de uso gratuito del asistente de IA — pronto vamos a sumar planes para ampliar el uso. No hace falta el asistente de IA para mantener tu Historial de Salud: entrá a "Salud" y usá el modo Formulario para cargar o corregir tus datos directamente.',
+          HttpStatus.PAYMENT_REQUIRED,
+        );
+      }
+      const conversationId = await this.startAppHelpConversation(queryRunner, personId);
+      const guidance = await this.getAppHelpScriptGuidance(queryRunner);
+      const language = await this.getPersonLanguage(queryRunner, personId);
+      const settingsRows = await queryRunner.query(
+        `SELECT setting_key, setting_value FROM params.app_settings WHERE setting_key LIKE 'assistant.realtime_%'`,
+      );
+      const settings = Object.fromEntries(
+        settingsRows.map((r: { setting_key: string; setting_value: string }) => [r.setting_key, r.setting_value]),
+      ) as Record<string, string | undefined>;
+      const configuredVoice = settings['assistant.realtime_voice'];
+      const voice = (REALTIME_VALID_VOICES as readonly string[]).includes(configuredVoice ?? '')
+        ? configuredVoice!
+        : 'marin';
+
+      const session = await this.provider.createAppHelpRealtimeSession(guidance, language, {
+        voice,
+        model: settings['assistant.realtime_model'] ?? undefined,
+        silenceDurationMs: Number(settings['assistant.realtime_silence_duration_ms']) || 900,
+        vadThreshold: Number(settings['assistant.realtime_vad_threshold']) || 0.5,
+        prefixPaddingMs: Number(settings['assistant.realtime_prefix_padding_ms']) || 300,
+      });
+      return {
+        conversationId,
+        clientSecret: session.clientSecret,
+        expiresAt: session.expiresAt,
+        model: session.model,
+      };
+    });
+  }
+
+  /**
    * Pedido explícito del usuario: "por qué no hacemos que el
    * Estructurado pase a usar el mismo motor de voz continua que el
    * Clásico" — mismo mecanismo EXACTO de createRealtimeSession de
@@ -550,6 +647,19 @@ export class AIService {
     model: string;
   }> {
     return this.txManager.runInTransaction(async (queryRunner) => {
+      // Mismo tope de consumo gratuito por usuario/año que el resto de
+      // los motores de IA — ver userFreeUsageExceeded/createRealtimeSession.
+      if (await this.userFreeUsageExceeded(queryRunner, personId)) {
+        // 402 (no 400): así el cliente móvil puede distinguir "llegaste
+        // al límite de uso" de un error de validación genérico y
+        // mostrar el mensaje real en vez de kRealtimeFriendlyErrorMessage
+        // (ver realtime_voice_engine.dart — por diseño nunca muestra el
+        // texto crudo de una excepción, salvo este caso puntual).
+        throw new HttpException(
+          'Llegaste a tu límite de uso gratuito del asistente de IA — pronto vamos a sumar planes para ampliar el uso. No hace falta el asistente de IA para mantener tu Historial de Salud: entrá a "Salud" y usá el modo Formulario para cargar o corregir tus datos directamente.',
+          HttpStatus.PAYMENT_REQUIRED,
+        );
+      }
       const conversationId = await this.startConversation(queryRunner, personId, 'STRUCTURED');
       const personContext = await this.getPersonContext(queryRunner, personId);
       const language = await this.getPersonLanguage(queryRunner, personId);
@@ -1758,8 +1868,23 @@ export class AIService {
      * una pregunta más.
      */
     pauseRequested: boolean;
+    limitReached?: HealthChatOutcome['limitReached'];
   }> {
     return this.txManager.runInTransaction(async (queryRunner) => {
+      // Mismo tope de consumo gratuito por usuario/año que healthChat
+      // (Clásico) — ver checkLimits/userFreeUsageExceeded.
+      const limitReached = await this.checkLimits(queryRunner, personId);
+      if (limitReached) {
+        return {
+          conversationId: conversationId ?? '',
+          reply: '',
+          interviewComplete: false,
+          options: null,
+          pauseRequested: false,
+          limitReached,
+        };
+      }
+
       // Pedido explícito del usuario: "esto debería estar en cualquier
       // indicación de la ficha médica... alguien puede decir que toma
       // un medicamento desde los 10 años" — mismo criterio que el
@@ -5339,6 +5464,18 @@ export class AIService {
       return { answer: FALLBACK_ANSWER_APP_HELP, configured: false };
     }
     return this.txManager.runInTransaction(async (queryRunner) => {
+      // Mismo tope de consumo gratuito por usuario/año que el resto de
+      // los motores de IA — ver userFreeUsageExceeded. Acá no hace
+      // falta el HttpException 402 especial de los motores Realtime
+      // (este endpoint ya devuelve una respuesta de texto normal, no
+      // rompe una conexión de voz en curso).
+      if (await this.userFreeUsageExceeded(queryRunner, personId)) {
+        return {
+          answer:
+            'Llegaste a tu límite de uso gratuito del asistente de IA — pronto vamos a sumar planes para ampliar el uso.',
+          configured: true,
+        };
+      }
       // Secuencial a propósito: dos queries en paralelo (Promise.all)
       // sobre el mismo queryRunner comparten una única conexión — pg
       // no soporta dos queries concurrentes en el mismo client (tira
@@ -5396,6 +5533,26 @@ export class AIService {
        VALUES ($1, 'HEALTH_DATA_CAPTURE', $2)
        RETURNING id`,
       [personId, intakeModel],
+    );
+    return row.id;
+  }
+
+  /**
+   * Igual que startConversation pero para el asistente de ayuda de uso
+   * de la app — conversation_type='APPLICATION_HELP' (válido según el
+   * CHECK de ai.conversations). No reusa startConversation porque ese
+   * método hardcodea 'HEALTH_DATA_CAPTURE' a propósito (ver su
+   * comentario) y esta conversación no es de captura de datos de salud
+   * — intake_model queda en su default 'CLASSIC', que no afecta nada
+   * porque ai.get_intake_model_comparison() sólo mira conversaciones
+   * HEALTH_DATA_CAPTURE.
+   */
+  private async startAppHelpConversation(queryRunner: QueryRunner, personId: string): Promise<string> {
+    const [row] = await queryRunner.query(
+      `INSERT INTO ai.conversations (person_id, conversation_type)
+       VALUES ($1, 'APPLICATION_HELP')
+       RETURNING id`,
+      [personId],
     );
     return row.id;
   }
@@ -5511,6 +5668,19 @@ export class AIService {
       return 'USER_DAILY';
     }
 
+    // Pedido explícito del usuario: "un usuario se podría colgar
+    // jugando con la app y generar un consumo por exceso" — tope de
+    // consumo GRATUITO por usuario y por año (a diferencia de
+    // AI_DAILY_BUDGET_USD/AI_MONTHLY_BUDGET_USD de abajo, que son de
+    // toda la plataforma). Editable desde admin-web (Parámetros de la
+    // app, 'ai.free_usage_limit_usd') sin recompilar, mismo mecanismo
+    // que health.reminder_days. Por ahora solo bloquea — vender
+    // "ampliaciones de uso de IA" cuando se supera el tope queda
+    // pendiente de definir (ver SCHEMA_GAPS.md).
+    if (await this.userFreeUsageExceeded(queryRunner, personId)) {
+      return 'USER_FREE_LIMIT';
+    }
+
     const [{ cost_today, cost_this_month }] = await queryRunner.query(
       `SELECT * FROM ai.get_consumption_totals()`,
     );
@@ -5524,5 +5694,31 @@ export class AIService {
       return 'PLATFORM_MONTHLY_BUDGET';
     }
     return undefined;
+  }
+
+  /**
+   * Suma lo gastado (ai.messages.estimated_cost_usd) por esta persona
+   * en lo que va del año calendario contra 'ai.free_usage_limit_usd'
+   * (default USD 5 si el parámetro no existiera). Reusado por los tres
+   * modos de IA que arrancan un turno/sesión nueva (Clásico texto,
+   * Estructurado texto, y las dos sesiones de voz Realtime) — nunca
+   * por el chat de emergencia (bloquear una IA de emergencia real por
+   * costo es un riesgo de seguridad, no algo que corresponda acá).
+   */
+  private async userFreeUsageExceeded(
+    queryRunner: QueryRunner,
+    personId: string,
+  ): Promise<boolean> {
+    const [limitSetting] = await queryRunner.query(
+      `SELECT setting_value FROM params.app_settings WHERE setting_key = 'ai.free_usage_limit_usd'`,
+    );
+    const limitUsd = Number(limitSetting?.setting_value) || 5;
+    const [{ spent }] = await queryRunner.query(
+      `SELECT COALESCE(SUM(estimated_cost_usd), 0) AS spent
+       FROM ai.messages
+       WHERE person_id = $1 AND created_at >= date_trunc('year', now())`,
+      [personId],
+    );
+    return Number(spent) >= limitUsd;
   }
 }

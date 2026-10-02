@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import 'api_client.dart';
 import 'jwt.dart';
+import 'tenant_config_service.dart';
 
 /// Estado de sesión global — mismo rol que auth-context.tsx en
 /// admin-web, pero acá el viajero SIEMPRE tiene personId (no hay
@@ -16,6 +17,12 @@ class AuthState extends ChangeNotifier {
   // bloquear al viajero por las dudas — se corrige solo apenas
   // refreshEmailVerified() resuelve.
   bool _emailVerified = true;
+
+  /// Fase 1 — marca/funciones de la empresa activa. Vive acá (no como
+  /// segundo provider top-level independiente) porque su ciclo de vida
+  /// es el mismo que el de la sesión: se refresca junto con
+  /// refreshEmailVerified() y se resetea en logout().
+  final TenantConfigService tenantConfig = TenantConfigService();
 
   bool get isAuthenticated => _personId != null;
   String? get personId => _personId;
@@ -51,6 +58,7 @@ class AuthState extends ChangeNotifier {
       // Si falla la carga (sin conexión, etc.) no se bloquea al
       // viajero por un problema de red — se reintenta la próxima vez.
     }
+    await tenantConfig.refresh();
     notifyListeners();
   }
 
@@ -85,6 +93,7 @@ class AuthState extends ChangeNotifier {
     required String docTypeId,
     required String docNumber,
     required String docCountryId,
+    required bool consentAccepted,
     String? preferredLang,
     String? phone,
   }) async {
@@ -98,6 +107,7 @@ class AuthState extends ChangeNotifier {
         'docTypeId': docTypeId,
         'docNumber': docNumber,
         'docCountryId': docCountryId,
+        'consentAccepted': consentAccepted,
         if (preferredLang != null) 'preferredLang': preferredLang,
         if (phone != null && phone.isNotEmpty) 'phone': phone,
       },
@@ -120,6 +130,7 @@ class AuthState extends ChangeNotifier {
     await ApiClient.instance.clearTokens();
     _personId = null;
     _emailVerified = true;
+    tenantConfig.reset();
     notifyListeners();
   }
 }

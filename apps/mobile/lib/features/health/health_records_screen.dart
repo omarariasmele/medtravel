@@ -8,7 +8,8 @@ import '../../core/text_normalize.dart';
 import '../../core/auth_state.dart';
 import '../../core/catalog_service.dart';
 import '../../l10n/app_strings.dart';
-import '../assistant/health_assistant_screen.dart' show openHealthAssistant;
+import '../assistant/health_assistant_screen.dart' show healthDataVersion, openHealthAssistant;
+import 'documents_screen.dart' show DocumentsTab;
 
 /// Sin esto, un GET que falla (servidor caído, `adb reverse` perdido,
 /// token vencido) deja `_loading` en true para siempre — la pantalla
@@ -48,6 +49,43 @@ String _errorMessage(Object error, String fallback) {
 /// por categoría, el dato destacado, una etiqueta de estado/tipo, y la
 /// fecha como texto secundario. Un solo widget reutilizado en las 5 tabs
 /// de antecedentes para que se vea consistente.
+/// Pedido explícito del usuario: mostrar en Condiciones/Medicamentos si
+/// un antecedente cargado por un profesional está pendiente de
+/// confirmación (o ya se confirmó, por el titular o por la plataforma)
+/// — mismo mapeo que ya usa _EncounterCard en Atenciones recibidas,
+/// centralizado acá para no repetirlo tres veces.
+({String label, Color bg, Color color})? recordConfirmationBadge(
+  BuildContext context, {
+  required String? confirmationCode,
+  required bool certified,
+}) {
+  if (certified) {
+    return (label: context.tr('health.encounter.certifiedBadge'), bg: _RecordColors.conditionBg, color: _RecordColors.conditionIcon);
+  }
+  switch (confirmationCode) {
+    case 'MEMBER_CONFIRMED':
+      return (label: context.tr('health.encounter.confirmedBadge'), bg: _RecordColors.conditionBg, color: _RecordColors.conditionIcon);
+    case 'PLATFORM_CONFIRMED':
+      return (label: context.tr('health.encounter.platformConfirmedBadge'), bg: _RecordColors.conditionBg, color: _RecordColors.conditionIcon);
+    case 'MEMBER_CHALLENGED':
+      return (label: context.tr('health.encounter.challengedBadge'), bg: _RecordColors.allergyBg, color: _RecordColors.allergyIcon);
+    case 'PENDING':
+      return (label: context.tr('health.encounter.pendingBadge'), bg: _RecordColors.allergyAmberBg, color: _RecordColors.allergyAmberIcon);
+    default:
+      // NULL — antecedente propio (SELF_DECLARED) o de la IA, nunca
+      // pasa por este circuito de confirmación: no se muestra nada.
+      return null;
+  }
+}
+
+String? catalogCodeFor(List<CatalogValue> catalog, String? id) {
+  if (id == null) return null;
+  for (final c in catalog) {
+    if (c.id == id) return c.code;
+  }
+  return null;
+}
+
 class _RecordCard extends StatelessWidget {
   const _RecordCard({
     required this.icon,
@@ -57,6 +95,9 @@ class _RecordCard extends StatelessWidget {
     this.badgeLabel,
     this.badgeBackground,
     this.badgeColor,
+    this.secondaryBadgeLabel,
+    this.secondaryBadgeBackground,
+    this.secondaryBadgeColor,
     this.subtitle,
     this.onDelete,
     this.onEdit,
@@ -69,6 +110,9 @@ class _RecordCard extends StatelessWidget {
   final String? badgeLabel;
   final Color? badgeBackground;
   final Color? badgeColor;
+  final String? secondaryBadgeLabel;
+  final Color? secondaryBadgeBackground;
+  final Color? secondaryBadgeColor;
   final String? subtitle;
   /// Pedido explícito del usuario: poder borrar (baja lógica) un
   /// antecedente mal cargado directo desde la tarjeta.
@@ -114,6 +158,15 @@ class _RecordCard extends StatelessWidget {
                         child: Text(
                           badgeLabel!,
                           style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: badgeColor),
+                        ),
+                      ),
+                    if (secondaryBadgeLabel != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(color: secondaryBadgeBackground, borderRadius: BorderRadius.circular(20)),
+                        child: Text(
+                          secondaryBadgeLabel!,
+                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: secondaryBadgeColor),
                         ),
                       ),
                   ],
@@ -207,6 +260,8 @@ class _RecordColors {
   static const neutralIcon = Color(0xFF444441);
   static const vitalsBg = Color(0xFFE1F5EE);
   static const vitalsIcon = Color(0xFF085041);
+  static const encounterBg = Color(0xFFE8EAF6);
+  static const encounterIcon = Color(0xFF283593);
 }
 
 class _LoadErrorView extends StatelessWidget {
@@ -246,11 +301,17 @@ class HealthRecordsScreen extends StatefulWidget {
   State<HealthRecordsScreen> createState() => _HealthRecordsScreenState();
 }
 
-class _HealthRecordsScreenState extends State<HealthRecordsScreen> with SingleTickerProviderStateMixin {
-  late final TabController _tabController;
+class _HealthRecordsScreenState extends State<HealthRecordsScreen> {
   DateTime? _lastUpdatedAt;
   int _reminderDays = 60;
   bool _loadingLastUpdated = true;
+  /// Pedido explícito del usuario: "pensaba en hacer algo similar a lo
+  /// que es la pantalla principal... con botones que accedan a cada
+  /// sección" — antes esto era un TabBar horizontal con 9 solapas (la
+  /// mayoría fuera de pantalla, había que deslizar para encontrarlas).
+  /// null = mostrando el menú de botones (el "hub"); si no, es el
+  /// índice de la sección abierta en _sections() más abajo.
+  int? _selectedSection;
 
   /// Bug real reportado en vivo: corregir una alergia por voz ("polen"
   /// -> "polvo") se guardaba bien en la base (confirmado en el log del
@@ -275,13 +336,24 @@ class _HealthRecordsScreenState extends State<HealthRecordsScreen> with SingleTi
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 7, vsync: this);
+    _loadLastUpdated();
+    // Ver el comentario de healthDataVersion en health_assistant_screen.dart:
+    // esta pantalla puede estar viva en el IndexedStack de HomeShell sin
+    // haber sido ella quien abrió el asistente (ej. se abrió desde
+    // Inicio) — sin este listener, "Salud" nunca se enteraba de que
+    // había datos nuevos.
+    healthDataVersion.addListener(_onHealthDataChangedElsewhere);
+  }
+
+  void _onHealthDataChangedElsewhere() {
+    if (!mounted) return;
+    setState(() => _reloadKey++);
     _loadLastUpdated();
   }
 
   @override
   void dispose() {
-    _tabController.dispose();
+    healthDataVersion.removeListener(_onHealthDataChangedElsewhere);
     super.dispose();
   }
 
@@ -319,13 +391,110 @@ class _HealthRecordsScreenState extends State<HealthRecordsScreen> with SingleTi
     return DateTime.now().difference(_lastUpdatedAt!).inDays >= _reminderDays;
   }
 
+  // Pedido explícito del usuario: "eliminar el título Comorbilidades de
+  // todos lados, es enfermedades o enfermedades crónicas" — esta sección
+  // agrupa ambas (crónicas y no crónicas), por eso queda "Enfermedades"
+  // (sin "Crónicas"), igual que en admin-web. Los colores de cada botón
+  // reusan la misma paleta por categoría que ya usan las tarjetas
+  // adentro de cada sección (_RecordColors) — un color por sección,
+  // ninguno repetido, para reconocerlas de un vistazo igual que ya se
+  // reconoce cada tipo de antecedente en las tarjetas.
+  List<_HealthSection> _sections(BuildContext context) => [
+        _HealthSection(
+          titleKey: 'health.tabAllergies',
+          icon: Icons.warning_amber_outlined,
+          background: _RecordColors.allergyBg,
+          iconColor: _RecordColors.allergyIcon,
+          builder: (key) => _AllergiesTab(key: key),
+        ),
+        _HealthSection(
+          titleKey: 'health.tabConditions',
+          icon: Icons.favorite_border,
+          background: _RecordColors.conditionBg,
+          iconColor: _RecordColors.conditionIcon,
+          builder: (key) => _ConditionsTab(key: key),
+        ),
+        _HealthSection(
+          titleKey: 'health.tabMedications',
+          icon: Icons.medication_outlined,
+          background: _RecordColors.medicationBg,
+          iconColor: _RecordColors.medicationIcon,
+          builder: (key) => _MedicationsTab(key: key),
+        ),
+        _HealthSection(
+          titleKey: 'health.tabSurgeries',
+          icon: Icons.healing_outlined,
+          background: _RecordColors.surgeryBg,
+          iconColor: _RecordColors.surgeryIcon,
+          builder: (key) => _SurgeriesTab(key: key),
+        ),
+        _HealthSection(
+          titleKey: 'health.tabImplants',
+          icon: Icons.settings_input_component_outlined,
+          background: _RecordColors.implantBg,
+          iconColor: _RecordColors.implantIcon,
+          builder: (key) => _ImplantsTab(key: key),
+        ),
+        _HealthSection(
+          titleKey: 'health.tabTreatments',
+          icon: Icons.medical_services_outlined,
+          background: _RecordColors.treatmentBg,
+          iconColor: _RecordColors.treatmentIcon,
+          builder: (key) => _TreatmentsTab(key: key),
+        ),
+        _HealthSection(
+          titleKey: 'health.tabVitals',
+          icon: Icons.monitor_weight_outlined,
+          background: _RecordColors.vitalsBg,
+          iconColor: _RecordColors.vitalsIcon,
+          builder: (key) => _VitalsTab(key: key),
+        ),
+        _HealthSection(
+          titleKey: 'health.tabLabResults',
+          icon: Icons.science_outlined,
+          background: _RecordColors.allergyAmberBg,
+          iconColor: _RecordColors.allergyAmberIcon,
+          builder: (key) => _LabResultsTab(key: key),
+        ),
+        _HealthSection(
+          titleKey: 'documents.tabTitle',
+          icon: Icons.folder_open_outlined,
+          background: _RecordColors.neutralBg,
+          iconColor: _RecordColors.neutralIcon,
+          builder: (key) => DocumentsTab(key: key),
+        ),
+        // Pedido explícito del usuario: "las notas [que deja un médico]
+        // se deben poder visualizar... en el historial de salud... es
+        // en la ficha debería ir abajo de documentos" — última sección
+        // a propósito, por eso mismo.
+        _HealthSection(
+          titleKey: 'health.tabEncounters',
+          icon: Icons.medical_information_outlined,
+          background: _RecordColors.encounterBg,
+          iconColor: _RecordColors.encounterIcon,
+          builder: (key) => _EncountersTab(key: key),
+        ),
+      ];
+
+  void _openSection(int index) => setState(() => _selectedSection = index);
+  void _backToHub() => setState(() => _selectedSection = null);
+
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 8,
+    final sections = _sections(context);
+    final selected = _selectedSection;
+    return PopScope<Object?>(
+      canPop: selected == null,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        _backToHub();
+      },
       child: Scaffold(
         appBar: AppBar(
-          title: Text(context.tr('health.title')),
+          leading: selected != null
+              ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: _backToHub)
+              : null,
+          title: Text(selected != null ? context.tr(sections[selected].titleKey) : context.tr('health.title')),
           actions: [
             IconButton(
               icon: const Icon(Icons.health_and_safety_outlined),
@@ -333,20 +502,6 @@ class _HealthRecordsScreenState extends State<HealthRecordsScreen> with SingleTi
               onPressed: _openAssistantAndReload,
             ),
           ],
-          // Pedido explícito del usuario: "eliminar el título Comorbilidades
-          // de todos lados, es enfermedades o enfermedades crónicas" — esta
-          // solapa agrupa ambas (crónicas y no crónicas), por eso queda
-          // "Enfermedades" (sin "Crónicas"), igual que en admin-web.
-          bottom: TabBar(isScrollable: true, tabs: [
-            Tab(text: context.tr('health.tabAllergies')),
-            Tab(text: context.tr('health.tabConditions')),
-            Tab(text: context.tr('health.tabImplants')),
-            Tab(text: context.tr('health.tabTreatments')),
-            Tab(text: context.tr('health.tabMedications')),
-            Tab(text: context.tr('health.tabSurgeries')),
-            Tab(text: context.tr('health.tabVitals')),
-            Tab(text: context.tr('health.tabLabResults')),
-          ]),
         ),
         body: Column(
           children: [
@@ -356,19 +511,67 @@ class _HealthRecordsScreenState extends State<HealthRecordsScreen> with SingleTi
               onUpdatePressed: _openAssistantAndReload,
             ),
             Expanded(
-              child: TabBarView(children: [
-                _AllergiesTab(key: ValueKey('allergies-$_reloadKey')),
-                _ConditionsTab(key: ValueKey('conditions-$_reloadKey')),
-                _ImplantsTab(key: ValueKey('implants-$_reloadKey')),
-                _TreatmentsTab(key: ValueKey('treatments-$_reloadKey')),
-                _MedicationsTab(key: ValueKey('medications-$_reloadKey')),
-                _SurgeriesTab(key: ValueKey('surgeries-$_reloadKey')),
-                _VitalsTab(key: ValueKey('vitals-$_reloadKey')),
-                _LabResultsTab(key: ValueKey('labresults-$_reloadKey')),
-              ]),
+              child: selected == null
+                  ? ListView.builder(
+                      padding: const EdgeInsets.all(16),
+                      itemCount: sections.length,
+                      itemBuilder: (context, i) => _HealthSectionButton(
+                        section: sections[i],
+                        onTap: () => _openSection(i),
+                      ),
+                    )
+                  : sections[selected].builder(ValueKey('${sections[selected].titleKey}-$_reloadKey')),
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Ver el comentario de _sections() arriba — un botón del menú principal
+/// de Historial de Salud. `builder` recibe la key de recarga (mismo
+/// mecanismo de ValueKey que ya usaba TabBarView para forzar recarga al
+/// volver del asistente, ver _reloadKey) para construir el widget de la
+/// sección recién cuando se abre, no de entrada — cada sección sigue
+/// cargando sus propios datos sola, como antes.
+class _HealthSection {
+  const _HealthSection({
+    required this.titleKey,
+    required this.icon,
+    required this.background,
+    required this.iconColor,
+    required this.builder,
+  });
+
+  final String titleKey;
+  final IconData icon;
+  final Color background;
+  final Color iconColor;
+  final Widget Function(Key key) builder;
+}
+
+/// Mismo estilo que _QuickAction de home_screen.dart — pedido explícito
+/// del usuario: "algo similar a lo que es la pantalla principal... con
+/// botones que accedan a cada sección".
+class _HealthSectionButton extends StatelessWidget {
+  const _HealthSectionButton({required this.section, required this.onTap});
+
+  final _HealthSection section;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: section.background,
+          child: Icon(section.icon, color: section.iconColor),
+        ),
+        title: Text(context.tr(section.titleKey)),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: onTap,
       ),
     );
   }
@@ -674,6 +877,8 @@ class _ConditionsTab extends StatefulWidget {
 class _ConditionsTabState extends State<_ConditionsTab> {
   List<dynamic> _items = [];
   List<CatalogValue> _statusCatalog = [];
+  List<CatalogValue> _confirmationCatalog = [];
+  List<CatalogValue> _certificationCatalog = [];
   bool _loading = true;
   String? _error;
 
@@ -716,10 +921,14 @@ class _ConditionsTabState extends State<_ConditionsTab> {
     try {
       final response = await ApiClient.instance.dio.get('/clinical/conditions', queryParameters: {'personId': _personId});
       final statusCatalog = await CatalogService.get('CONDITION_STATUS');
+      final confirmationCatalog = await CatalogService.get('CONFIRMATION_STATUS');
+      final certificationCatalog = await CatalogService.get('CERTIFICATION_STATUS');
       if (!mounted) return;
       setState(() {
         _items = response.data as List;
         _statusCatalog = statusCatalog;
+        _confirmationCatalog = confirmationCatalog;
+        _certificationCatalog = certificationCatalog;
         _loading = false;
       });
     } catch (e) {
@@ -875,17 +1084,26 @@ class _ConditionsTabState extends State<_ConditionsTab> {
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
           child: Text(title, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold)),
         ),
-        for (final e in items)
-          _RecordCard(
+        ...items.map((raw) {
+          final e = raw as Map<String, dynamic>;
+          final confirmation = recordConfirmationBadge(
+            context,
+            confirmationCode: catalogCodeFor(_confirmationCatalog, e['confirmationStatusId'] as String?),
+            certified: catalogCodeFor(_certificationCatalog, e['certificationStatusId'] as String?) == 'PROFESSIONALLY_CERTIFIED',
+          );
+          return _RecordCard(
             icon: Icons.favorite_border,
             iconBackground: _RecordColors.conditionBg,
             iconColor: _RecordColors.conditionIcon,
-            title: (e as Map<String, dynamic>)['conditionName'] as String? ?? '',
+            title: e['conditionName'] as String? ?? '',
             badgeLabel: const {'ACTIVE', 'CHRONIC'}.contains(_statusCode(e['statusId'] as String?))
                 ? null
                 : _statusLabel(e['statusId'] as String?),
             badgeBackground: e['statusId'] == _chronicStatusId ? _RecordColors.conditionBg : _RecordColors.neutralBg,
             badgeColor: e['statusId'] == _chronicStatusId ? _RecordColors.conditionIcon : _RecordColors.neutralIcon,
+            secondaryBadgeLabel: confirmation?.label,
+            secondaryBadgeBackground: confirmation?.bg,
+            secondaryBadgeColor: confirmation?.color,
             subtitle: e['diagnosedAt'] != null ? context.tr('health.condition.diagnosedOn', params: {'date': _formatIsoDate(e['diagnosedAt'] as String)}) : null,
             onEdit: () => _openForm(e),
             onDelete: () => _confirmAndSoftDelete(
@@ -895,7 +1113,8 @@ class _ConditionsTabState extends State<_ConditionsTab> {
               itemLabel: e['conditionName'] as String? ?? context.tr('health.condition.deletedFallback'),
               onDeleted: _load,
             ),
-          ),
+          );
+        }),
       ];
 }
 
@@ -907,6 +1126,8 @@ class _MedicationsTab extends StatefulWidget {
 
 class _MedicationsTabState extends State<_MedicationsTab> {
   List<dynamic> _items = [];
+  List<CatalogValue> _confirmationCatalog = [];
+  List<CatalogValue> _certificationCatalog = [];
   bool _loading = true;
   String? _error;
 
@@ -925,9 +1146,13 @@ class _MedicationsTabState extends State<_MedicationsTab> {
     });
     try {
       final response = await ApiClient.instance.dio.get('/clinical/medications', queryParameters: {'personId': _personId});
+      final confirmationCatalog = await CatalogService.get('CONFIRMATION_STATUS');
+      final certificationCatalog = await CatalogService.get('CERTIFICATION_STATUS');
       if (!mounted) return;
       setState(() {
         _items = response.data as List;
+        _confirmationCatalog = confirmationCatalog;
+        _certificationCatalog = certificationCatalog;
         _loading = false;
       });
     } catch (e) {
@@ -1097,6 +1322,11 @@ class _MedicationsTabState extends State<_MedicationsTab> {
                     if (startedAt != null) context.tr('health.medication.sinceDate', params: {'date': _formatIsoDate(startedAt)}),
                   ];
                   final isCurrent = m['isCurrent'] != false;
+                  final confirmation = recordConfirmationBadge(
+                    context,
+                    confirmationCode: catalogCodeFor(_confirmationCatalog, m['confirmationStatusId'] as String?),
+                    certified: catalogCodeFor(_certificationCatalog, m['certificationStatusId'] as String?) == 'PROFESSIONALLY_CERTIFIED',
+                  );
                   return _RecordCard(
                     icon: Icons.medication_outlined,
                     iconBackground: _RecordColors.medicationBg,
@@ -1105,6 +1335,9 @@ class _MedicationsTabState extends State<_MedicationsTab> {
                     badgeLabel: isCurrent ? context.tr('health.medication.currentBadge') : context.tr('health.medication.discontinuedBadge'),
                     badgeBackground: isCurrent ? _RecordColors.medicationBg : _RecordColors.neutralBg,
                     badgeColor: isCurrent ? _RecordColors.medicationIcon : _RecordColors.neutralIcon,
+                    secondaryBadgeLabel: confirmation?.label,
+                    secondaryBadgeBackground: confirmation?.bg,
+                    secondaryBadgeColor: confirmation?.color,
                     subtitle: subtitleParts.isEmpty ? null : subtitleParts.join(' · '),
                     onEdit: () => _openForm(m),
                     onDelete: () => _confirmAndSoftDelete(
@@ -2355,6 +2588,373 @@ class _TreatmentsTabState extends State<_TreatmentsTab> {
               ),
       ),
       floatingActionButton: FloatingActionButton(onPressed: _openForm, child: const Icon(Icons.add)),
+    );
+  }
+}
+
+/// Pedido explícito del usuario: poder ver, desde el Historial de
+/// Salud, las notas que un médico dejó al atenderlo (por QR/link, ver
+/// emergency.claim_share_note) — recomendaciones, tratamiento y notas
+/// libres, con quién lo atendió y si esa nota ya quedó certificada o
+/// todavía está pendiente de que el propio viajero la confirme. Solo
+/// lectura a propósito: no hay ninguna acción de aprobar/objetar
+/// todavía (queda para más adelante), así que no lleva FAB ni
+/// edición/borrado como el resto de las pestañas.
+class _EncountersTab extends StatefulWidget {
+  const _EncountersTab({super.key});
+  @override
+  State<_EncountersTab> createState() => _EncountersTabState();
+}
+
+class _EncountersTabState extends State<_EncountersTab> {
+  List<dynamic> _items = [];
+  List<CatalogValue> _specialtyCatalog = [];
+  List<CatalogValue> _docTypeCatalog = [];
+  List<CatalogValue> _countryCatalog = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final response = await ApiClient.instance.dio.get('/me/clinical/encounters');
+      final specialtyCatalog = await CatalogService.get('MEDICAL_SPECIALTY');
+      final docTypeCatalog = await CatalogService.get('DOCUMENT_TYPE');
+      final countryCatalog = await CatalogService.get('COUNTRY');
+      if (!mounted) return;
+      setState(() {
+        _items = response.data as List;
+        _specialtyCatalog = specialtyCatalog;
+        _docTypeCatalog = docTypeCatalog;
+        _countryCatalog = countryCatalog;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = _errorMessage(e, context.tr('health.encounter.loadError'));
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_error != null) return _LoadErrorView(message: _error!, onRetry: _load);
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: _items.isEmpty
+          ? ListView(children: [
+              Padding(padding: const EdgeInsets.all(24), child: Text(context.tr('health.encounter.emptyList'))),
+            ])
+          : ListView.builder(
+              itemCount: _items.length,
+              itemBuilder: (context, i) => _EncounterCard(
+                encounter: _items[i] as Map<String, dynamic>,
+                specialtyCatalog: _specialtyCatalog,
+                docTypeCatalog: _docTypeCatalog,
+                countryCatalog: _countryCatalog,
+                onConfirm: _confirm,
+                onChallenge: _challenge,
+              ),
+            ),
+    );
+  }
+
+  /// Fase 3 — el viajero confirma una nota pendiente. Ver
+  /// MeClinicalController.confirmEncounter (mismo UPDATE probado en
+  /// 009_tests.sql T2.2).
+  Future<void> _confirm(String submissionId) async {
+    try {
+      await ApiClient.instance.dio.patch('/me/clinical/encounters/$submissionId/confirm');
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_errorMessage(e, context.tr('health.encounter.actionError')))),
+      );
+    }
+  }
+
+  /// Fase 3 — el viajero objeta una nota pendiente (motivo opcional).
+  /// No revierte canonical_status_id del lado del backend — la nota
+  /// queda visible igual, solo marcada como objetada.
+  Future<void> _challenge(String submissionId, String? notes) async {
+    try {
+      await ApiClient.instance.dio.patch(
+        '/me/clinical/encounters/$submissionId/challenge',
+        data: {if (notes != null && notes.trim().isNotEmpty) 'notes': notes.trim()},
+      );
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_errorMessage(e, context.tr('health.encounter.actionError')))),
+      );
+    }
+  }
+}
+
+class _EncounterCard extends StatelessWidget {
+  const _EncounterCard({
+    required this.encounter,
+    required this.specialtyCatalog,
+    required this.docTypeCatalog,
+    required this.countryCatalog,
+    required this.onConfirm,
+    required this.onChallenge,
+  });
+
+  final Map<String, dynamic> encounter;
+  final List<CatalogValue> specialtyCatalog;
+  final List<CatalogValue> docTypeCatalog;
+  final List<CatalogValue> countryCatalog;
+  final Future<void> Function(String submissionId) onConfirm;
+  final Future<void> Function(String submissionId, String? notes) onChallenge;
+
+  @override
+  Widget build(BuildContext context) {
+    final firstName = encounter['professionalFirstName'] as String?;
+    final lastName = encounter['professionalLastName'] as String?;
+    final professionalName = (firstName != null || lastName != null)
+        ? [firstName, lastName].where((s) => (s ?? '').isNotEmpty).join(' ')
+        : null;
+    final institution = encounter['professionalInstitution'] as String?;
+    final specialtyId = encounter['professionalSpecialtyId'] as String?;
+    final specialtyLabel = specialtyId != null
+        ? CatalogService.labelFor(specialtyCatalog, specialtyId, lang: context.lang)
+        : null;
+    final date = encounter['encounterDate'] as String?;
+    final clinicalData = encounter['clinicalData'] as Map<String, dynamic>?;
+    final recommendations = clinicalData?['recommendations'] as String?;
+    final treatment = clinicalData?['treatment'] as String?;
+    final notes = clinicalData?['notes'] as String? ?? encounter['notes'] as String?;
+
+    // Pedido explícito del usuario: poder referenciar al profesional —
+    // matrícula, documento y país, no solo el nombre.
+    final licenseNumber = encounter['professionalLicenseNumber'] as String?;
+    final docNumber = encounter['professionalDocNumber'] as String?;
+    final docTypeId = encounter['professionalDocTypeId'] as String?;
+    final countryId = encounter['professionalCountryId'] as String?;
+    final professionalIsActive = encounter['professionalIsActive'] as bool? ?? true;
+    final professionalRefParts = <String>[
+      if (licenseNumber != null && licenseNumber.isNotEmpty)
+        context.tr('health.encounter.licenseLabel', params: {'value': licenseNumber}),
+      if (docNumber != null && docNumber.isNotEmpty)
+        '${docTypeId != null ? CatalogService.labelFor(docTypeCatalog, docTypeId, lang: context.lang) : ''} $docNumber'.trim(),
+      if (countryId != null) CatalogService.labelFor(countryCatalog, countryId, lang: context.lang),
+    ];
+
+    final certified = encounter['submissionId'] != null &&
+        (encounter['certificationCode'] as String?) == 'PROFESSIONALLY_CERTIFIED';
+    final confirmationCode = encounter['confirmationCode'] as String?;
+    final submissionId = encounter['submissionId'] as String?;
+    final isPending = submissionId != null &&
+        confirmationCode != 'MEMBER_CONFIRMED' &&
+        confirmationCode != 'MEMBER_CHALLENGED' &&
+        confirmationCode != 'PLATFORM_CONFIRMED';
+    String? badgeLabel;
+    Color badgeBg = _RecordColors.neutralBg;
+    Color badgeColor = _RecordColors.neutralIcon;
+    if (encounter['submissionId'] != null) {
+      if (certified) {
+        badgeLabel = context.tr('health.encounter.certifiedBadge');
+        badgeBg = _RecordColors.conditionBg;
+        badgeColor = _RecordColors.conditionIcon;
+      } else if (confirmationCode == 'MEMBER_CONFIRMED') {
+        badgeLabel = context.tr('health.encounter.confirmedBadge');
+        badgeBg = _RecordColors.conditionBg;
+        badgeColor = _RecordColors.conditionIcon;
+      } else if (confirmationCode == 'PLATFORM_CONFIRMED') {
+        badgeLabel = context.tr('health.encounter.platformConfirmedBadge');
+        badgeBg = _RecordColors.conditionBg;
+        badgeColor = _RecordColors.conditionIcon;
+      } else if (confirmationCode == 'MEMBER_CHALLENGED') {
+        badgeLabel = context.tr('health.encounter.challengedBadge');
+        badgeBg = _RecordColors.allergyBg;
+        badgeColor = _RecordColors.allergyIcon;
+      } else {
+        badgeLabel = context.tr('health.encounter.pendingBadge');
+        badgeBg = _RecordColors.allergyAmberBg;
+        badgeColor = _RecordColors.allergyAmberIcon;
+      }
+    }
+
+    final subtitleParts = <String>[
+      if (professionalName != null && professionalName.isNotEmpty) professionalName,
+      if (specialtyLabel != null) specialtyLabel,
+      if (institution != null && institution.isNotEmpty) institution,
+    ];
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade300, width: 0.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: const BoxDecoration(color: _RecordColors.encounterBg, shape: BoxShape.circle),
+                child: const Icon(Icons.medical_information_outlined, size: 17, color: _RecordColors.encounterIcon),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        Text(
+                          professionalName != null && professionalName.isNotEmpty
+                              ? professionalName
+                              : context.tr('health.encounter.unknownProfessional'),
+                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+                        ),
+                        if (badgeLabel != null)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(color: badgeBg, borderRadius: BorderRadius.circular(20)),
+                            child: Text(badgeLabel, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: badgeColor)),
+                          ),
+                      ],
+                    ),
+                    if (subtitleParts.length > 1 || date != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        [
+                          if (subtitleParts.length > 1) subtitleParts.skip(1).join(' · '),
+                          if (date != null) _formatIsoDate(date),
+                        ].where((s) => s.isNotEmpty).join(' · '),
+                        style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                      ),
+                    ],
+                    if (professionalRefParts.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        professionalRefParts.join(' · '),
+                        style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                      ),
+                    ],
+                    if (!professionalIsActive && submissionId != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        context.tr('health.encounter.professionalNotValidated'),
+                        style: TextStyle(fontSize: 11, color: Colors.orange.shade800),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if ((recommendations ?? '').isNotEmpty || (treatment ?? '').isNotEmpty || (notes ?? '').isNotEmpty) ...[
+            const SizedBox(height: 10),
+            if ((recommendations ?? '').isNotEmpty)
+              _EncounterField(label: context.tr('health.encounter.recommendationsLabel'), value: recommendations!),
+            if ((treatment ?? '').isNotEmpty)
+              _EncounterField(label: context.tr('health.encounter.treatmentLabel'), value: treatment!),
+            if ((notes ?? '').isNotEmpty)
+              _EncounterField(label: context.tr('health.encounter.notesLabel'), value: notes!),
+          ],
+          if (isPending) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () async {
+                      final notesInput = await _showChallengeDialog(context);
+                      if (notesInput == _challengeCancelled) return;
+                      await onChallenge(submissionId, notesInput);
+                    },
+                    child: Text(context.tr('health.encounter.challengeAction')),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () => onConfirm(submissionId),
+                    child: Text(context.tr('health.encounter.confirmAction')),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Sentinel para distinguir "canceló el diálogo" (no hacer nada) de
+  /// "confirmó sin escribir motivo" (notas null, igual dispara la
+  /// objeción) — showDialog<String>() ya devuelve null en ambos casos.
+  static const _challengeCancelled = '__cancelled__';
+
+  Future<String?> _showChallengeDialog(BuildContext context) async {
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(ctx.tr('health.encounter.challengeDialogTitle')),
+        content: TextField(
+          controller: controller,
+          maxLines: 3,
+          decoration: InputDecoration(hintText: ctx.tr('health.encounter.challengeDialogHint')),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(_challengeCancelled),
+            child: Text(ctx.tr('common.cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text),
+            child: Text(ctx.tr('health.encounter.challengeAction')),
+          ),
+        ],
+      ),
+    );
+    return result ?? _challengeCancelled;
+  }
+}
+
+class _EncounterField extends StatelessWidget {
+  const _EncounterField({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+          Text(value, style: const TextStyle(fontSize: 13)),
+        ],
+      ),
     );
   }
 }

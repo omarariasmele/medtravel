@@ -18,6 +18,10 @@ import {
   DialogTitle,
   Grid,
   IconButton,
+  List,
+  ListItem,
+  ListItemIcon,
+  ListItemText,
   MenuItem,
   TextField,
   Tooltip,
@@ -26,6 +30,10 @@ import {
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import PictureAsPdfOutlinedIcon from '@mui/icons-material/PictureAsPdfOutlined';
+import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
+import DownloadOutlinedIcon from '@mui/icons-material/DownloadOutlined';
+import MedicalInformationOutlinedIcon from '@mui/icons-material/MedicalInformationOutlined';
 
 import { apiClient } from '../../lib/api-client';
 import { labelFor, resolveCatalogValue, useCatalog } from '../../lib/catalog-hooks';
@@ -270,6 +278,16 @@ export function ClinicalHistorySection({
           </HistorySection>
           <HistorySection title="Estudios">
             <LabResultsTab personId={personId} headers={headers} />
+          </HistorySection>
+          <HistorySection title="Documentos">
+            <DocumentsTab personId={personId} headers={headers} />
+          </HistorySection>
+          {/* Pedido explícito del usuario: "las notas [que deja un
+              médico] se deben poder visualizar... en la ficha debería ir
+              abajo de documentos" — mismo orden que la app móvil
+              (HealthRecordsScreen). */}
+          <HistorySection title="Atenciones recibidas">
+            <EncountersTab personId={personId} headers={headers} />
           </HistorySection>
         </Box>
       </CardContent>
@@ -2733,7 +2751,7 @@ function LabResultsTab({
               <TextField label="Estudio" fullWidth margin="normal" value={labName} onChange={(e) => setLabName(e.target.value)} helperText="Ej. Análisis de sangre, coagulograma" />
             </Grid>
             <Grid size={{ xs: 4 }}>
-              <TextField label="Fecha" type="date" fullWidth margin="normal" InputLabelProps={{ shrink: true }} value={performedAt} onChange={(e) => setPerformedAt(e.target.value)} />
+              <TextField label="Fecha" type="date" fullWidth margin="normal" slotProps={{ inputLabel: { shrink: true } }} value={performedAt} onChange={(e) => setPerformedAt(e.target.value)} />
             </Grid>
             <Grid size={{ xs: 12 }}>
               <TextField
@@ -2823,5 +2841,246 @@ function LabResultsTab({
         </DialogActions>
       </Dialog>
     </Box>
+  );
+}
+
+interface ClinicalDocumentRecord {
+  id: string;
+  documentTypeId: string;
+  title: string | null;
+  description: string | null;
+  documentDate: string | null;
+  mimeType: string;
+  fileSizeBytes: number;
+  fileNameOriginal: string;
+}
+
+/**
+ * Pedido explícito del usuario: "el médico que atiende el caso de
+ * emergencia pueda visualizarlos cuando se le comparta el Historial de
+ * Salud" — solo lectura acá (la carga es siempre desde la app del
+ * viajero, ver documents_screen.dart). Mismo recurso genérico
+ * /clinical/documents que ya usa el resto de las solapas, filtrado por
+ * personId; "Ver" descarga el archivo como blob (mismo patrón que la
+ * foto de perfil en traveler-detail.page.tsx) porque el endpoint exige
+ * el Bearer token — un <a href> directo no lo mandaría.
+ */
+function DocumentsTab({
+  personId,
+  headers,
+}: {
+  personId: string;
+  headers: Record<string, string>;
+}) {
+  const documentTypeCatalog = useCatalog('CLINICAL_DOCUMENT_TYPE');
+
+  const listQuery = useQuery({
+    queryKey: ['clinical', 'documents', personId],
+    queryFn: async () => {
+      const { data } = await apiClient.get<ClinicalDocumentRecord[]>(
+        '/clinical/documents',
+        { params: { personId }, headers },
+      );
+      return data;
+    },
+  });
+
+  const handleView = async (doc: ClinicalDocumentRecord) => {
+    const { data } = await apiClient.get(`/clinical/documents/${doc.id}/file`, {
+      responseType: 'blob',
+      headers,
+    });
+    const objectUrl = URL.createObjectURL(data);
+    window.open(objectUrl, '_blank', 'noopener');
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  };
+
+  const sorted = (listQuery.data ?? [])
+    .slice()
+    .sort((a, b) => (b.documentDate ?? '').localeCompare(a.documentDate ?? ''));
+
+  if (listQuery.isLoading) return <CircularProgress size={20} />;
+  if (sorted.length === 0) {
+    return <Typography variant="body2" color="text.secondary">Sin documentos cargados.</Typography>;
+  }
+
+  return (
+    <List dense>
+      {sorted.map((doc) => {
+        const isPdf = doc.mimeType === 'application/pdf';
+        const typeLabel = labelFor(documentTypeCatalog.data, doc.documentTypeId);
+        return (
+          <ListItem
+            key={doc.id}
+            secondaryAction={
+              <Tooltip title="Ver">
+                <IconButton edge="end" onClick={() => handleView(doc)}>
+                  <DownloadOutlinedIcon />
+                </IconButton>
+              </Tooltip>
+            }
+          >
+            <ListItemIcon>{isPdf ? <PictureAsPdfOutlinedIcon /> : <ImageOutlinedIcon />}</ListItemIcon>
+            <ListItemText
+              primary={doc.title?.trim() || typeLabel}
+              secondary={[
+                typeLabel,
+                doc.documentDate ? new Date(doc.documentDate).toLocaleDateString('es-AR', { timeZone: 'UTC' }) : null,
+              ].filter(Boolean).join(' · ')}
+            />
+          </ListItem>
+        );
+      })}
+    </List>
+  );
+}
+
+interface EncounterRecord {
+  id: string;
+  encounterDate: string | null;
+  chiefComplaint: string | null;
+  notes: string | null;
+  submissionId: string | null;
+  clinicalData: { recommendations?: string; treatment?: string; notes?: string } | null;
+  certificationCode: string | null;
+  confirmationCode: string | null;
+  professionalFirstName: string | null;
+  professionalLastName: string | null;
+  professionalInstitution: string | null;
+  professionalSpecialtyId: string | null;
+  professionalLicenseNumber: string | null;
+  professionalDocNumber: string | null;
+  professionalDocTypeId: string | null;
+  professionalCountryId: string | null;
+  professionalIsActive: boolean | null;
+  memberReviewedAt: string | null;
+  platformReviewedAt: string | null;
+}
+
+/**
+ * Pedido explícito del usuario: "las notas [que deja un médico] se
+ * deben poder visualizar... tanto en el resumen del caso como en el
+ * historial de salud" — mismo dato y mismo criterio de certificada/
+ * pendiente que ya usa la app móvil (HealthRecordsScreen, pestaña
+ * "Atenciones recibidas"), para que las dos vistas coincidan.
+ */
+function EncountersTab({
+  personId,
+  headers,
+}: {
+  personId: string;
+  headers: Record<string, string>;
+}) {
+  const specialtyCatalog = useCatalog('MEDICAL_SPECIALTY');
+  const docTypeCatalog = useCatalog('DOCUMENT_TYPE');
+  const countryCatalog = useCatalog('COUNTRY');
+
+  const listQuery = useQuery({
+    queryKey: ['clinical', 'patient-encounters', personId],
+    queryFn: async () => {
+      const { data } = await apiClient.get<EncounterRecord[]>(
+        `/clinical/patient-encounters/${personId}`,
+        { headers },
+      );
+      return data;
+    },
+  });
+
+  if (listQuery.isLoading) return <CircularProgress size={20} />;
+  const items = listQuery.data ?? [];
+  if (items.length === 0) {
+    return <Typography variant="body2" color="text.secondary">Sin atenciones registradas.</Typography>;
+  }
+
+  return (
+    <List dense>
+      {items.map((enc) => {
+        const professionalName = [enc.professionalFirstName, enc.professionalLastName]
+          .filter(Boolean).join(' ') || 'Profesional sin identificar';
+        const specialtyLabel = enc.professionalSpecialtyId
+          ? labelFor(specialtyCatalog.data, enc.professionalSpecialtyId)
+          : null;
+        const certified = enc.submissionId != null && enc.certificationCode === 'PROFESSIONALLY_CERTIFIED';
+        let statusLabel: string | null = null;
+        let statusColor: 'success' | 'warning' | 'error' | 'default' = 'default';
+        if (enc.submissionId != null) {
+          if (certified) {
+            statusLabel = 'Certificada';
+            statusColor = 'success';
+          } else if (enc.confirmationCode === 'MEMBER_CONFIRMED') {
+            statusLabel = 'Confirmada por el viajero';
+            statusColor = 'success';
+          } else if (enc.confirmationCode === 'PLATFORM_CONFIRMED') {
+            // Pedido explícito del usuario: siempre distinguir si la
+            // aceptación fue del viajero o de la plataforma (se dispara
+            // solo al activar/validar al profesional, ver trigger
+            // clinical.cascade_platform_confirmation).
+            statusLabel = 'Aceptada por la plataforma';
+            statusColor = 'success';
+          } else if (enc.confirmationCode === 'MEMBER_CHALLENGED') {
+            statusLabel = 'Objetada por el viajero';
+            statusColor = 'error';
+          } else {
+            statusLabel = 'Pendiente de confirmación';
+            statusColor = 'warning';
+          }
+        }
+        // Pedido explícito del usuario: poder referenciar al
+        // profesional — matrícula, documento y país, no solo nombre.
+        const professionalRefParts = [
+          enc.professionalLicenseNumber && `Matrícula ${enc.professionalLicenseNumber}`,
+          enc.professionalDocNumber &&
+            `${enc.professionalDocTypeId ? labelFor(docTypeCatalog.data, enc.professionalDocTypeId) : 'Doc.'} ${enc.professionalDocNumber}`,
+          enc.professionalCountryId && labelFor(countryCatalog.data, enc.professionalCountryId),
+        ].filter(Boolean).join(' · ');
+        const details = [
+          enc.clinicalData?.recommendations && `Recomendaciones: ${enc.clinicalData.recommendations}`,
+          enc.clinicalData?.treatment && `Tratamiento: ${enc.clinicalData.treatment}`,
+          (enc.clinicalData?.notes || enc.notes) && `Notas: ${enc.clinicalData?.notes || enc.notes}`,
+        ].filter(Boolean).join('\n');
+
+        return (
+          <ListItem key={enc.id} alignItems="flex-start">
+            <ListItemIcon><MedicalInformationOutlinedIcon /></ListItemIcon>
+            <ListItemText
+              primary={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                  <Typography variant="body2" component="span" sx={{ fontWeight: 500 }}>
+                    {professionalName}
+                  </Typography>
+                  {statusLabel && <Chip size="small" label={statusLabel} color={statusColor} />}
+                </Box>
+              }
+              secondary={
+                <>
+                  <Typography variant="caption" color="text.secondary" component="div">
+                    {[
+                      specialtyLabel,
+                      enc.professionalInstitution,
+                      enc.encounterDate ? new Date(enc.encounterDate).toLocaleDateString('es-AR', { timeZone: 'UTC' }) : null,
+                    ].filter(Boolean).join(' · ')}
+                  </Typography>
+                  {professionalRefParts && (
+                    <Typography variant="caption" color="text.secondary" component="div">
+                      {professionalRefParts}
+                    </Typography>
+                  )}
+                  {!enc.professionalIsActive && enc.submissionId != null && (
+                    <Typography variant="caption" color="warning.main" component="div">
+                      Profesional todavía no validado por la plataforma
+                    </Typography>
+                  )}
+                  {details && (
+                    <Typography variant="body2" component="div" sx={{ mt: 0.5, whiteSpace: 'pre-line' }}>
+                      {details}
+                    </Typography>
+                  )}
+                </>
+              }
+            />
+          </ListItem>
+        );
+      })}
+    </List>
   );
 }

@@ -31,8 +31,11 @@ import { ClinicalAdminEditController } from './clinical-admin-edit.controller';
 import { ProfessionalsRegistrationController } from './professionals-registration.controller';
 import { PatientSummaryController } from './patient-summary.controller';
 import { PatientPhotoController } from './patient-photo.controller';
+import { PatientDocumentFileController } from './patient-document-file.controller';
 import { SharePreviewController } from './share-preview.controller';
 import { HealthRecordResetController } from './health-record-reset.controller';
+import { PatientEncountersController } from './patient-encounters.controller';
+import { ProfessionalPortalController } from './professional-portal.controller';
 
 @Module({
   imports: [
@@ -67,8 +70,11 @@ import { HealthRecordResetController } from './health-record-reset.controller';
     ProfessionalsRegistrationController,
     PatientSummaryController,
     PatientPhotoController,
+    PatientDocumentFileController,
     SharePreviewController,
     HealthRecordResetController,
+    PatientEncountersController,
+    ProfessionalPortalController,
     ClinicalResourceController,
     ClinicalAdminEditController,
   ],

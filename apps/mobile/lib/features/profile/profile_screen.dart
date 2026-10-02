@@ -331,7 +331,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         'lastName': _lastNameController.text.trim(),
         if (_birthDate != null) 'birthDate': _birthDate!.toIso8601String().split('T').first,
         if (_genderId != null) 'genderId': _genderId,
-        if (_bloodTypeId != null) 'bloodTypeId': _bloodTypeId,
         if (_phoneController.text.trim().isNotEmpty) 'phone': _phoneController.text.trim(),
         if (newEmail.isNotEmpty) 'email': newEmail,
         'preferredLang': _preferredLang,
@@ -634,29 +633,36 @@ class _ProfileScreenState extends State<ProfileScreen> {
             );
           }),
           const SizedBox(height: 12),
-          // Pedido explícito del usuario: grupo sanguíneo es un dato
-          // fijo (no cambia con el tiempo, a diferencia de peso/altura/
-          // presión) — se edita acá, en el perfil, igual que el sexo,
-          // en vez de mezclarse con las mediciones repetibles del
-          // Historial de Salud (ver health_records_screen.dart).
-          DropdownButtonFormField<String>(
-            key: ValueKey('bloodType-$_bloodTypeId'),
-            initialValue: _bloodTypeId,
-            isExpanded: true,
-            decoration: InputDecoration(labelText: context.tr('profile.bloodType')),
-            items: _bloodTypes.map((b) => DropdownMenuItem(value: b.id, child: Text(b.label(context.lang), overflow: TextOverflow.ellipsis))).toList(),
-            onChanged: (v) => setState(() => _bloodTypeId = v),
-          ),
+          // Pedido explícito del usuario: el grupo sanguíneo dejó de
+          // editarse desde Perfil — pasó a cargarse únicamente desde
+          // el asistente de salud (Clásico/Estructurado/Formulario,
+          // todos ya lo piden como parte de "Datos básicos"). Editarlo
+          // acá lo dejaba seteado antes de pasar nunca por esas
+          // pantallas, y el asistente lo cuenta como antecedente real
+          // — un viajero recién registrado podía terminar marcado como
+          // "ya tiene ficha cargada" sin haber cargado nada (bug real
+          // reportado en vivo). Queda solo de lectura acá para no
+          // perder la visibilidad de qué hay cargado.
           Builder(builder: (context) {
             final matches = _bloodTypes.where((b) => b.id == _bloodTypeId);
             final selectedBloodType = matches.isEmpty ? null : matches.first;
-            if (selectedBloodType == null) return const SizedBox.shrink();
-            return Padding(
-              padding: const EdgeInsets.only(top: 4, left: 4),
-              child: Text(
-                context.tr('profile.currentPrefix', params: {'value': selectedBloodType.label(context.lang)}),
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-              ),
+            // Bug real reportado en vivo: overflow cuando no hay grupo
+            // sanguíneo cargado — el texto de "sin cargar" es una
+            // oración larga, y este Row no tenía ningún Text envuelto
+            // en Expanded/Flexible para poder ajustarse (un código
+            // corto como "O+" nunca lo mostraba).
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(context.tr('profile.bloodType'), style: const TextStyle(fontSize: 13, color: Colors.grey)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    selectedBloodType?.label(context.lang) ?? context.tr('profile.bloodTypeNotSet'),
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
             );
           }),
           const SizedBox(height: 16),
